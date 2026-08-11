@@ -1,0 +1,441 @@
+# ドパチル ver.1
+
+ドーパミン依存的なスマホ使用習慣からの立ち直りを支援する、個人用のアプリ使用制限アプリ。
+
+- 対象: Android 12 (API 31) 以上 / targetSdk 36 (Android 16)
+- 配布: 個人用サイドロード
+- パッケージ名: `com.dopachiru`
+
+---
+
+## ビルドと導入
+
+### 必要なもの(このリポジトリの環境では導入済み)
+
+| | 場所 |
+|---|---|
+| JDK 21 (Temurin) | `C:\Program Files\Eclipse Adoptium\jdk-21.0.12.8-hotspot` |
+| Android SDK | `C:\Users\hai\soft\android-sdk` (platform-tools / android-36 / build-tools 36.0.0) |
+| Gradle | wrapper 同梱 (8.14.5) |
+
+### ビルド
+
+```bash
+./gradlew :app:assembleDebug
+```
+
+APK は `app/build/outputs/apk/debug/app-debug.apk` に出ます。
+
+### 端末に入れる
+
+USB デバッグを有効にした端末を繋いで、次を実行するとインストールと
+「制限された設定」の解除まで通しでやります。
+
+```bash
+./install.ps1
+```
+
+手でやる場合:
+
+```bash
+adb install -r dist/dopachiru-0.1.0-minified.apk
+```
+
+### 配布用 APK
+
+`dist/` に2つ置いてあります。どちらも同じ鍵(debug キーストア)で署名済みで、
+中身は同じです。
+
+| ファイル | サイズ | |
+|---|---|---|
+| `dopachiru-0.1.0-minified.apk` | 3.2 MB | R8 で圧縮済み。ふだんはこちら |
+| `dopachiru-0.1.0.apk` | 47.1 MB | 圧縮なし。圧縮版で不可解な挙動が出たときの切り分け用 |
+
+圧縮版は、条件・アクションの実装とシリアライザ(`ConditionNode` / `Gate` の
+各サブタイプの `$$serializer` と `Companion`)が難読化も削除もされずに
+残っていることを確認済みです。
+
+> Play ストアに出さないので debug キーストアで署名しています。
+> 同じ鍵で署名し続けるかぎり、アンインストールせずに上書き更新できます。
+
+### ⚠ 導入時にほぼ確実に詰まるところ
+
+**Android 13 以降、ストア以外から入れたアプリはユーザー補助(Accessibility)を有効にできません。**
+設定画面でスイッチが灰色になり、押しても反応しません。
+
+adb が使えるなら、これが一番速い:
+
+```bash
+adb shell appops set com.dopachiru ACCESS_RESTRICTED_SETTINGS allow
+```
+
+端末だけで済ませる場合:
+
+1. 設定 → ユーザー補助 → ドパチル のスイッチを押して**わざとブロックされる**(これをやらないと次のメニューが出ない)
+2. 設定 → アプリ → ドパチル → 右上「⋮」→「制限された設定を許可」
+3. 画面ロックで認証
+
+そのうえで、設定 → ユーザー補助 → ドパチル を ON にします。
+
+### そのほかの初期設定
+
+アプリ内の「設定」タブに、必要な権限のチェックリストがあります。
+
+- ユーザー補助の有効化(必須。これが無いと何も検知しません)
+- 電池の最適化から除外(常駐が落とされにくくなる)
+- 通知の許可(初回起動時に聞かれる。常駐通知に使う)
+
+---
+
+## Windows 版
+
+`:desktop` モジュール。Kotlin + Compose Desktop で、**ルールエンジンは Android と同じ
+`:core` をそのまま使います**(`core` には Android の import が1つも無く、
+`java.time` と kotlinx.serialization だけで動く)。移植で書いたのは
+「前面のアプリを Win32 から拾う」「判定の結果を Windows のやり方で実行する」の2つだけです。
+
+```bash
+gradlew :desktop:run
+```
+
+配布物は2種類。どちらも JRE を同梱しているので、Java を入れていない PC でも動きます。
+
+```bash
+gradlew :desktop:packagePortable   # dist/dopachiru-windows-portable.zip
+gradlew :desktop:packageMsi        # インストーラ(WiX は Gradle が自動で落とす)
+```
+
+持ち運び版は展開して `Dopachiru\Dopachiru.exe` を叩くだけ。管理者権限が要りません。
+
+> **MSI を作るときの注意**
+> `nativeDistributions` の `description` に日本語を入れると、WiX の `light.exe` が
+> 311 で落ちます(`-cultures:en-us` で処理されるため)。ここだけ英語にしてあります。
+
+Win32 まわりが実機で動くかの確認:
+
+```bash
+gradlew :desktop:win32Smoke
+```
+
+### Android との違い
+
+| | Android | Windows |
+|---|---|---|
+| 対象の識別 | パッケージ名 | 実行ファイル名(`chrome.exe`) |
+| 前面の検知 | ユーザー補助のイベント(即時) | `GetForegroundWindow` を1秒おき |
+| ブロック画面 | `TYPE_ACCESSIBILITY_OVERLAY` | 最前面・枠なし・全画面の普通のウィンドウ |
+| 保存先 | Room | `%APPDATA%\dopachiru\*.json` |
+| 常駐 | AccessibilityService | タスクトレイ |
+
+### ブロックのやり方を選べる
+
+Windows には Android のような統一された止め方がないので、設定タブで選びます。
+
+| | 内容 |
+|---|---|
+| オーバーレイのみ | 最前面に全画面の窓を出すだけ。Alt+Tab や仮想デスクトップで裏に回れる余地が残る |
+| 最小化し続ける(既定) | 加えて対象のウィンドウを最小化し続ける。戻してもまた最小化される |
+| プロセスを一時停止 | `NtSuspendProcess` で対象を凍らせる。最も強いが、保存していない編集内容を壊すことがある |
+
+一時停止は、止めた pid を必ず控えて終了フックで戻します。
+**ドパチルが落ちても、巻き添えでプロセスが固まったままにはなりません。**
+
+`explorer.exe`・`taskmgr.exe`・ログオン関係・ドパチル自身は、ルールより強く常に除外します
+([`ProtectedProcesses`](desktop/src/main/kotlin/com/dopachiru/desktop/platform/ProtectedProcesses.kt))。
+タスクマネージャを入れてあるのは、ドパチル自身を必ず止められるようにしておくためです。
+
+---
+
+## 構成
+
+```
+core/   Android に依存しないルールエンジン(純粋な Kotlin)
+app/    Android 実装(検知・オーバーレイ・UI)
+```
+
+`core` を Android から切り離してあるのは、将来 Windows 版を作るときにルール定義を
+そのまま持っていけるようにするためです。
+
+### 主要なクラス
+
+| ファイル | 役割 |
+|---|---|
+| [`core/.../condition/ConditionType.kt`](core/src/main/kotlin/com/dopachiru/core/condition/ConditionType.kt) | 制限条件のインターフェース |
+| [`core/.../engine/RuleEngine.kt`](core/src/main/kotlin/com/dopachiru/core/engine/RuleEngine.kt) | ルール評価。条件の実体は知らない |
+| [`core/.../DopaCore.kt`](core/src/main/kotlin/com/dopachiru/core/DopaCore.kt) | 組み込み条件・アクションの登録 |
+| [`app/.../service/DopaAccessibilityService.kt`](app/src/main/kotlin/com/dopachiru/service/DopaAccessibilityService.kt) | 前面アプリの検知とブロック実行 |
+| [`app/.../block/OverlayHost.kt`](app/src/main/kotlin/com/dopachiru/block/OverlayHost.kt) | オーバーレイの表示 |
+| [`app/.../ui/rules/ParamEditor.kt`](app/src/main/kotlin/com/dopachiru/ui/rules/ParamEditor.kt) | 条件定義から入力UIを組み立てる |
+
+---
+
+## 制限条件を1つ増やす
+
+このアプリは「思いついた制限をどんどん足せること」を最優先に組んであります。
+**新しい条件を足すのに触るファイルは2つだけ**で、UI 側には手を入れません。
+
+### 1. 条件の実装を1ファイル書く
+
+`core/src/main/kotlin/com/dopachiru/core/condition/types/` に置きます。
+
+```kotlin
+/** 充電中かどうかで成立する条件の例 */
+object ChargingCondition : ConditionType {
+    const val KEY_WHILE_CHARGING = "whileCharging"
+
+    override val id = "charging"                  // 一度決めたら変えない
+    override val displayName = "充電中"
+    override val description = "充電しているあいだ(またはしていないあいだ)に成立する。"
+
+    override val params = listOf(
+        ParamSpec.BoolParam(KEY_WHILE_CHARGING, "充電中に成立させる", default = true),
+    )
+
+    override fun evaluate(p: Params, ctx: EvalContext): Boolean =
+        ctx.charging == p.bool(KEY_WHILE_CHARGING, true)
+
+    override fun summarize(p: Params): String =
+        if (p.bool(KEY_WHILE_CHARGING, true)) "充電中" else "充電していないあいだ"
+}
+```
+
+### 2. `DopaCore.registerAll()` の一覧に足す
+
+```kotlin
+ConditionRegistry.register(
+    AlwaysCondition,
+    TimeRangeCondition,
+    // ...
+    ChargingCondition,   // ← これだけ
+)
+```
+
+これで完了です。設定画面の「条件を足す」に出てきて、`params` に書いた項目の
+入力欄も自動で生えます。永続化スキーマ(Room のテーブル)も変わりません。
+
+### 電池のために `nextChangeAt` も書く(任意)
+
+条件は「この時刻までは成否が変わらない」を答えられます。
+
+```kotlin
+override fun nextChangeAt(p: Params, ctx: EvalContext): LocalDateTime =
+    ctx.now.plusMinutes((p.int(KEY_MINUTES) - ctx.usage.currentSessionMinutes).toLong())
+```
+
+答えられたぶんだけ、アプリはその時刻まで一度も起きません。
+**書かなくても正しく動きます** — 実装しなければ「分からない」扱いになり、
+呼び出し側が安全側に倒して短い間隔で見に来るだけです。
+
+### 判定に新しい情報が要るとき
+
+上の例の `ctx.charging` のように、既存の [`EvalContext`](core/src/main/kotlin/com/dopachiru/core/engine/EvalContext.kt)
+に無い情報が必要なら、そこにフィールドを1つ足して `DopaRuntime.decide()` で埋めます。
+既存の条件は読まないので影響しません。
+
+### 入力欄の種類が足りないとき
+
+[`ParamSpec`](core/src/main/kotlin/com/dopachiru/core/param/ParamSpec.kt) に種類を足し、
+[`ParamEditor`](app/src/main/kotlin/com/dopachiru/ui/rules/ParamEditor.kt) の `when` に
+描画を1本足します。ここだけは UI に触ります。
+
+**アクションを増やす場合も同じ手順です**(`ActionType` を書いて `ActionRegistry` に登録)。
+ただしアクションは画面表示を伴うので、`DopaAccessibilityService.present()` に
+分岐を1本足す必要があります。
+
+---
+
+## 実装済みの条件・アクション
+
+### 条件
+
+| ID | 名前 | 内容 |
+|---|---|---|
+| `always` | 常に | 条件なし(完全封印) |
+| `time_range` | 時間帯 | 日跨ぎ対応 |
+| `day_of_week` | 曜日 | |
+| `continuous_usage` | 連続使用時間 | |
+| `session_count` | セッション回数 | 集計期間を指定できる |
+| `total_usage` | 合計使用時間 | 集計期間を指定できる |
+| `declared_budget` | 宣言した時間の超過 | |
+| `calendar_busy` | カレンダー予定 | 予定名で絞れる(例: `#集中` の予定中だけ封印) |
+| `power_save` | 省電力モード | 端末が省電力モードのあいだ制限を強める |
+| `study_session` | 学習予定 | 連携アプリから受け取った予定の最中。[INTEGRATION.md](INTEGRATION.md) |
+
+集計期間(`ResetPolicy`)は「1日 / 半日 / 8時間 / 6時間 / 1時間」から選べ、
+リセットの基準時刻も変えられます(既定は毎日 4:00)。
+
+時刻と経過時間の入力は**上下スワイプのホイール**で、分単位まで指定できます。
+
+### アクション
+
+| ID | 名前 | 強さ |
+|---|---|---|
+| `warn` | 警告表示(下のアプリは操作できる) | 10 |
+| `declare` | 開く前に持ち時間を宣言させる | 50 |
+| `block` | 完全封印 | 100 |
+
+複数のルールが同時に成立した場合、強さが最大のものが採用されます。
+
+---
+
+## 設計上の判断
+
+### オーバーレイに `TYPE_ACCESSIBILITY_OVERLAY` を使っている
+
+`SYSTEM_ALERT_WINDOW` (`TYPE_APPLICATION_OVERLAY`) ではなく、AccessibilityService から
+出せる `TYPE_ACCESSIBILITY_OVERLAY` を主に使っています。理由は3つ:
+
+1. **ナビゲーションバー・ステータスバーの上に出せる** — `TYPE_APPLICATION_OVERLAY` は出せない
+2. **Android 12 以降のタッチ透過制限を受けない** — 「警告表示」で下のアプリを操作させ続けられる
+3. SYSTEM_ALERT_WINDOW 権限が要らない
+
+詳細は [`risk-assessment.md`](risk-assessment.md) の A-1 を参照。
+
+### Foreground Service は検知の前提ではない
+
+AccessibilityService はシステムがバインドし、端末の再起動もまたいで有効なままです。
+`MonitorService` の役割は「プロセス優先度を上げる」ことと「使用時間を1分ごとに刻む」ことだけです。
+
+Android 14 以降 `foregroundServiceType` が必須なので `specialUse` を宣言しています。
+これは Google Play 配布時のみ審査対象で、サイドロードなら審査は発生しません。
+
+### 変更抑制は「緩める方向」にだけかかる
+
+新規作成と有効化は即時反映、変更・削除・無効化はゲートを通します。
+縛りを増やす方向に摩擦をかけても意味がないためです。
+
+ゲートは6種類。組み合わせて使えます。既定は「30分待つ + 理由を30文字」。
+
+| ゲート | 内容 |
+|---|---|
+| `cooldown` | 起票から一定時間置く。時間の経過だけで自動的に通過 |
+| `writeReason` | なぜ変えたいかを書かせる。書いた内容は履歴に残る |
+| `miniGame` | 計算問題を N 問。途中で間違えると最初から |
+| `password` | パスワード(PBKDF2-HMAC-SHA256 / 12万回) |
+| `timeWindow` | **曜日と時刻**の窓。日をまたぐ指定も可(例: 金 22:00〜02:00) |
+| `calendarWindow` | **カレンダーに特定の予定があるあいだだけ**変更できる |
+
+`cooldown` / `timeWindow` / `calendarWindow` は状況で自動判定されるので、
+条件を満たせば勝手に通過し、外れればまた塞がります。
+`calendarWindow` は「#可変」という予定を自分で先に入れておく使い方を想定していて、
+予定を入れる行為そのものが事前のコミットメントになります。
+
+### カレンダーは端末の Provider から読む
+
+Google Calendar API も OAuth も Google Cloud のプロジェクトも使っていません。
+**Google カレンダーは端末に同期された時点で標準のカレンダー Provider に入る**ので、
+`READ_CALENDAR` のランタイム権限を1つ取るだけで、同期済みの全アカウントの予定が見えます。
+
+- 通信が発生しないので、予定の内容が端末の外に出ない
+- トークンの失効やリフレッシュを考えなくてよい
+- Google 以外のカレンダー(Exchange など)も同じ経路で読める
+
+終日予定は UTC の 0:00 で入っているので、端末のローカル日に読み替えています。
+
+### タグでアプリをまとめる
+
+「SNS」「動画」のようにアプリをまとめ、ルールの対象をタグで指定できます。
+あとから対象アプリを増やすとき、タグに1つ足すだけでそのタグを使う全ルールに効きます。
+タグ画面から作成・メンバー編集・削除ができます。
+
+### アプリを選ぶ画面
+
+対象・除外・タグのメンバーは、どれも同じ一覧
+([`AppPickerList`](app/src/main/kotlin/com/dopachiru/ui/common/AppPicker.kt))で選びます。
+アイコン付き、検索、並べ替え3種(名前順 / 使用時間 / 選択中が上)。
+
+名前順は `Collator`(日本語)を通しているので **ABC → あいうえお** の順になります。
+単純な文字コード順だとカタカナと平仮名が離れ、濁点付きが妙な位置に来ます。
+ただし**漢字だけは読みではなく文字コードで並びます**(読みは端末から取得できないため)。
+
+使用時間は端末の使用状況から直近1週間ぶんを読みます
+([`AppUsageRanking`](app/src/main/kotlin/com/dopachiru/data/AppUsageRanking.kt))。
+**ドパチルを入れる前の実績も見える**ので、最初にルールを作るときに効きます。
+許可(設定 → 特別なアプリアクセス → 使用状況へのアクセス)が無いときは、
+ドパチル自身の記録(48時間ぶん)に落ちます。どちらも無ければ名前順に落ちるだけです。
+
+### 対象は「選んだものを止める」と「選んだもの以外を止める」の両方
+
+`Target` は二通りの書き方ができます。
+
+- **正指定** — パッケージとタグの和。「この5個を止める」
+- **全指定** — `matchAll` を立てて、例外を `exceptPackages` / `exceptTags` に置く。
+  「必要なもの以外ぜんぶ止める」= 許可リスト型
+
+除外は正指定より常に強いので、「タグで広く取って数個だけ抜く」という書き方もできます。
+
+### 何があっても止めないアプリ
+
+電話・ホーム・設定・キーボード・ドパチル自身は、どのルールからも制限されません
+([`ProtectedApps`](app/src/main/kotlin/com/dopachiru/data/ProtectedApps.kt))。
+
+**これはルールより強く、設定画面からも外せません。** 許可リスト型を入れるまでは、
+電話を封印するには電話アプリをわざわざ選ぶ必要があったので事故になりませんでした。
+「必要なアプリ以外ぜんぶ」が書けるようになった時点で、選ばなくても巻き込めるようになります。
+この床はその対です。設定に置けば、いつか間違って外せてしまうので置いていません。
+
+### 電池
+
+常駐アプリなので、消費を抑える設計をいくつか入れています。
+
+**一定間隔のポーリングをやめた** — 判定は毎回「次はいつ見に来ればよいか」を条件に聞き、
+そのぶんだけ眠ります。「連続15分で警告」なら、開いた直後は15分後まで一度も起きません。
+時刻の計算ができない条件(カレンダーなど)が混じったときだけ、安全側に倒して短い間隔に戻ります。
+
+**そもそも動かさない条件** — 次のときは判定を完全に止めます。
+
+- 画面が消えているあいだ
+- 前面のアプリを狙っているルールが1つも無いとき
+- ホーム画面・設定アプリにいるとき
+
+**それ以外**
+
+- カレンダーは、それを使うルールかゲートがあるときだけ、5分おきに読む(既定では読まない)
+- 使用時間の DB 書き込みは、値が実際に動いたときだけ
+- ユーザー補助の設定から `flagRetrieveInteractiveWindows` と `flagIncludeNotImportantViews` を外した。
+  どちらもシステムにノードツリーを余分に組ませるが、このアプリは `rootInActiveWindow` しか使わない
+
+設定タブの「電池を優先する」をオンにすると、間隔がさらに伸びます
+(ブロックが最大2分遅れることがある代わりに消費が減る)。
+
+> **画面オフ中の計測について**
+> 画面が消えたらセッションを明示的に閉じています。閉じないと寝ているあいだの時間が
+> まるごとアプリの使用時間になり、宣言した持ち時間も勝手に減っていきます。
+
+### 自分から守る(任意)
+
+設定アプリでドパチルのページを開いたとき、連続日数を見せて10秒だけ引き止めます。
+既定はオフ。設定タブから有効にできます。
+
+**無効化そのものは必ずできるようにしてあります。** 自分で入れたアプリを
+自分で止められなくなるのは抑止ではなく事故なので、ここでやるのは一拍置かせることだけです。
+
+### 待ち受け画面には重ねられない
+
+ロック画面は OS が最上位で保護しているため、オーバーレイを被せられません。
+代わりに **ロック解除の直後**に問いかけを出しています(設定でオフにできます)。
+
+---
+
+## ver.1 に入っていないもの
+
+| 機能 | 状態 |
+|---|---|
+| 友達との結果共有 | 未着手(サーバーが要るため) |
+| 制限設定の共有 | 未着手 |
+| 条件のアプリ内エディタ(AND/OR の入れ子) | お蔵入り。データ構造は対応済みで、編集画面は「複数条件の AND」まで |
+| Device Owner レベルの制御 | 対象外(設計上の決定) |
+| カレンダーへの書き込み | 読み取りのみ。`#可変` の予定はカレンダーアプリ側で入れる |
+
+入れ子や OR を含むルールを編集画面で開くと、「この画面では編集できない」と表示して
+壊さないようにしてあります。
+
+---
+
+## テスト
+
+```bash
+./gradlew :core:test
+```
+
+ルールエンジンと集計期間の計算に 10 件。

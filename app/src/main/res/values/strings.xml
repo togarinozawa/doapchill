@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ドパチル</string>
+    <string name="accessibility_service_label">ドパチル 監視</string>
+    <string name="accessibility_service_description">アプリの切り替えを検知して、あなたが自分で決めた制限を実行します。取得した情報は端末の外に出ません。</string>
+
+    <string name="notification_channel_monitor">常駐監視</string>
+    <string name="notification_monitor_title">ドパチル 稼働中</string>
+</resources>

@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- 常駐サービスの通知(Android 13+ はランタイム許可が要る) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- 使用時間の補助集計 -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+
+    <!--
+      主たるブロック画面は TYPE_ACCESSIBILITY_OVERLAY で出すので本来は不要。
+      Accessibility が切られたときのフォールバック用に保持している。
+    -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!--
+      カレンダー連動の条件・ゲート用。
+      Google カレンダーは端末に同期された時点でこの Provider に入るので、
+      OAuth も Google Cloud のプロジェクトも要らない。
+    -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- 対象アプリを選ぶために全アプリを列挙する -->
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+
+    <!--
+      学習予定を送り込むための権限。
+      signature 保護なので、ドパチルと同じ鍵で署名したアプリしか名乗れない。
+      通信は一切しない ── ネットが要る連携は、機内モードで外れる抜け道になる。
+    -->
+    <permission
+        android:name="com.dopachiru.permission.SYNC_STUDY"
+        android:protectionLevel="signature" />
+
+    <application
+        android:name=".DopaApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@drawable/ic_dopa"
+        android:label="@string/app_name"
+        android:supportsRtl="false"
+        android:theme="@style/Theme.Dopachiru">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.Dopachiru">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          フォアグラウンドアプリの検知とブロック画面の表示を担う本体。
+          このサービスの Context から TYPE_ACCESSIBILITY_OVERLAY のウィンドウを出す。
+        -->
+        <service
+            android:name=".service.DopaAccessibilityService"
+            android:exported="true"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!--
+          検知そのものは AccessibilityService 側で完結する。
+          この常駐サービスはプロセス優先度を上げて強制終了されにくくするために置いている。
+        -->
+        <service
+            android:name=".service.MonitorService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Enforces the user's own self-imposed app usage restrictions continuously" />
+        </service>
+
+        <receiver
+            android:name=".service.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+          連携アプリから学習予定を受け取る口。
+          マニフェスト登録なのは、ユーザー補助が一時的に落ちていても取りこぼさないため。
+          送り主は setPackage("com.dopachiru") を付けること(Android 8 以降、
+          宛先の無いブロードキャストはここに届かない)。
+        -->
+        <receiver
+            android:name=".service.StudySyncReceiver"
+            android:exported="true"
+            android:permission="com.dopachiru.permission.SYNC_STUDY">
+            <intent-filter>
+                <action android:name="com.dopachiru.action.SYNC_STUDY_WINDOWS" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>

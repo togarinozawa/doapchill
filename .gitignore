@@ -1,0 +1,29 @@
+# Gradle
+.gradle/
+build/
+.kotlin/
+local.properties
+
+# 配布物。大きいので GitHub Releases に置く
+dist/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 署名まわり(万一持ち込んだときの保険。いまは debug キーストアを参照するだけ)
+*.jks
+*.keystore
+keystore.properties
+
+# 個人的なメモ。手元には残すが公開しない
+dopa.md
+dopa_design_doc.md
