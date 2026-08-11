@@ -94,6 +94,20 @@ object DopaRuntime {
     private var lastCalendarRefreshMs = 0L
     private var lastWrittenScreenMinutes = -1
 
+    /**
+     * 判定に使う時刻をずらす(分)。開発ツール専用で、既定は 0。
+     *
+     * 「22時以降は封印」を昼間に試すために要る。実際に夜まで待つのは検証にならない。
+     * 記録そのものは実時刻で残るので、ここを大きくずらすと集計期間との噛み合わせが
+     * ずれる ── 使用時間の条件を試すときは、開発ツールから直接盛るほうが確実。
+     */
+    @Volatile
+    var devClockOffsetMinutes: Int = 0
+
+    /** 判定に使う「いま」。開発ツールでずらせる以外は普通の現在時刻。 */
+    fun now(): LocalDateTime =
+        LocalDateTime.now().plusMinutes(devClockOffsetMinutes.toLong())
+
     fun init(context: Context) {
         if (initialized) return
         synchronized(this) {
@@ -215,7 +229,7 @@ object DopaRuntime {
         initialized && packageName in protectedApps
 
     /** そのアプリを、いまどう扱うべきか。 */
-    fun decide(packageName: String, now: LocalDateTime = LocalDateTime.now()): Decision {
+    fun decide(packageName: String, now: LocalDateTime = now()): Decision {
         if (!initialized) return Decision.Allow
         if (packageName in protectedApps) return Decision.Allow
         return engine.decide(ruleCache, buildContext(packageName, now)) { tagCache[it] ?: emptySet() }
@@ -231,6 +245,65 @@ object DopaRuntime {
     /** 学習予定の最中か。押し切りを止めるかどうかの判断に使う。 */
     fun studyInSession(): Boolean = initialized && studyWindows.inSession()
 
+    // ------------------------------------------------------------------
+    // 開発ツールから使うもの。ふだんの動作には関わらない。
+
+    /**
+     * いまこのアプリに対して、どのルールがどう判定されるか。
+     *
+     * ブロックが出ない・出すぎるときに「どの条件で落ちているか」を見るため。
+     * 判定と同じ [EvalContext] を通すので、画面の表示と実際の挙動がずれない。
+     */
+    fun explain(packageName: String): List<RuleVerdict> {
+        if (!initialized) return emptyList()
+        val ctx = buildContext(packageName, now())
+        val tags = tagCache[packageName] ?: emptySet()
+        return ruleCache.map { rule ->
+            RuleVerdict(
+                ruleName = rule.name,
+                enabled = rule.enabled,
+                targeted = rule.target.matches(packageName, tags),
+                conditionMet = engine.evaluate(rule.condition, ctx),
+            )
+        }
+    }
+
+    data class RuleVerdict(
+        val ruleName: String,
+        val enabled: Boolean,
+        val targeted: Boolean,
+        val conditionMet: Boolean,
+    ) {
+        val fires: Boolean get() = enabled && targeted && conditionMet
+
+        /** 成立しない理由。表示用。 */
+        val reason: String
+            get() = when {
+                fires -> "成立"
+                !enabled -> "無効"
+                !targeted -> "対象外"
+                else -> "条件を満たさない"
+            }
+    }
+
+    /** 学習予定をでっちあげる。連携アプリ無しで、学習中・助走枠・中断を試すため。 */
+    fun devFakeStudyWindow(startsInMinutes: Int, lengthMinutes: Int) {
+        val nowSec = System.currentTimeMillis() / 1000
+        studyWindows.replaceAll(
+            listOf(
+                StudyWindowRepository.Window(
+                    id = "dev-" + nowSec,
+                    startSec = nowSec + startsInMinutes * 60L,
+                    endSec = nowSec + (startsInMinutes + lengthMinutes) * 60L,
+                    title = "開発用の予定",
+                    kind = "study",
+                )
+            )
+        )
+    }
+
+    fun devClearStudyWindows() = studyWindows.replaceAll(emptyList())
+
     /**
      * 次に判定を見に来るまでの待ち時間。
      *
@@ -239,7 +312,7 @@ object DopaRuntime {
      */
     fun nextCheckDelayMs(packageName: String, floorMs: Long, ceilMs: Long): Long {
         if (!initialized) return ceilMs
-        val now = LocalDateTime.now()
+        val now = now()
         val at = engine.nextChangeAt(ruleCache, buildContext(packageName, now)) {
             tagCache[it] ?: emptySet()
         } ?: return ceilMs

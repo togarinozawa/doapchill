@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -12,6 +13,11 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Tray
@@ -23,7 +29,9 @@ import androidx.compose.ui.window.rememberWindowState
 import com.dopachiru.desktop.ui.BlockScreen
 import com.dopachiru.desktop.ui.DeclareScreen
 import com.dopachiru.desktop.ui.DesktopApp
+import com.dopachiru.desktop.ui.ESCAPE_HOLD_SECONDS
 import com.dopachiru.desktop.ui.WarnScreen
+import kotlinx.coroutines.delay
 
 /**
  * Windows 版のエントリポイント。
@@ -75,12 +83,39 @@ fun main() = application {
     }
 
     when (val current = presentation) {
-        is Presentation.Block -> OverlayWindow {
-            BlockScreen(
-                block = current,
-                onDismiss = { DesktopRuntime.dismissBlock() },
-                onOverride = { DesktopRuntime.overrideBlock() },
-            )
+        is Presentation.Block -> {
+            var escHeld by remember(current.key) { mutableStateOf(false) }
+            var escSeconds by remember(current.key) { mutableIntStateOf(0) }
+
+            LaunchedEffect(escHeld, current.key) {
+                if (!escHeld) {
+                    escSeconds = 0
+                    return@LaunchedEffect
+                }
+                while (escSeconds < ESCAPE_HOLD_SECONDS) {
+                    delay(1000)
+                    escSeconds += 1
+                }
+                DesktopRuntime.emergencyPause()
+            }
+
+            OverlayWindow(
+                onKeyEvent = { event ->
+                    if (event.key == Key.Escape) {
+                        escHeld = event.type == KeyEventType.KeyDown
+                        true
+                    } else {
+                        false
+                    }
+                }
+            ) {
+                BlockScreen(
+                    block = current,
+                    escapeHoldSeconds = escSeconds,
+                    onDismiss = { DesktopRuntime.dismissBlock() },
+                    onOverride = { DesktopRuntime.overrideBlock() },
+                )
+            }
         }
 
         is Presentation.Declare -> OverlayWindow {
@@ -129,6 +164,7 @@ private class TrayIcon(private val paused: Boolean) : Painter() {
 /** 閉じられない・最前面・全画面のウィンドウ。 */
 @Composable
 private fun androidx.compose.ui.window.ApplicationScope.OverlayWindow(
+    onKeyEvent: (KeyEvent) -> Boolean = { false },
     content: @Composable () -> Unit,
 ) {
     Window(
@@ -138,6 +174,7 @@ private fun androidx.compose.ui.window.ApplicationScope.OverlayWindow(
         alwaysOnTop = true,
         resizable = false,
         state = rememberWindowState(placement = WindowPlacement.Fullscreen),
+        onKeyEvent = onKeyEvent,
     ) {
         content()
     }

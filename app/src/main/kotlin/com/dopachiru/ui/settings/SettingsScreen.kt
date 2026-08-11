@@ -9,6 +9,8 @@ import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -136,8 +138,12 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun calendarGranted(): Boolean = DopaRuntime.calendarReader.hasPermission()
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun SettingsScreen(viewModel: SettingsViewModel = viewModel()) {
+fun SettingsScreen(
+    onOpenDevTools: () -> Unit = {},
+    viewModel: SettingsViewModel = viewModel(),
+) {
     val context = LocalContext.current
     val gates by viewModel.gates.collectAsState()
     val hasPassword by viewModel.hasPassword.collectAsState()
@@ -147,6 +153,7 @@ fun SettingsScreen(viewModel: SettingsViewModel = viewModel()) {
     val selfDefense by viewModel.selfDefense.collectAsState()
     val batterySaver by viewModel.batterySaver.collectAsState()
     val prepMinutes by viewModel.studyPrepMinutes.collectAsState()
+    var showDevDialog by remember { mutableStateOf(false) }
 
     // 設定アプリから戻ってきたら権限の状態を見直す
     var refreshKey by remember { mutableIntStateOf(0) }
@@ -449,8 +456,27 @@ fun SettingsScreen(viewModel: SettingsViewModel = viewModel()) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Spacer(Modifier.height(16.dp))
+            // ここを長押しすると開発ツールへの入口が出る。
+            // ふだん目に入らないところに置いてあるだけで、隠しているわけではない。
+            Text(
+                "ドパチル",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.combinedClickable(
+                    onClick = {},
+                    onLongClick = { showDevDialog = true },
+                ),
+            )
             Spacer(Modifier.height(32.dp))
         }
+    }
+
+    if (showDevDialog) {
+        DevCodeDialog(
+            onUnlock = { showDevDialog = false; onOpenDevTools() },
+            onDismiss = { showDevDialog = false },
+        )
     }
 
     if (showPasswordDialog) {
@@ -494,6 +520,54 @@ fun SettingsScreen(viewModel: SettingsViewModel = viewModel()) {
 }
 
 // ------------------------------------------------------------------
+
+/**
+ * 開発ツールへの入口。
+ *
+ * 鍵をかけたいわけではなく、うっかり触って判定が狂うのを防ぐだけなので、
+ * 合言葉は1つで十分。忘れても困らないように、ヒントは画面に書いてある。
+ */
+@Composable
+private fun DevCodeDialog(onUnlock: () -> Unit, onDismiss: () -> Unit) {
+    var code by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("開発ツール") },
+        text = {
+            Column {
+                Text(
+                    "ルールを試すために、時刻をずらしたり学習予定をでっちあげたりできます。" +
+                        "ふだんは使いません。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = code,
+                    onValueChange = { code = it },
+                    label = { Text("合言葉") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "ヒント: このアプリの名前(ひらがな)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = code.trim() == DEV_CODE,
+                onClick = onUnlock,
+            ) { Text("開く") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("やめる") } },
+    )
+}
+
+private const val DEV_CODE = "どぱちる"
 
 @Composable
 private fun SectionTitle(text: String) {

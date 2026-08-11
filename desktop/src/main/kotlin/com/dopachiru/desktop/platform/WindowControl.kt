@@ -45,6 +45,19 @@ object WindowControl {
         runCatching { User32.INSTANCE.ShowWindow(hwnd, Win32Const.SW_MINIMIZE) }
     }
 
+    /**
+     * デスクトップを前面に出す。
+     *
+     * ブロック画面を閉じたあと、これをやらないと**閉じたアプリがそのまま前面に残り、
+     * 次の判定でまた塞がれる**。Android の「ホームに戻す」にあたる後始末。
+     */
+    fun focusDesktop() {
+        runCatching {
+            val desktop = User32.INSTANCE.FindWindow("Progman", null)
+            if (desktop != null) User32.INSTANCE.SetForegroundWindow(desktop)
+        }
+    }
+
     fun suspend(pid: Int): Boolean {
         if (pid in suspendedPids) return true
         val handle = Kernel32.INSTANCE.OpenProcess(Win32Const.PROCESS_SUSPEND_RESUME, false, pid)

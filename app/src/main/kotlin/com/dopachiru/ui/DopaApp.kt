@@ -20,6 +20,7 @@ import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import com.dopachiru.ui.dev.DevToolsScreen
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.dopachiru.ui.changes.ChangeRequestScreen
@@ -94,7 +95,12 @@ fun DopaApp() {
 
             composable(TopLevel.Changes.route) { ChangeRequestScreen() }
 
-            composable(TopLevel.Settings.route) { SettingsScreen() }
+            composable(TopLevel.Settings.route) {
+                SettingsScreen(onOpenDevTools = { navController.navigate("dev") })
+            }
+
+            // 開発用。設定の一番下からコードを入れたときだけ辿り着ける
+            composable("dev") { DevToolsScreen() }
         }
     }
 }

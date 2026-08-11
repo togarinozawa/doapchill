@@ -46,6 +46,7 @@ import kotlin.math.roundToInt
 @Composable
 fun BlockScreen(
     block: Presentation.Block,
+    escapeHoldSeconds: Int = 0,
     onDismiss: () -> Unit,
     onOverride: () -> Unit,
 ) = DopaTheme {
@@ -130,9 +131,31 @@ fun BlockScreen(
                     )
                 }
             }
+
+            Spacer(Modifier.height(48.dp))
+
+            // 最前面の全画面で出ている以上、こちらの不具合で閉じられなくなったときの
+            // 逃げ道が必ず要る。抑止のためのものが端末を人質に取ってはいけない。
+            Text(
+                if (escapeHoldSeconds > 0) {
+                    "Esc を押し続けています… あと ${ESCAPE_HOLD_SECONDS - escapeHoldSeconds} 秒で一時停止"
+                } else {
+                    "動かなくなったら Esc を ${ESCAPE_HOLD_SECONDS} 秒押し続けると一時停止します"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = if (escapeHoldSeconds > 0) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                },
+                textAlign = TextAlign.Center,
+            )
         }
     }
 }
+
+/** これだけ押し続けたら一時停止。うっかりでは通らない程度に長く。 */
+const val ESCAPE_HOLD_SECONDS = 3
 
 /** 警告。下のアプリはそのまま操作できる(ウィンドウ側で focusable を切る)。 */
 @Composable

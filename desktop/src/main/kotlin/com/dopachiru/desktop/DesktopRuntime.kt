@@ -89,6 +89,19 @@ object DesktopRuntime {
     /** 押し切られたアプリを、しばらく再ブロックしないための猶予。 */
     private val overrideUntil = HashMap<String, Long>()
 
+    /**
+     * 「わかった、やめる」を押されたアプリの猶予。
+     *
+     * Android には「ホームに戻す」という確実な逃がし先があるが、Windows には無い。
+     * 最小化してもフォーカスが戻ってくることがあり、そのまま判定すると
+     * **閉じた瞬間にまた塞がれて、画面から出られなくなる**。
+     * 数秒だけ見逃して、離れる隙を作る。
+     */
+    private val dismissedUntil = HashMap<String, Long>()
+
+    /** 同じブロックを出した回数。暴走を検知して自動で止めるため。 */
+    private val blockShownTimes = ArrayDeque<Long>()
+
     /** 警告を最後に出した時刻。ルールIDごと。 */
     private val warnShownAt = HashMap<Long, Long>()
 
@@ -148,7 +161,28 @@ object DesktopRuntime {
         val held = heldApp
         _presentation.value = null
         releaseHold()
-        if (held != null) WindowControl.minimize(held.hwnd)
+        if (held != null) {
+            dismissedUntil[held.processName] = System.currentTimeMillis() + DISMISS_GRACE_MS
+            WindowControl.minimize(held.hwnd)
+            WindowControl.focusDesktop()
+        }
+        // 覚えている前面は、閉じたアプリのまま。次の巡回で読み直させる
+        _foreground.value = null
+    }
+
+    /**
+     * 逃げ道。ブロック画面で Esc を長押しすると通る。
+     *
+     * 全画面で最前面に出ている以上、こちらの不具合で閉じられなくなったときに
+     * ユーザーが自力で抜ける手段が必ず要る。抑止のために出しているものが
+     * 端末を人質に取ってはいけない。
+     */
+    fun emergencyPause() {
+        _presentation.value = null
+        releaseHold()
+        WindowControl.resumeAll()
+        _foreground.value = null
+        updateSettings { it.copy(paused = true) }
     }
 
     /** ブロック画面の「それでも使う」。 */
@@ -244,7 +278,9 @@ object DesktopRuntime {
             return
         }
 
-        if (System.currentTimeMillis() < (overrideUntil[fg.processName] ?: 0L)) return
+        val now = System.currentTimeMillis()
+        if (now < (overrideUntil[fg.processName] ?: 0L)) return
+        if (now < (dismissedUntil[fg.processName] ?: 0L)) return
 
         val file = _ruleFile.value
         val context = EvalContext(
@@ -343,6 +379,12 @@ object DesktopRuntime {
             heldApp = fg
             return
         }
+        if (isThrashing()) {
+            // 出しては消えるを繰り返している = こちらの不具合。
+            // 巻き込まれ続けるより止まったほうがましなので、自分から降りる
+            emergencyPause()
+            return
+        }
         heldApp = fg
         _presentation.value = Presentation.Block(
             key = key,
@@ -374,8 +416,29 @@ object DesktopRuntime {
         }
     }
 
+    /**
+     * 短い間にブロック画面を出し直しすぎていないか。
+     *
+     * 正しく動いていれば、1つのブロックは出たまま留まる。何度も出し直しているなら
+     * 「出す → 閉じる → すぐまた出す」の輪に入っている。
+     */
+    private fun isThrashing(): Boolean {
+        val now = System.currentTimeMillis()
+        blockShownTimes.addLast(now)
+        while (blockShownTimes.isNotEmpty() && now - blockShownTimes.first() > THRASH_WINDOW_MS) {
+            blockShownTimes.removeFirst()
+        }
+        return blockShownTimes.size >= THRASH_LIMIT
+    }
+
     /** 前面を見に行く間隔。API 呼び出し数回ぶんなので、負荷は誤差。 */
     private const val POLL_MS = 1_000L
+
+    /** 「やめる」を押したあと、そのアプリを見逃す時間。離れる隙を作るため。 */
+    private const val DISMISS_GRACE_MS = 6_000L
+
+    private const val THRASH_WINDOW_MS = 60_000L
+    private const val THRASH_LIMIT = 8
 
     /** 記録をディスクに落とす間隔。 */
     private const val PERSIST_MS = 60_000L
