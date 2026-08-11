@@ -24,6 +24,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -91,6 +92,13 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { DopaRuntime.settings.setBatterySaver(enabled) }
     }
 
+    val studyPrepMinutes: StateFlow<Int> = DopaRuntime.settings.studyPrepMinutes
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 30)
+
+    fun setStudyPrepMinutes(minutes: Int) {
+        viewModelScope.launch { DopaRuntime.settings.setStudyPrepMinutes(minutes) }
+    }
+
     /** 有効化と、設定済みゲートの差し替えを兼ねる(キーが同じものを置き換える)。 */
     fun putGate(gate: Gate, enabled: Boolean) {
         viewModelScope.launch {
@@ -138,6 +146,7 @@ fun SettingsScreen(viewModel: SettingsViewModel = viewModel()) {
     val unlockMessage by viewModel.unlockMessage.collectAsState()
     val selfDefense by viewModel.selfDefense.collectAsState()
     val batterySaver by viewModel.batterySaver.collectAsState()
+    val prepMinutes by viewModel.studyPrepMinutes.collectAsState()
 
     // 設定アプリから戻ってきたら権限の状態を見直す
     var refreshKey by remember { mutableIntStateOf(0) }
@@ -360,6 +369,40 @@ fun SettingsScreen(viewModel: SettingsViewModel = viewModel()) {
                         modifier = Modifier.padding(vertical = 4.dp),
                     )
                     OutlinedButton(onClick = { showMessageDialog = true }) { Text("変える") }
+                }
+            }
+        }
+
+        item {
+            SectionTitle("学習予定")
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("助走枠", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "予定が始まる何分前から「直前」とみなすか。" +
+                            "予定の時間帯だけ塞いでも、始まる前に沈んで予定ごと潰れることは防げません。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        if (prepMinutes == 0) "使わない" else "${prepMinutes} 分前から",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Slider(
+                        value = prepMinutes.toFloat(),
+                        onValueChange = { viewModel.setStudyPrepMinutes(it.toInt()) },
+                        valueRange = 0f..120f,
+                        steps = 23,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "雛形の「予定の前に沈まない」と組み合わせて使います。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }

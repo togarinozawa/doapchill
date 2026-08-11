@@ -35,12 +35,29 @@ class RuleRepository(
     suspend fun upsert(rule: Rule): Long {
         val now = System.currentTimeMillis() / 1000
         return if (rule.id == 0L) {
-            ruleDao.insert(rule.toEntity(createdAt = now, updatedAt = now))
+            ruleDao.insert(rule.withUid().toEntity(createdAt = now, updatedAt = now))
         } else {
             val existing = ruleDao.getById(rule.id)
-            ruleDao.update(rule.toEntity(createdAt = existing?.createdAt ?: now, updatedAt = now))
+            // 既存の uid は絶対に振り直さない。振り直すと、他の端末からは
+            // 「消えて別のものが増えた」ように見える
+            val uid = existing?.uid?.takeIf { it.isNotBlank() } ?: rule.withUid().uid
+            ruleDao.update(
+                rule.copy(uid = uid).toEntity(createdAt = existing?.createdAt ?: now, updatedAt = now)
+            )
             rule.id
         }
+    }
+
+    /**
+     * uid の無い古いルールに振る。
+     *
+     * ver.0.4 以前に作ったルールには uid が無い。同期を始める前に一度だけ通す。
+     */
+    suspend fun backfillUids() {
+        val now = System.currentTimeMillis() / 1000
+        ruleDao.getAll()
+            .filter { it.uid.isBlank() }
+            .forEach { ruleDao.update(it.copy(uid = newUid(), updatedAt = now)) }
     }
 
     suspend fun delete(id: Long) = ruleDao.deleteById(id)
@@ -57,8 +74,14 @@ class RuleRepository(
     suspend fun deleteTag(tag: String) = appTagDao.deleteTag(tag)
 }
 
+/** 新しい同期用 ID。 */
+fun newUid(): String = java.util.UUID.randomUUID().toString()
+
+private fun Rule.withUid(): Rule = if (uid.isBlank()) copy(uid = newUid()) else this
+
 fun RuleEntity.toRule(): Rule = Rule(
     id = id,
+    uid = uid,
     name = name,
     enabled = enabled,
     target = runCatching { DopaCore.json.decodeFromString(Target.serializer(), targetJson) }
@@ -71,6 +94,7 @@ fun RuleEntity.toRule(): Rule = Rule(
 
 fun Rule.toEntity(createdAt: Long, updatedAt: Long): RuleEntity = RuleEntity(
     id = id,
+    uid = uid,
     name = name,
     enabled = enabled,
     targetJson = DopaCore.json.encodeToString(Target.serializer(), target),

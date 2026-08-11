@@ -43,6 +43,17 @@
         android:name="com.dopachiru.permission.SYNC_STUDY"
         android:protectionLevel="signature" />
 
+    <!--
+      学習予定の中断を連携アプリに伝えるための権限(向こうが定義しているもの)。
+      押し切りを塞いだ代わりの出口であり、閉じ込め事故の出口でもある。
+    -->
+    <uses-permission android:name="dev.togar.dynasched.permission.CONTROL_SESSION" />
+
+    <!-- 中断の受け手が居るかを調べるため。ここに書いた相手しか見えない -->
+    <queries>
+        <package android:name="dev.togar.dynasched" />
+    </queries>
+
     <application
         android:name=".DopaApplication"
         android:allowBackup="false"

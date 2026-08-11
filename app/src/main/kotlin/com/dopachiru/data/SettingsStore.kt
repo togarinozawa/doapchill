@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.dopachiru.core.DopaCore
@@ -39,6 +40,7 @@ class SettingsStore(private val context: Context) {
         val growthName = stringPreferencesKey("growth_name")
         val selfDefense = booleanPreferencesKey("self_defense")
         val batterySaver = booleanPreferencesKey("battery_saver")
+        val studyPrepMinutes = intPreferencesKey("study_prep_minutes")
     }
 
     val setupDone: Flow<Boolean> = context.dataStore.data.map { it[Keys.setupDone] ?: false }
@@ -82,6 +84,20 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setBatterySaver(enabled: Boolean) {
         context.dataStore.edit { it[Keys.batterySaver] = enabled }
+    }
+
+    /**
+     * 学習予定の何分前から「助走枠」とみなすか。0 で無効。
+     *
+     * 連携アプリは予定の時間帯しか送ってこない。手前に伸ばすのはこちらの仕事なので、
+     * ここを変えるのに向こうの再ビルドは要らない。
+     */
+    val studyPrepMinutes: Flow<Int> = context.dataStore.data.map {
+        it[Keys.studyPrepMinutes] ?: StudyWindowRepository.DEFAULT_PREP_MINUTES
+    }
+
+    suspend fun setStudyPrepMinutes(minutes: Int) {
+        context.dataStore.edit { it[Keys.studyPrepMinutes] = minutes.coerceIn(0, 180) }
     }
 
     suspend fun setSetupDone(done: Boolean) {

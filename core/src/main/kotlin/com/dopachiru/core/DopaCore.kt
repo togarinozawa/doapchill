@@ -12,6 +12,7 @@ import com.dopachiru.core.condition.types.DayOfWeekCondition
 import com.dopachiru.core.condition.types.DeclaredBudgetCondition
 import com.dopachiru.core.condition.types.PowerSaveCondition
 import com.dopachiru.core.condition.types.SessionCountCondition
+import com.dopachiru.core.condition.types.StudyPrepCondition
 import com.dopachiru.core.condition.types.StudySessionCondition
 import com.dopachiru.core.condition.types.TimeRangeCondition
 import com.dopachiru.core.condition.types.TotalUsageCondition
@@ -55,6 +56,7 @@ object DopaCore {
             CalendarBusyCondition,
             PowerSaveCondition,
             StudySessionCondition,
+            StudyPrepCondition,
         )
 
         ActionRegistry.register(

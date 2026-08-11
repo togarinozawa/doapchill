@@ -12,8 +12,23 @@ interface StudyState {
     /** 学習の窓の中にいるか。 */
     val inSession: Boolean
 
+    /**
+     * 予定が始まる手前の「助走枠」にいるか。
+     *
+     * 実際の失敗は「予定が始まる前に沈んで、予定ごと潰す」ことなので、
+     * 始まってから縛るだけでは足りない。窓そのものは連携元から届いた学習予定のままで、
+     * 助走枠はその開始時刻から手前に伸ばして作る。
+     */
+    val inPrep: Boolean get() = false
+
     /** いま入っている窓の名前。表示用。 */
     val currentTitle: String?
+
+    /**
+     * いま入っている(または助走中の)窓の識別子。連携元が付けたもの。
+     * 中断を伝えるときにそのまま返す。
+     */
+    val currentWindowId: String? get() = null
 
     /**
      * [now] より後で、[inSession] が切り替わる最も早い時刻。
@@ -27,7 +42,9 @@ interface StudyState {
         /** 連携していない、または予定が1件も来ていない状態。 */
         val NONE: StudyState = object : StudyState {
             override val inSession = false
+            override val inPrep = false
             override val currentTitle: String? = null
+            override val currentWindowId: String? = null
             override fun nextBoundaryAfter(now: LocalDateTime): LocalDateTime? = null
         }
     }

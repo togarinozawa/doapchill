@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         StudyWindowEntity::class,
         DayStatEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class DopaDatabase : RoomDatabase() {
@@ -58,6 +58,18 @@ abstract class DopaDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * ルールに端末をまたいで一意な ID を足した(ver.0.5)。
+         *
+         * 既存の行は空のまま入る。起動時の backfill で振る。
+         * ここで振らないのは、SQLite に UUID を作る手段が無いため。
+         */
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `rules` ADD COLUMN `uid` TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         @Volatile
         private var instance: DopaDatabase? = null
 
@@ -68,7 +80,7 @@ abstract class DopaDatabase : RoomDatabase() {
                     DopaDatabase::class.java,
                     "dopachiru.db",
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { instance = it }
             }

@@ -35,6 +35,15 @@ class StudyWindowRepository(
     @Volatile
     private var windows: List<Window> = emptyList()
 
+    /**
+     * 助走枠の長さ(分)。0 で無効。
+     *
+     * 連携元は今までどおり予定の時間帯だけを送ってくる。手前に伸ばすのはこちらの仕事なので、
+     * 長さを変えるのに向こうの再ビルドが要らない。
+     */
+    @Volatile
+    var prepMinutes: Int = DEFAULT_PREP_MINUTES
+
     /** 最後に同期が届いた時刻。0 なら一度も来ていない。設定画面の表示用。 */
     @Volatile
     var lastSyncAtMs: Long = 0L
@@ -79,21 +88,67 @@ class StudyWindowRepository(
         return windows.any { sec >= it.startSec && sec < it.endSec }
     }
 
+    /** いま入っている(または助走中の)窓。中断を伝えるときの宛先。 */
+    fun currentWindow(nowMs: Long = System.currentTimeMillis()): Window? {
+        val sec = nowMs / 1000
+        val prepSec = prepMinutes.coerceAtLeast(0) * 60L
+        return windows.firstOrNull { sec >= it.startSec && sec < it.endSec }
+            ?: windows.firstOrNull { sec >= it.startSec - prepSec && sec < it.startSec }
+    }
+
+    /**
+     * 予定を1つ、いま終わったことにする。
+     *
+     * 中断を連携元に伝えたあと、向こうからの送り直しを待たずにこちらでも解く。
+     * 待っている間ブロックが残ると、**閉じ込め事故の出口として機能しない**。
+     * 向こうも全置換で送り直してくるので、結果は同じところに落ち着く。
+     */
+    fun endNow(windowId: String, nowMs: Long = System.currentTimeMillis()) {
+        val sec = nowMs / 1000
+        windows = windows.mapNotNull { window ->
+            when {
+                window.id != windowId -> window
+                window.startSec >= sec -> null // まだ始まっていない = まるごと消す
+                else -> window.copy(endSec = sec)
+            }
+        }
+        scope.launch {
+            dao.deleteAll()
+            if (windows.isNotEmpty()) dao.upsertAll(windows.map { it.toEntity(sec) })
+        }
+    }
+
     /** いまの学習状況。 */
     fun state(nowMs: Long = System.currentTimeMillis()): StudyState {
         val snapshot = windows
+        val prepSec = prepMinutes.coerceAtLeast(0) * 60L
         val sec = nowMs / 1000
         val current = snapshot.firstOrNull { sec >= it.startSec && sec < it.endSec }
+        // 助走中の判定は、予定中でないときだけ見る。前の予定が終わる前から
+        // 次の助走が始まることがあるが、そのときは予定中のほうが優先される。
+        val prep = if (current != null || prepSec <= 0L) {
+            null
+        } else {
+            snapshot.firstOrNull { sec >= it.startSec - prepSec && sec < it.startSec }
+        }
 
         return object : StudyState {
             override val inSession: Boolean = current != null
-            override val currentTitle: String? = current?.title?.takeIf { it.isNotBlank() }
+            override val inPrep: Boolean = prep != null
+            override val currentTitle: String? =
+                (current ?: prep)?.title?.takeIf { it.isNotBlank() }
+            override val currentWindowId: String? = (current ?: prep)?.id
 
             override fun nextBoundaryAfter(now: LocalDateTime): LocalDateTime? {
                 val zone = ZoneId.systemDefault()
                 val nowSec = now.atZone(zone).toEpochSecond()
                 var earliest = Long.MAX_VALUE
                 for (w in snapshot) {
+                    // 助走の始まりも境界。ここで起きないと助走枠に入ったことに気づけない
+                    if (prepSec > 0L) {
+                        val prepStart = w.startSec - prepSec
+                        if (prepStart in (nowSec + 1) until earliest) earliest = prepStart
+                    }
                     if (w.startSec in (nowSec + 1) until earliest) earliest = w.startSec
                     if (w.endSec in (nowSec + 1) until earliest) earliest = w.endSec
                 }
@@ -130,8 +185,11 @@ class StudyWindowRepository(
         kind = kind,
     )
 
-    private companion object {
+    companion object {
         /** 終わった窓をどれだけ残すか。再起動直後の復元にしか使わないので短くてよい。 */
-        const val RETENTION_SEC = 24L * 60 * 60
+        private const val RETENTION_SEC = 24L * 60 * 60
+
+        /** 助走枠の既定の長さ。効かなければ設定から伸ばす。 */
+        const val DEFAULT_PREP_MINUTES = 30
     }
 }

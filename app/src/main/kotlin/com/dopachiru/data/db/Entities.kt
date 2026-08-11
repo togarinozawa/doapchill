@@ -1,5 +1,6 @@
 package com.dopachiru.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -13,6 +14,13 @@ import androidx.room.PrimaryKey
 @Entity(tableName = "rules")
 data class RuleEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    /**
+     * 端末をまたいで一意な ID。同期の鍵。空なら読み込み時に振られる。
+     *
+     * 既定値を宣言してあるのは、移行で足した列(`DEFAULT ''`)と
+     * Room が期待する形を確実に一致させるため。
+     */
+    @ColumnInfo(defaultValue = "''") val uid: String = "",
     val name: String,
     val enabled: Boolean = true,
     /** core の Target を JSON にしたもの。 */

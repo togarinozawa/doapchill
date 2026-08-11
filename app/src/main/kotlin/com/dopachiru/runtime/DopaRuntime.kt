@@ -121,6 +121,8 @@ object DopaRuntime {
         )
 
         scope.launch {
+            // 同期を始める前に、uid の無い古いルールへ振っておく
+            rules.backfillUids()
             usage.warmUp()
             declarations.warmUp()
             // 再起動をまたいでも学習中のままでいられるように、窓を読み直す
@@ -142,6 +144,7 @@ object DopaRuntime {
             }
         }
         scope.launch { settings.batterySaver.collect { batterySaverMode = it } }
+        scope.launch { settings.studyPrepMinutes.collect { studyWindows.prepMinutes = it } }
     }
 
     @Volatile

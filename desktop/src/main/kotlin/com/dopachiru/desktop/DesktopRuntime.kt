@@ -122,7 +122,11 @@ object DesktopRuntime {
 
     fun addRule(rule: Rule) = updateRules { file ->
         file.copy(
-            rules = file.rules + rule.copy(id = file.nextId),
+            // uid は端末をまたいで一意。id と違って、作った端末が変わっても付いて回る
+            rules = file.rules + rule.copy(
+                id = file.nextId,
+                uid = rule.uid.ifBlank { java.util.UUID.randomUUID().toString() },
+            ),
             nextId = file.nextId + 1,
         )
     }

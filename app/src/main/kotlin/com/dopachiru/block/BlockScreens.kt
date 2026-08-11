@@ -47,6 +47,9 @@ import kotlin.math.roundToInt
  *
  * [allowOverride] が false のときは「それでも使う」が出ない。学習予定の最中など、
  * 逃げ道を残さないと決めた場面で使う。ホームには戻れるので閉じ込めにはならない。
+ *
+ * 代わりに [onAbortStudy] があるときは「予定を中断する」を出す。押し切りと違い、
+ * 中断した予定は連携アプリ側で後の空き時間に再配置される ── 逃げても総量は減らない。
  */
 @Composable
 fun BlockScreen(
@@ -55,10 +58,12 @@ fun BlockScreen(
     reflection: String,
     minSeconds: Int,
     allowOverride: Boolean = true,
+    onAbortStudy: (() -> Unit)? = null,
     onDismiss: () -> Unit,
     onOverride: () -> Unit,
 ) = DopaBlockTheme {
     var remaining by remember { mutableIntStateOf(minSeconds) }
+    var confirmingAbort by remember { mutableStateOf(false) }
 
     LaunchedEffect(minSeconds) {
         remaining = minSeconds
@@ -127,16 +132,50 @@ fun BlockScreen(
                     Text("わかった、やめる", modifier = Modifier.padding(vertical = 6.dp))
                 }
                 Spacer(Modifier.height(12.dp))
-                if (allowOverride) {
-                    TextButton(onClick = onOverride) {
+                when {
+                    allowOverride -> TextButton(onClick = onOverride) {
                         Text(
                             "それでも使う(連続記録が途切れます)",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                } else {
-                    Text(
+
+                    onAbortStudy != null && confirmingAbort -> Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            "中断した予定は、あとの空き時間に組み直されます。\n" +
+                                "やる量は減りません。それでも中断しますか?",
+                            style = MaterialTheme.typography.bodySmall,
+                            textAlign = TextAlign.Center,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row {
+                            TextButton(onClick = { confirmingAbort = false }) {
+                                Text("やめておく", style = MaterialTheme.typography.bodySmall)
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            TextButton(onClick = onAbortStudy) {
+                                Text(
+                                    "中断する",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        }
+                    }
+
+                    onAbortStudy != null -> TextButton(onClick = { confirmingAbort = true }) {
+                        Text(
+                            "予定を中断する",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    else -> Text(
                         "この時間は押し切れません",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,

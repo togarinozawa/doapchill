@@ -73,6 +73,7 @@ class StudyWindowRepositoryTest {
 
     @Test
     fun `窓の前なら開始時刻を答える`() {
+        repo.prepMinutes = 0 // 助走枠そのものは別のテストで見る
         repo.replaceAll(oneWindow())
         val now = today.withHour(9)
 
@@ -95,6 +96,7 @@ class StudyWindowRepositoryTest {
 
     @Test
     fun `予定が複数あれば一番近い境界を答える`() {
+        repo.prepMinutes = 0
         repo.replaceAll(
             oneWindow() + StudyWindowRepository.Window(
                 id = "w2",
@@ -149,6 +151,93 @@ class StudyWindowRepositoryTest {
             )
         )
         assertFalse(repo.inSession(ms(now)))
+    }
+
+    // ------------------------------------------------------------------
+    // 助走枠。予定の時間帯だけ塞いでも「始まる前に沈んで予定ごと潰す」失敗は防げない
+
+    @Test
+    fun `予定の手前が助走枠になる`() {
+        repo.prepMinutes = 30
+        repo.replaceAll(oneWindow())
+
+        // 31分前 → まだ何でもない
+        val early = today.withHour(9).withMinute(29)
+        repo.state(ms(early)).let {
+            assertFalse(it.inPrep)
+            assertFalse(it.inSession)
+        }
+        // 30分前ちょうど → 助走枠に入る
+        repo.state(ms(today.withHour(9).withMinute(30))).let {
+            assertTrue(it.inPrep)
+            assertFalse(it.inSession)
+        }
+        // 開始時刻 → 助走は終わり、予定中になる
+        repo.state(ms(today.withHour(10))).let {
+            assertFalse(it.inPrep)
+            assertTrue(it.inSession)
+        }
+    }
+
+    @Test
+    fun `助走枠の始まりでも起こしてもらえる`() {
+        repo.prepMinutes = 30
+        repo.replaceAll(oneWindow())
+        val now = today.withHour(8)
+
+        // ここで開始時刻を返すと、助走枠に入ったことに気づけない
+        assertEquals(
+            today.withHour(9).withMinute(30),
+            repo.state(ms(now)).nextBoundaryAfter(now),
+        )
+    }
+
+    @Test
+    fun `助走を切ると予定の時間帯だけになる`() {
+        repo.prepMinutes = 0
+        repo.replaceAll(oneWindow())
+
+        assertFalse(repo.state(ms(today.withHour(9).withMinute(45))).inPrep)
+        val now = today.withHour(8)
+        assertEquals(today.withHour(10), repo.state(ms(now)).nextBoundaryAfter(now))
+    }
+
+    // ------------------------------------------------------------------
+    // 中断。押し切りを塞いだ代わりの出口であり、閉じ込め事故の出口でもある
+
+    @Test
+    fun `中断すると待たずにその場で解ける`() {
+        repo.replaceAll(oneWindow())
+        val now = today.withHour(10).withMinute(30)
+        assertTrue(repo.inSession(ms(now)))
+
+        repo.endNow("w1", ms(now))
+
+        // 連携アプリからの送り直しを待たない。待つと出口として機能しない
+        assertFalse(repo.inSession(ms(now)))
+    }
+
+    @Test
+    fun `まだ始まっていない予定を中断すると助走枠ごと消える`() {
+        repo.prepMinutes = 30
+        repo.replaceAll(oneWindow())
+        val now = today.withHour(9).withMinute(40)
+        assertTrue(repo.state(ms(now)).inPrep)
+
+        repo.endNow("w1", ms(now))
+
+        assertFalse(repo.state(ms(now)).inPrep)
+        assertFalse(repo.inSession(ms(today.withHour(10).withMinute(30))))
+    }
+
+    @Test
+    fun `中断の宛先は助走中でも取れる`() {
+        repo.prepMinutes = 30
+        repo.replaceAll(oneWindow())
+
+        assertEquals("w1", repo.currentWindow(ms(today.withHour(9).withMinute(45)))?.id)
+        assertEquals("w1", repo.currentWindow(ms(today.withHour(10).withMinute(30)))?.id)
+        assertNull(repo.currentWindow(ms(today.withHour(8)))?.id)
     }
 
     @Test

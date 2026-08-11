@@ -71,7 +71,17 @@ sealed interface ConditionNode {
  */
 @Serializable
 data class Rule(
+    /** 端末内での ID。Android は Room の自動採番、Windows は自前の連番。 */
     val id: Long = 0L,
+
+    /**
+     * 端末をまたいで一意な ID。同期の鍵。
+     *
+     * [id] は端末ごとに独立して振られるので、別の端末で作ったルールが同じ番号になる。
+     * 同期で突き合わせるときはこちらを使う。作成時に UUID を振り、
+     * 空のまま保存されていた古いルールには読み込み時に振り直す。
+     */
+    val uid: String = "",
     val name: String,
     val enabled: Boolean = true,
     val target: Target,

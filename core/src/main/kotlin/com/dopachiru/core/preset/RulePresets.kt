@@ -7,6 +7,7 @@ import com.dopachiru.core.condition.types.CalendarBusyCondition
 import com.dopachiru.core.condition.types.ContinuousUsageCondition
 import com.dopachiru.core.condition.types.DayOfWeekCondition
 import com.dopachiru.core.condition.types.SessionCountCondition
+import com.dopachiru.core.condition.types.StudyPrepCondition
 import com.dopachiru.core.condition.types.StudySessionCondition
 import com.dopachiru.core.condition.types.TimeRangeCondition
 import com.dopachiru.core.condition.types.TotalUsageCondition
@@ -227,6 +228,25 @@ object RulePresets {
                     BlockAction.KEY_MIN_SECONDS to 20,
                     BlockAction.KEY_COVER_SYSTEM_BARS to true,
                     BlockAction.KEY_ALLOW_OVERRIDE to false,
+                ),
+            )
+        },
+
+        RulePreset(
+            id = "study_prep",
+            name = "予定の前に沈まない",
+            description = "学習予定が始まる少し前から、選んだアプリに警告を重ねる。" +
+                "操作は止めない。「気づいたら開始時刻を過ぎていた」を防ぐためのもの。",
+        ) { packages ->
+            rule(
+                name = "予定の前に沈まない",
+                packages = packages,
+                conditions = listOf(leaf(StudyPrepCondition.id)),
+                actionId = WarnAction.id,
+                actionParams = Params.of(
+                    WarnAction.KEY_MESSAGE to "もうすぐ勉強の時間。そろそろ畳もう。",
+                    WarnAction.KEY_SECONDS to 6,
+                    WarnAction.KEY_REPEAT_MINUTES to 3,
                 ),
             )
         },

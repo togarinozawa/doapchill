@@ -288,6 +288,11 @@ class DopaAccessibilityService : AccessibilityService() {
         // 学習予定の最中は、ルールの設定に関わらず押し切れない
         val canOverride = allowOverride && !DopaRuntime.studyInSession()
 
+        // 押し切れないときの出口。予定そのものを中断する経路を残す。
+        // これが無いと、許可リストを間違えたときに端末ごと詰む。
+        val abortWindowId =
+            if (canOverride) null else DopaRuntime.studyWindows.currentWindow()?.id
+
         // 逃げ道の有無をキーに含める。ブロック画面を出したあとに予定が始まったら、
         // 同じルールでも画面を出し直してボタンを消す必要がある。
         val key = "$pkg|block|$ruleId|${if (canOverride) "o" else "x"}"
@@ -305,6 +310,16 @@ class DopaAccessibilityService : AccessibilityService() {
                 reflection = reflection,
                 minSeconds = minSeconds,
                 allowOverride = canOverride,
+                onAbortStudy = abortWindowId?.let { windowId ->
+                    {
+                        // 相手に伝えたあと、送り直しを待たずにこちらでも解く。
+                        // 待っているあいだブロックが残ると、出口として機能しない。
+                        StudyAbort.abort(this, windowId)
+                        DopaRuntime.studyWindows.endNow(windowId)
+                        overlay.hide()
+                        performGlobalAction(GLOBAL_ACTION_HOME)
+                    }
+                },
                 onDismiss = {
                     overlay.hide()
                     performGlobalAction(GLOBAL_ACTION_HOME)
