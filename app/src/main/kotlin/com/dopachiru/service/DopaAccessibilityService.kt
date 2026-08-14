@@ -15,6 +15,7 @@ import android.view.inputmethod.InputMethodManager
 import com.dopachiru.R
 import com.dopachiru.block.BlockScreen
 import com.dopachiru.block.DeclareScreen
+import com.dopachiru.block.LockoutScreen
 import com.dopachiru.block.OverlayHost
 import com.dopachiru.block.OverlayMode
 import com.dopachiru.block.SelfDefenseScreen
@@ -24,6 +25,9 @@ import com.dopachiru.core.action.types.BlockAction
 import com.dopachiru.core.action.types.DeclareAction
 import com.dopachiru.core.action.types.WarnAction
 import com.dopachiru.core.engine.Decision
+import com.dopachiru.core.model.Lockout
+import com.dopachiru.core.model.Rule
+import com.dopachiru.core.points.PointReason
 import com.dopachiru.runtime.DopaRuntime
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -56,6 +60,26 @@ class DopaAccessibilityService : AccessibilityService() {
 
     /** 警告を最後に出した時刻。ルールIDごと。 */
     private val warnShownAt = HashMap<Long, Long>()
+
+    /** 「無視した」の判定を予約したもの。取り消せるように持っておく。 */
+    private val pendingIgnoreChecks = HashMap<Long, Runnable>()
+
+    /**
+     * 宣言超過の罰を科し終えた組み合わせ。
+     *
+     * 超過中は判定のたびにここを通るので、印を付けないと数十秒おきに罰が積み上がる。
+     * 宣言し直したら消す ── 次の回はまた1から数える。
+     */
+    private val punishedOverruns = HashSet<String>()
+
+    /**
+     * 警告を無視した罰を科し終えた組み合わせ。そのアプリを離れたら消える。
+     *
+     * 警告は成立しているあいだ繰り返し出るので、出るたびに罰していると
+     * 1時間ほどで残高が下限に張り付き、そこから何をしても押し切れなくなる。
+     * 「無視して使い続けた」は**その一続きにつき1回**と数える。
+     */
+    private val punishedWarnIgnores = HashSet<String>()
 
     private val systemReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -153,6 +177,8 @@ class DopaAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         live = null
         handler.removeCallbacks(evaluateOnce)
+        pendingIgnoreChecks.values.forEach { handler.removeCallbacks(it) }
+        pendingIgnoreChecks.clear()
         runCatching { unregisterReceiver(systemReceiver) }
         if (::overlay.isInitialized) overlay.hide()
         super.onDestroy()
@@ -179,6 +205,8 @@ class DopaAccessibilityService : AccessibilityService() {
             scheduleNextEvaluation()
             return
         }
+        // アプリを離れた = 一続きの終わり。無視の印を落として数え直す
+        punishedWarnIgnores.removeAll { it.endsWith("|$foregroundPackage") }
         foregroundPackage = pkg
         DopaRuntime.onForegroundChanged(pkg)
 
@@ -244,15 +272,50 @@ class DopaAccessibilityService : AccessibilityService() {
 
     private fun evaluate(pkg: String) {
         if (pkg in launcherPackages) return
+
+        val decision = DopaRuntime.decide(pkg)
+
+        // 罰で閉まっているかは、押し切りの猶予より先に見る。
+        // 押し切りの罰が猶予に隠れてしまうと、罰が一度も効かない
+        if (decision is Decision.Locked) {
+            showLockout(pkg, decision.lockout)
+            return
+        }
+
         // 学習予定の最中は押し切りの猶予を効かせない。
         // 予定が始まる前に押し切っておいて、そのまま持ち込むのを防ぐ。
         if (!DopaRuntime.studyInSession() &&
             System.currentTimeMillis() < (overrideUntil[pkg] ?: 0L)
         ) return
 
-        when (val decision = DopaRuntime.decide(pkg)) {
+        when (decision) {
             is Decision.Allow -> if (overlay.currentKey?.startsWith("$pkg|") == true) overlay.hide()
             is Decision.Act -> present(pkg, decision)
+            is Decision.Locked -> Unit // 上で処理済み
+        }
+    }
+
+    /**
+     * 罰で閉まっているときの画面。
+     *
+     * 押し切りの猶予([overrideUntil])より先に効かせる ── 押し切った直後に
+     * 罰が科されるので、猶予を尊重すると罰そのものが素通りしてしまう。
+     */
+    private fun showLockout(pkg: String, lockout: Lockout) {
+        val key = "$pkg|locked|${lockout.untilEpochSec}"
+        if (overlay.currentKey == key) return
+
+        val label = appLabel(pkg)
+        overlay.show(key, OverlayMode.BLOCKING, coverSystemBars = true) {
+            LockoutScreen(
+                appLabel = label,
+                reason = lockout.reason,
+                untilEpochSec = lockout.untilEpochSec,
+                onGoHome = {
+                    overlay.hide()
+                    performGlobalAction(GLOBAL_ACTION_HOME)
+                },
+            )
         }
     }
 
@@ -260,13 +323,13 @@ class DopaAccessibilityService : AccessibilityService() {
         when (act.action.id) {
             BlockAction.id -> showBlock(
                 pkg = pkg,
-                ruleId = act.rule.id,
-                ruleName = act.rule.name,
+                rule = act.rule,
                 reflection = act.params.string(BlockAction.KEY_REFLECTION),
                 minSeconds = act.params.int(BlockAction.KEY_MIN_SECONDS, 15),
                 coverSystemBars = act.params.bool(BlockAction.KEY_COVER_SYSTEM_BARS, true),
                 allowOverride = act.params.bool(BlockAction.KEY_ALLOW_OVERRIDE, true),
                 actionId = act.action.id,
+                violation = PointReason.OVERRIDE,
             )
 
             WarnAction.id -> showWarn(pkg, act)
@@ -277,14 +340,16 @@ class DopaAccessibilityService : AccessibilityService() {
 
     private fun showBlock(
         pkg: String,
-        ruleId: Long,
-        ruleName: String,
+        rule: Rule,
         reflection: String,
         minSeconds: Int,
         coverSystemBars: Boolean,
         allowOverride: Boolean,
         actionId: String,
+        violation: PointReason,
     ) {
+        val ruleId = rule.id
+        val ruleName = rule.name
         // 学習予定の最中は、ルールの設定に関わらず押し切れない
         val canOverride = allowOverride && !DopaRuntime.studyInSession()
 
@@ -293,9 +358,12 @@ class DopaAccessibilityService : AccessibilityService() {
         val abortWindowId =
             if (canOverride) null else DopaRuntime.studyWindows.currentWindow()?.id
 
-        // 逃げ道の有無をキーに含める。ブロック画面を出したあとに予定が始まったら、
-        // 同じルールでも画面を出し直してボタンを消す必要がある。
-        val key = "$pkg|block|$ruleId|${if (canOverride) "o" else "x"}"
+        val cost = DopaRuntime.overrideCost(rule)
+        val balance = DopaRuntime.points.currentBalance()
+
+        // 逃げ道の有無と値段をキーに含める。ブロック画面を出したあとに予定が始まったり
+        // 残高が変わったりしたら、同じルールでも出し直して表示を合わせる必要がある。
+        val key = "$pkg|block|$ruleId|${if (canOverride) "o" else "x"}|$cost|$balance"
         if (overlay.currentKey == key) return
 
         DopaRuntime.scope.launch {
@@ -310,6 +378,9 @@ class DopaAccessibilityService : AccessibilityService() {
                 reflection = reflection,
                 minSeconds = minSeconds,
                 allowOverride = canOverride,
+                overrideCost = cost,
+                balance = balance,
+                penaltyNote = penaltyNote(rule),
                 onAbortStudy = abortWindowId?.let { windowId ->
                     {
                         // 相手に伝えたあと、送り直しを待たずにこちらでも解く。
@@ -322,6 +393,7 @@ class DopaAccessibilityService : AccessibilityService() {
                 },
                 onDismiss = {
                     overlay.hide()
+                    DopaRuntime.reward(rule)
                     performGlobalAction(GLOBAL_ACTION_HOME)
                 },
                 onOverride = {
@@ -329,11 +401,21 @@ class DopaAccessibilityService : AccessibilityService() {
                     if (logId != null) {
                         DopaRuntime.scope.launch { DopaRuntime.stats.recordOverride(logId) }
                     }
+                    // 罰を先に科してから猶予を置く。順番が逆だと、
+                    // 罰で閉まる前に猶予が効いて素通りになる
+                    DopaRuntime.punish(pkg, rule, violation)
                     overrideUntil[pkg] = System.currentTimeMillis() + OVERRIDE_GRACE_MS
                     overlay.hide()
                 },
             )
         }
+    }
+
+    /** 押し切ったら何が閉まるか。押す前に見せるための1行。 */
+    private fun penaltyNote(rule: Rule): String {
+        val consequence = rule.consequence
+        if (consequence.locksNothing) return ""
+        return "押し切ると${consequence.lockScope.label}が${consequence.lockMinutes}分閉まります"
     }
 
     private fun showWarn(pkg: String, act: Decision.Act) {
@@ -353,6 +435,39 @@ class DopaAccessibilityService : AccessibilityService() {
         DopaRuntime.scope.launch {
             DopaRuntime.stats.recordBlockShown(pkg, act.rule.id, act.rule.name, act.action.id)
         }
+
+        scheduleIgnoreCheck(pkg, act)
+    }
+
+    /**
+     * 警告を出したあと、まだ同じアプリに居座っていたら「破った」とみなす。
+     *
+     * 警告には押し切りボタンが無いので、居座り続けること自体が押し切りにあたる。
+     * ここが無いと、いちばん弱い措置だけ罰の外に置かれることになる。
+     *
+     * 予約は取り消せるようにしてある。アプリを離れたのに、その後で
+     * 罰だけ降ってくるのは筋が通らない。
+     */
+    private fun scheduleIgnoreCheck(pkg: String, act: Decision.Act) {
+        val ignoreMinutes = act.params.int(WarnAction.KEY_IGNORE_MINUTES, 5)
+        if (ignoreMinutes <= 0) return
+        if ("${act.rule.id}|$pkg" in punishedWarnIgnores) return
+
+        pendingIgnoreChecks.remove(act.rule.id)?.let { handler.removeCallbacks(it) }
+
+        val check = Runnable {
+            pendingIgnoreChecks.remove(act.rule.id)
+            // まだ同じアプリを開いていて、ルールも成立したままなら無視したとみなす
+            if (foregroundPackage != pkg || !DopaRuntime.screenOn) return@Runnable
+            val still = DopaRuntime.decide(pkg)
+            if (still is Decision.Act && still.rule.id == act.rule.id &&
+                punishedWarnIgnores.add("${act.rule.id}|$pkg")
+            ) {
+                DopaRuntime.punish(pkg, act.rule, PointReason.WARN_IGNORED)
+            }
+        }
+        pendingIgnoreChecks[act.rule.id] = check
+        handler.postDelayed(check, ignoreMinutes * 60_000L)
     }
 
     private fun showDeclareOrPass(pkg: String, act: Decision.Act) {
@@ -361,6 +476,8 @@ class DopaAccessibilityService : AccessibilityService() {
         when {
             // まだ宣言していない → 宣言させる
             remaining == null -> {
+                // 宣言が切れた = 次の回。超過の印を落として数え直す
+                punishedOverruns.remove("${pkg}|${act.rule.id}")
                 val key = "$pkg|declare|${act.rule.id}"
                 if (overlay.currentKey == key) return
                 val label = appLabel(pkg)
@@ -382,18 +499,25 @@ class DopaAccessibilityService : AccessibilityService() {
                 }
             }
 
-            // 宣言ぶんを使い切った → 封印に切り替える
-            remaining <= 0 -> showBlock(
-                pkg = pkg,
-                ruleId = act.rule.id,
-                ruleName = act.rule.name,
-                reflection = act.params.string(DeclareAction.KEY_REFLECTION)
-                    .ifBlank { "宣言した時間は終わり。" },
-                minSeconds = 15,
-                coverSystemBars = true,
-                allowOverride = true,
-                actionId = act.action.id,
-            )
+            // 宣言ぶんを使い切った → 破った扱いにして封印に切り替える。
+            // 押し切りを待たずにここで罰するのは、超えた時点がすでに違反だから。
+            // 二重に科さないよう、その宣言につき一度だけ。
+            remaining <= 0 -> {
+                if (punishedOverruns.add("${pkg}|${act.rule.id}")) {
+                    DopaRuntime.punish(pkg, act.rule, PointReason.DECLARE_OVERRUN)
+                }
+                showBlock(
+                    pkg = pkg,
+                    rule = act.rule,
+                    reflection = act.params.string(DeclareAction.KEY_REFLECTION)
+                        .ifBlank { "宣言した時間は終わり。" },
+                    minSeconds = 15,
+                    coverSystemBars = true,
+                    allowOverride = true,
+                    actionId = act.action.id,
+                    violation = PointReason.OVERRIDE,
+                )
+            }
 
             // まだ余裕がある
             else -> if (overlay.currentKey?.startsWith("$pkg|") == true) overlay.hide()

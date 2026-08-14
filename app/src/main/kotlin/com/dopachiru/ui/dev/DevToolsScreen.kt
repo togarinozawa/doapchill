@@ -48,6 +48,7 @@ fun DevToolsScreen() {
     var target by remember { mutableStateOf(DopaRuntime.currentForegroundPackage ?: "") }
     var verdicts by remember { mutableStateOf(emptyList<DopaRuntime.RuleVerdict>()) }
     var studyNote by remember { mutableStateOf("") }
+    var penaltyNote by remember { mutableStateOf("") }
 
     fun shift(minutes: Int) {
         offset += minutes
@@ -152,6 +153,62 @@ fun DevToolsScreen() {
                         study.inPrep -> "助走枠"
                         else -> "予定なし"
                     },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+
+        // ------------------------------------------------------------------
+        Spacer(Modifier.height(16.dp))
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text("罰とポイント", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "封鎖画面と、時間が過ぎたあとにちゃんと開くかを確かめられます。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(onClick = {
+                        DopaRuntime.devImposeLockout(minutes = 2, everything = false)
+                        penaltyNote = "いま前面のアプリを2分だけ封鎖しました"
+                    }) { Text("このアプリを2分封鎖") }
+
+                    OutlinedButton(onClick = {
+                        DopaRuntime.devImposeLockout(minutes = 2, everything = true)
+                        penaltyNote = "逃がすもの以外ぜんぶ、2分封鎖しました"
+                    }) { Text("端末ぜんぶ2分封鎖") }
+
+                    TextButton(onClick = {
+                        DopaRuntime.devClearLockouts()
+                        penaltyNote = "封鎖を全部解きました"
+                    }) { Text("封鎖を解く") }
+                }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(-50, -10, 10, 50).forEach { delta ->
+                        OutlinedButton(onClick = {
+                            DopaRuntime.devAddPoints(delta)
+                            penaltyNote = "${if (delta > 0) "+" else ""}$delta ポイント"
+                        }) { Text(if (delta > 0) "+${delta}pt" else "${delta}pt") }
+                    }
+                    TextButton(onClick = {
+                        DopaRuntime.devClearPoints()
+                        penaltyNote = "ポイントを 0 に戻しました"
+                    }) { Text("0 にする") }
+                }
+                if (penaltyNote.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        penaltyNote,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "いまの残高: ${DopaRuntime.points.currentBalance()} pt",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

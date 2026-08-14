@@ -7,7 +7,12 @@ import com.dopachiru.core.action.types.WarnAction
 import com.dopachiru.core.engine.Decision
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.engine.RuleEngine
+import com.dopachiru.core.model.Consequence
+import com.dopachiru.core.model.Lockout
+import com.dopachiru.core.model.Lockouts
 import com.dopachiru.core.model.Rule
+import com.dopachiru.core.points.PointEvent
+import com.dopachiru.core.points.PointReason
 import com.dopachiru.core.time.ResetPolicy
 import com.dopachiru.desktop.data.DeclarationTracker
 import com.dopachiru.desktop.data.DesktopSettings
@@ -42,6 +47,25 @@ sealed interface Presentation {
         val reflection: String,
         val minSeconds: Int,
         val allowOverride: Boolean,
+        /** 押し切るのに要るポイント。0 なら代金を取らない。 */
+        val overrideCost: Int = 0,
+        val balance: Int = 0,
+        /** 押し切ったら何が閉まるか。押す前に見せる。 */
+        val penaltyNote: String = "",
+    ) : Presentation {
+        val canAfford: Boolean get() = overrideCost <= 0 || balance >= overrideCost
+    }
+
+    /**
+     * ルールを破った罰で閉まっている。
+     * 押し切る手立ては無い。あるのは残り時間だけ。
+     */
+    data class Locked(
+        override val key: String,
+        val processName: String,
+        val label: String,
+        val reason: String,
+        val untilEpochSec: Long,
     ) : Presentation
 
     data class Warn(override val key: String, val message: String) : Presentation
@@ -105,6 +129,39 @@ object DesktopRuntime {
     /** 警告を最後に出した時刻。ルールIDごと。 */
     private val warnShownAt = HashMap<Long, Long>()
 
+    /**
+     * 警告を出したあと「無視した」とみなす時刻。ルールIDごと。
+     *
+     * 警告には押し切りボタンが無いので、居座り続けること自体が押し切りにあたる。
+     * ここが無いと、いちばん弱い措置だけ罰の外に置かれることになる。
+     */
+    private val ignoreDeadline = HashMap<Long, Long>()
+
+    /**
+     * 警告を無視した罰を科し終えた組み合わせ。そのアプリを離れたら消える。
+     *
+     * 警告は成立しているあいだ繰り返し出るので、出るたびに罰していると
+     * 1時間ほどで残高が下限に張り付き、そこから何をしても押し切れなくなる。
+     * 「無視して使い続けた」は**その一続きにつき1回**と数える。
+     */
+    private val punishedWarnIgnores = HashSet<String>()
+
+    /**
+     * 宣言超過の罰を科し終えた組み合わせ。
+     *
+     * 超過中は毎秒ここを通るので、印を付けないと罰が積み上がる。
+     */
+    private val punishedOverruns = HashSet<String>()
+
+    private val _lockouts = MutableStateFlow<List<Lockout>>(emptyList())
+    val lockouts: StateFlow<List<Lockout>> = _lockouts.asStateFlow()
+
+    private val _points = MutableStateFlow<List<PointEvent>>(emptyList())
+    val points: StateFlow<List<PointEvent>> = _points.asStateFlow()
+
+    private val _balance = MutableStateFlow(0)
+    val balance: StateFlow<Int> = _balance.asStateFlow()
+
     private val ownPid: Long = ProcessHandle.current().pid()
 
     fun start() {
@@ -113,10 +170,16 @@ object DesktopRuntime {
         _ruleFile.value = Stores.rules.load()
         ledger.restore(Stores.usage.load())
         declarations.restore(Stores.declarations.load())
+        // 罰と残高も戻す。再起動で罰が消えるなら罰にならない
+        _lockouts.value = Lockouts.prune(Stores.lockouts.load(), nowSec())
+        _points.value = Stores.points.load()
+        _balance.value = _points.value.sumOf { it.delta }
 
         scope.launch { watchLoop() }
         scope.launch { persistLoop() }
     }
+
+    private fun nowSec(): Long = System.currentTimeMillis() / 1000
 
     // ------------------------------------------------------------------
 
@@ -146,6 +209,11 @@ object DesktopRuntime {
 
     fun removeRule(id: Long) = updateRules { it.copy(rules = it.rules.filter { r -> r.id != id }) }
 
+    /** ルールを1つ差し替える。条件・罰の編集から使う。 */
+    fun updateRule(rule: Rule) = updateRules { file ->
+        file.copy(rules = file.rules.map { if (it.id == rule.id) rule else it })
+    }
+
     fun setRuleEnabled(id: Long, enabled: Boolean) = updateRules { file ->
         file.copy(rules = file.rules.map { if (it.id == id) it.copy(enabled = enabled) else it })
     }
@@ -159,6 +227,7 @@ object DesktopRuntime {
     /** ブロック画面の「わかった、やめる」。押さえていたアプリを引っ込める。 */
     fun dismissBlock() {
         val held = heldApp
+        if (_presentation.value is Presentation.Block) heldRule?.let { reward(it) }
         _presentation.value = null
         releaseHold()
         if (held != null) {
@@ -188,10 +257,112 @@ object DesktopRuntime {
     /** ブロック画面の「それでも使う」。 */
     fun overrideBlock() {
         val held = heldApp ?: return
+        val block = _presentation.value as? Presentation.Block
+        if (block != null && !block.canAfford) return
+
+        // 罰を先に科してから猶予を置く。順番が逆だと、
+        // 罰で閉まる前に猶予が効いて素通りになる
+        heldRule?.let { punish(held.processName, it, PointReason.OVERRIDE) }
         overrideUntil[held.processName] =
             System.currentTimeMillis() + _settings.value.overrideGraceMinutes * 60_000L
         _presentation.value = null
         releaseHold()
+    }
+
+    // ------------------------------------------------------------------
+    // 破った / 守ったときに起きること
+
+    /** ブロックを出したときのルール。押し切り・引き返しの相手を覚えておく。 */
+    @Volatile
+    private var heldRule: Rule? = null
+
+    /**
+     * ルールを破った。罰を科し、ポイントを引く。
+     *
+     * 封鎖は罰を科した時点の範囲で固定する。あとからルールを書き換えても
+     * 罰の重さが変わらないようにするため。
+     */
+    private fun punish(processName: String, rule: Rule, reason: PointReason) {
+        val consequence = rule.consequence
+        val policy = _settings.value.pointPolicy
+
+        consequence.resolveTarget(processName, rule.target)?.let { target ->
+            val minutes = consequence.lockMinutes.coerceAtMost(Consequence.MAX_LOCK_MINUTES)
+            val now = nowSec()
+            _lockouts.value = _lockouts.value + Lockout(
+                target = target,
+                untilEpochSec = now + minutes * 60L,
+                reason = rule.name,
+                createdAtEpochSec = now,
+            )
+            Stores.lockouts.save(_lockouts.value)
+        }
+
+        if (policy.enabled) {
+            addPoints(policy.breakDelta(consequence.breakPoints), reason, rule.name)
+        }
+    }
+
+    /** ブロック画面から引き返した。 */
+    private fun reward(rule: Rule) {
+        val policy = _settings.value.pointPolicy
+        if (!policy.enabled) return
+        addPoints(policy.keepDelta(rule.consequence.keepPoints), PointReason.BACKED_OFF, rule.name)
+    }
+
+    /**
+     * ポイントを動かす。
+     *
+     * 下限に当たっているぶんは差し引く。際限なくマイナスに沈むと、
+     * そこから何をしても押し切れないまま「もうどうにでもなれ」に振り切ってしまう。
+     */
+    fun addPoints(delta: Int, reason: PointReason, note: String = "") {
+        if (delta == 0) return
+        val floor = _settings.value.pointPolicy.floor
+        val effective = if (delta < 0) {
+            val room = _balance.value - floor
+            if (room <= 0) return
+            maxOf(delta, -room)
+        } else {
+            delta
+        }
+        if (effective == 0) return
+
+        _points.value = (_points.value + PointEvent(
+            delta = effective,
+            reason = reason,
+            note = note,
+            atEpochSec = nowSec(),
+        )).takeLast(POINT_HISTORY_LIMIT)
+        _balance.value += effective
+        Stores.points.save(_points.value)
+    }
+
+    /**
+     * 解禁券を買う。買えたら true。
+     *
+     * 期限を持たせてあるので、買ったまま解除を忘れて縛りが死ぬことがない。
+     */
+    fun buyPass(): Boolean {
+        val policy = _settings.value.pointPolicy
+        if (!policy.enabled || !policy.passEnabled) return false
+        if (_balance.value < policy.passCost) return false
+
+        addPoints(-policy.passCost, PointReason.PASS_BOUGHT, "${policy.passMinutes}分")
+        updateSettings { it.copy(passUntilSec = nowSec() + policy.passMinutes * 60L) }
+        // 買った瞬間に効かせる。次の巡回まで塞がれたままでは券にならない
+        _presentation.value = null
+        releaseHold()
+        return true
+    }
+
+    /** 解禁券が効いているあいだの期限(秒)。効いていなければ 0。 */
+    fun passUntil(): Long = _settings.value.passUntilSec.takeIf { nowSec() < it } ?: 0L
+
+    /** 開発・確認用。罰を手で解く経路はここだけ。 */
+    fun clearLockouts() {
+        _lockouts.value = emptyList()
+        Stores.lockouts.save(emptyList())
     }
 
     fun declare(processName: String, minutes: Int, reason: String) {
@@ -211,6 +382,7 @@ object DesktopRuntime {
         val held = heldApp
         if (held != null && WindowControl.isSuspended(held.pid)) WindowControl.resume(held.pid)
         heldApp = null
+        heldRule = null
     }
 
     // ------------------------------------------------------------------
@@ -231,6 +403,9 @@ object DesktopRuntime {
 
             if (processName != lastProcess) {
                 ledger.onForegroundChanged(processName, nowSec)
+                // アプリを離れた = 一続きの終わり。無視の印を落として数え直す
+                punishedWarnIgnores.removeAll { it.endsWith("|$lastProcess") }
+                ignoreDeadline.clear()
                 lastProcess = processName
             } else {
                 ledger.tick(nowSec)
@@ -279,10 +454,43 @@ object DesktopRuntime {
         }
 
         val now = System.currentTimeMillis()
+        val nowSec = now / 1000
+
+        // 期限切れの罰を落とす。時間が過ぎれば誰の手も借りずに解ける
+        val live = Lockouts.prune(_lockouts.value, nowSec)
+        if (live.size != _lockouts.value.size) {
+            _lockouts.value = live
+            Stores.lockouts.save(live)
+        }
+
+        val file = _ruleFile.value
+
+        // 罰で閉まっているかは、押し切りの猶予より先に見る。
+        // 押し切りの罰が猶予に隠れてしまうと、罰が一度も効かない
+        val locked = Lockouts.activeFor(
+            all = live,
+            packageName = fg.processName,
+            tagsOfApp = file.tags[fg.processName] ?: emptySet(),
+            nowSec = nowSec,
+        )
+        if (locked != null) {
+            showLocked(fg, locked)
+            return
+        }
+
+        // 解禁券を使っているあいだはルールが全部止まる。ただし罰は上で先に見ている
+        // ── ポイントで買えるのはルールの免除であって、科された罰の時間ではない
+        if (nowSec < _settings.value.passUntilSec) {
+            if (_presentation.value != null) {
+                _presentation.value = null
+                releaseHold()
+            }
+            return
+        }
+
         if (now < (overrideUntil[fg.processName] ?: 0L)) return
         if (now < (dismissedUntil[fg.processName] ?: 0L)) return
 
-        val file = _ruleFile.value
         val context = EvalContext(
             now = LocalDateTime.now(),
             packageName = fg.processName,
@@ -299,15 +507,55 @@ object DesktopRuntime {
             }
 
             is Decision.Act -> present(fg, decision)
+            is Decision.Locked -> Unit // 上で処理済み
         }
+
+        checkIgnoredWarnings(fg)
+    }
+
+    /**
+     * 警告を出したあと、まだ同じアプリに居座っていたら「破った」とみなす。
+     *
+     * 予約は前面が変わったところで消す。アプリを離れたのに、その後で
+     * 罰だけ降ってくるのは筋が通らない。
+     */
+    private fun checkIgnoredWarnings(fg: ForegroundApp) {
+        if (ignoreDeadline.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val file = _ruleFile.value
+
+        val due = ignoreDeadline.filterValues { it in 1..now }.keys.toList()
+        for (ruleId in due) {
+            ignoreDeadline.remove(ruleId)
+            val rule = file.rules.firstOrNull { it.id == ruleId } ?: continue
+            if (!rule.target.matches(fg.processName, file.tags[fg.processName] ?: emptySet())) continue
+            if (!punishedWarnIgnores.add("$ruleId|${fg.processName}")) continue
+            punish(fg.processName, rule, PointReason.WARN_IGNORED)
+        }
+    }
+
+    private fun showLocked(fg: ForegroundApp, lockout: Lockout) {
+        val key = "${fg.processName}|locked|${lockout.untilEpochSec}"
+        if (_presentation.value?.key == key) {
+            heldApp = fg
+            return
+        }
+        heldApp = fg
+        heldRule = null
+        _presentation.value = Presentation.Locked(
+            key = key,
+            processName = fg.processName,
+            label = fg.label,
+            reason = lockout.reason,
+            untilEpochSec = lockout.untilEpochSec,
+        )
     }
 
     private fun present(fg: ForegroundApp, act: Decision.Act) {
         when (act.action.id) {
             BlockAction.id -> showBlock(
                 fg = fg,
-                ruleId = act.rule.id,
-                ruleName = act.rule.name,
+                rule = act.rule,
                 reflection = act.params.string(BlockAction.KEY_REFLECTION),
                 minSeconds = act.params.int(BlockAction.KEY_MIN_SECONDS, 15),
                 allowOverride = act.params.bool(BlockAction.KEY_ALLOW_OVERRIDE, true),
@@ -318,6 +566,11 @@ object DesktopRuntime {
                 val now = System.currentTimeMillis()
                 if (now - (warnShownAt[act.rule.id] ?: 0L) < repeatMs) return
                 warnShownAt[act.rule.id] = now
+
+                val ignoreMinutes = act.params.int(WarnAction.KEY_IGNORE_MINUTES, 5)
+                if (ignoreMinutes > 0) {
+                    ignoreDeadline[act.rule.id] = now + ignoreMinutes * 60_000L
+                }
 
                 val seconds = act.params.int(WarnAction.KEY_SECONDS, 5)
                 val message = act.params.string(WarnAction.KEY_MESSAGE)
@@ -334,6 +587,8 @@ object DesktopRuntime {
                 val remaining = declarations.remainingMinutes(fg.processName)
                 when {
                     remaining == null -> {
+                        // 宣言が切れた = 次の回。超過の印を落として数え直す
+                        punishedOverruns.remove("${fg.processName}|${act.rule.id}")
                         val key = "${fg.processName}|declare|${act.rule.id}"
                         if (_presentation.value?.key == key) return
                         _presentation.value = Presentation.Declare(
@@ -347,15 +602,20 @@ object DesktopRuntime {
                         heldApp = fg
                     }
 
-                    remaining <= 0 -> showBlock(
-                        fg = fg,
-                        ruleId = act.rule.id,
-                        ruleName = act.rule.name,
-                        reflection = act.params.string(DeclareAction.KEY_REFLECTION)
-                            .ifBlank { "宣言した時間は終わり。" },
-                        minSeconds = 15,
-                        allowOverride = true,
-                    )
+                    // 押し切りを待たずにここで罰する。超えた時点がすでに違反なので
+                    remaining <= 0 -> {
+                        if (punishedOverruns.add("${fg.processName}|${act.rule.id}")) {
+                            punish(fg.processName, act.rule, PointReason.DECLARE_OVERRUN)
+                        }
+                        showBlock(
+                            fg = fg,
+                            rule = act.rule,
+                            reflection = act.params.string(DeclareAction.KEY_REFLECTION)
+                                .ifBlank { "宣言した時間は終わり。" },
+                            minSeconds = 15,
+                            allowOverride = true,
+                        )
+                    }
 
                     else -> if (_presentation.value != null) {
                         _presentation.value = null
@@ -368,15 +628,20 @@ object DesktopRuntime {
 
     private fun showBlock(
         fg: ForegroundApp,
-        ruleId: Long,
-        ruleName: String,
+        rule: Rule,
         reflection: String,
         minSeconds: Int,
         allowOverride: Boolean,
     ) {
-        val key = "${fg.processName}|block|$ruleId|${if (allowOverride) "o" else "x"}"
+        val policy = _settings.value.pointPolicy
+        val cost = policy.overrideCost(rule.consequence.breakPoints)
+        val balance = _balance.value
+
+        // 値段と残高もキーに含める。残高が変われば表示を合わせ直す必要がある
+        val key = "${fg.processName}|block|${rule.id}|${if (allowOverride) "o" else "x"}|$cost|$balance"
         if (_presentation.value?.key == key) {
             heldApp = fg
+            heldRule = rule
             return
         }
         if (isThrashing()) {
@@ -386,14 +651,22 @@ object DesktopRuntime {
             return
         }
         heldApp = fg
+        heldRule = rule
         _presentation.value = Presentation.Block(
             key = key,
             processName = fg.processName,
             label = fg.label,
-            ruleName = ruleName,
+            ruleName = rule.name,
             reflection = reflection,
             minSeconds = minSeconds,
             allowOverride = allowOverride,
+            overrideCost = cost,
+            balance = balance,
+            penaltyNote = if (rule.consequence.locksNothing) {
+                ""
+            } else {
+                "押し切ると${rule.consequence.lockScope.label}が${rule.consequence.lockMinutes}分閉まります"
+            },
         )
     }
 
@@ -405,7 +678,10 @@ object DesktopRuntime {
      */
     private fun enforce() {
         val held = heldApp ?: return
-        if (_presentation.value !is Presentation.Block) return
+        val showing = _presentation.value
+        // 罰で閉まっているときも同じ強さで押さえる。
+        // オーバーレイだけだと Alt+Tab で裏から触れてしまい、罰にならない
+        if (showing !is Presentation.Block && showing !is Presentation.Locked) return
 
         when (_settings.value.blockStrength) {
             BlockStrength.OVERLAY -> Unit
@@ -433,6 +709,9 @@ object DesktopRuntime {
 
     /** 前面を見に行く間隔。API 呼び出し数回ぶんなので、負荷は誤差。 */
     private const val POLL_MS = 1_000L
+
+    /** ポイント履歴の保持件数。増減の理由を辿れれば足りるので、際限なくは持たない。 */
+    private const val POINT_HISTORY_LIMIT = 500
 
     /** 「やめる」を押したあと、そのアプリを見逃す時間。離れる隙を作るため。 */
     private const val DISMISS_GRACE_MS = 6_000L

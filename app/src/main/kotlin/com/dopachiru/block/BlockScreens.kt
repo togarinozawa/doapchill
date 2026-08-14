@@ -50,6 +50,11 @@ import kotlin.math.roundToInt
  *
  * 代わりに [onAbortStudy] があるときは「予定を中断する」を出す。押し切りと違い、
  * 中断した予定は連携アプリ側で後の空き時間に再配置される ── 逃げても総量は減らない。
+ *
+ * [overrideCost] が 0 より大きいと、押し切りにポイントが要る。[balance] が足りなければ
+ * ボタンは出るが押せない ── 消してしまうと「なぜ押せないのか」が分からなくなる。
+ * [penaltyNote] には、押し切ったあとに何が閉まるかを先に書いておく。
+ * 払う額と閉まる範囲を押す前に見せるのが肝で、後出しの罰は理不尽なだけで効かない。
  */
 @Composable
 fun BlockScreen(
@@ -58,10 +63,14 @@ fun BlockScreen(
     reflection: String,
     minSeconds: Int,
     allowOverride: Boolean = true,
+    overrideCost: Int = 0,
+    balance: Int = 0,
+    penaltyNote: String = "",
     onAbortStudy: (() -> Unit)? = null,
     onDismiss: () -> Unit,
     onOverride: () -> Unit,
 ) = DopaBlockTheme {
+    val canAfford = overrideCost <= 0 || balance >= overrideCost
     var remaining by remember { mutableIntStateOf(minSeconds) }
     var confirmingAbort by remember { mutableStateOf(false) }
 
@@ -133,12 +142,36 @@ fun BlockScreen(
                 }
                 Spacer(Modifier.height(12.dp))
                 when {
-                    allowOverride -> TextButton(onClick = onOverride) {
-                        Text(
-                            "それでも使う(連続記録が途切れます)",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                    allowOverride -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        TextButton(onClick = onOverride, enabled = canAfford) {
+                            Text(
+                                when {
+                                    overrideCost > 0 -> "それでも使う(${overrideCost}ポイント)"
+                                    else -> "それでも使う(連続記録が途切れます)"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        val note = when {
+                            !canAfford -> "残り ${balance}ポイント。足りないので押し切れません"
+                            overrideCost > 0 && penaltyNote.isNotBlank() ->
+                                "残り ${balance}ポイント / $penaltyNote"
+                            overrideCost > 0 -> "残り ${balance}ポイント"
+                            else -> penaltyNote
+                        }
+                        if (note.isNotBlank()) {
+                            Text(
+                                note,
+                                style = MaterialTheme.typography.labelSmall,
+                                textAlign = TextAlign.Center,
+                                color = if (canAfford) {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                } else {
+                                    MaterialTheme.colorScheme.error
+                                },
+                            )
+                        }
                     }
 
                     onAbortStudy != null && confirmingAbort -> Column(
@@ -182,6 +215,102 @@ fun BlockScreen(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * 罰で閉まっているときの画面。
+ *
+ * ブロック画面と違い、押し切る手段が無い。あるのは「あと何分か」だけ。
+ * 自分で選んだ罰なので、時間が過ぎるのを待つ以外に道は無い ──
+ * けれど**必ず過ぎる**。ホームには戻れるし、ドパチルの設定も開ける。
+ * 残り時間を隠さないのは、見えない拘束がいちばん人を追い詰めるため。
+ */
+@Composable
+fun LockoutScreen(
+    appLabel: String,
+    reason: String,
+    untilEpochSec: Long,
+    onGoHome: () -> Unit,
+) = DopaBlockTheme {
+    var remainingSec by remember(untilEpochSec) {
+        mutableIntStateOf((untilEpochSec - System.currentTimeMillis() / 1000).coerceAtLeast(0).toInt())
+    }
+
+    LaunchedEffect(untilEpochSec) {
+        while (remainingSec > 0) {
+            delay(1000)
+            remainingSec = (untilEpochSec - System.currentTimeMillis() / 1000)
+                .coerceAtLeast(0)
+                .toInt()
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF120B0B)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .safeDrawingPadding()
+                .padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = appLabel,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(24.dp))
+            Text(
+                text = "お預け中",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.error,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = if (reason.isBlank()) "ルールを破った罰" else "「$reason」を破った罰",
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(48.dp))
+
+            val minutes = remainingSec / 60
+            val seconds = remainingSec % 60
+            Text(
+                text = if (minutes > 0) "$minutes" else "$seconds",
+                fontSize = 64.sp,
+                fontWeight = FontWeight.Light,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Text(
+                text = if (minutes > 0) "分ほど残っています" else "秒",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(48.dp))
+
+            Button(
+                onClick = onGoHome,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Text("ホームに戻る", modifier = Modifier.padding(vertical = 6.dp))
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "押し切る手段はありません。時間が過ぎれば自動で開きます。",
+                style = MaterialTheme.typography.labelSmall,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

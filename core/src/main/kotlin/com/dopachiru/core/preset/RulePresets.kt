@@ -12,6 +12,8 @@ import com.dopachiru.core.condition.types.StudySessionCondition
 import com.dopachiru.core.condition.types.TimeRangeCondition
 import com.dopachiru.core.condition.types.TotalUsageCondition
 import com.dopachiru.core.model.ConditionNode
+import com.dopachiru.core.model.Consequence
+import com.dopachiru.core.model.LockScope
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.model.Target
 import com.dopachiru.core.param.Params
@@ -128,6 +130,59 @@ object RulePresets {
                     WarnAction.KEY_MESSAGE to "15分経った。まだ続ける?",
                     WarnAction.KEY_SECONDS to 6,
                     WarnAction.KEY_REPEAT_MINUTES to 5,
+                ),
+            )
+        },
+
+        RulePreset(
+            id = "either_limit",
+            name = "連続15分 または 合計1時間",
+            description = "どちらか一方でも超えたら封印する。条件を「かつ」ではなく「または」で繋いだ例。",
+        ) { packages ->
+            Rule(
+                name = "連続15分 または 合計1時間",
+                target = Target(packages = packages),
+                condition = ConditionNode.AnyOf(
+                    listOf(
+                        leaf(ContinuousUsageCondition.id, ContinuousUsageCondition.KEY_MINUTES to 15),
+                        leaf(
+                            TotalUsageCondition.id,
+                            TotalUsageCondition.KEY_MINUTES to 60,
+                            TotalUsageCondition.KEY_PERIOD to ResetPolicy(24 * 60, 4 * 60),
+                        ),
+                    )
+                ),
+                actionId = BlockAction.id,
+                actionParams = Params.of(
+                    BlockAction.KEY_REFLECTION to "どちらかの線を越えた。",
+                    BlockAction.KEY_MIN_SECONDS to 15,
+                ),
+            )
+        },
+
+        RulePreset(
+            id = "night_penalty",
+            name = "夜に押し切ったらお預け",
+            description = "22:00〜06:00 は封印。押し切ったら、そのアプリが30分ぶん開かなくなる。",
+        ) { packages ->
+            rule(
+                name = "夜に押し切ったらお預け",
+                packages = packages,
+                conditions = listOf(
+                    leaf(
+                        TimeRangeCondition.id,
+                        TimeRangeCondition.KEY_START to 22 * 60,
+                        TimeRangeCondition.KEY_END to 6 * 60,
+                    ),
+                ),
+                actionId = BlockAction.id,
+                actionParams = Params.of(
+                    BlockAction.KEY_REFLECTION to "押し切れば、そのぶん後で閉まる。",
+                    BlockAction.KEY_MIN_SECONDS to 20,
+                ),
+                consequence = Consequence(
+                    lockScope = LockScope.APP,
+                    lockMinutes = 30,
                 ),
             )
         },
@@ -261,11 +316,13 @@ object RulePresets {
         conditions: List<ConditionNode.Leaf>,
         actionId: String,
         actionParams: Params,
+        consequence: Consequence = Consequence.NONE,
     ): Rule = Rule(
         name = name,
         target = Target(packages = packages),
         condition = ConditionNode.AllOf(conditions),
         actionId = actionId,
         actionParams = actionParams,
+        consequence = consequence,
     )
 }

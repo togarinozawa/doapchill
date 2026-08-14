@@ -6,10 +6,12 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.dopachiru.core.DopaCore
 import com.dopachiru.core.gate.Gate
+import com.dopachiru.core.points.PointPolicy
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -41,6 +43,8 @@ class SettingsStore(private val context: Context) {
         val selfDefense = booleanPreferencesKey("self_defense")
         val batterySaver = booleanPreferencesKey("battery_saver")
         val studyPrepMinutes = intPreferencesKey("study_prep_minutes")
+        val pointPolicyJson = stringPreferencesKey("point_policy_json")
+        val passUntilEpochSec = longPreferencesKey("pass_until_epoch_sec")
     }
 
     val setupDone: Flow<Boolean> = context.dataStore.data.map { it[Keys.setupDone] ?: false }
@@ -98,6 +102,36 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setStudyPrepMinutes(minutes: Int) {
         context.dataStore.edit { it[Keys.studyPrepMinutes] = minutes.coerceIn(0, 180) }
+    }
+
+    /**
+     * ポイントの使い道と相場。
+     *
+     * 丸ごと JSON で持つ。項目を増やすたびにキーを足していくと、
+     * 設定画面と保存先の両方に手を入れることになるため。
+     */
+    val pointPolicy: Flow<PointPolicy> = context.dataStore.data.map { prefs ->
+        val raw = prefs[Keys.pointPolicyJson] ?: return@map PointPolicy.DEFAULT
+        runCatching { DopaCore.json.decodeFromString(PointPolicy.serializer(), raw) }
+            .getOrDefault(PointPolicy.DEFAULT)
+    }
+
+    suspend fun setPointPolicy(policy: PointPolicy) {
+        val encoded = DopaCore.json.encodeToString(PointPolicy.serializer(), policy)
+        context.dataStore.edit { it[Keys.pointPolicyJson] = encoded }
+    }
+
+    /**
+     * 解禁券で制限が止まっている期限。
+     *
+     * ポイントで買った「全部止まる時間」。過ぎれば勝手に戻るので、
+     * 買ったまま解除を忘れて縛りが死ぬことがない。
+     */
+    val passUntilEpochSec: Flow<Long> =
+        context.dataStore.data.map { it[Keys.passUntilEpochSec] ?: 0L }
+
+    suspend fun setPassUntil(epochSec: Long) {
+        context.dataStore.edit { it[Keys.passUntilEpochSec] = epochSec }
     }
 
     suspend fun setSetupDone(done: Boolean) {

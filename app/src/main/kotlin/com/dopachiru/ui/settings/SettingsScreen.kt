@@ -57,8 +57,10 @@ import com.dopachiru.data.CalendarReader
 import com.dopachiru.data.SettingsStore
 import com.dopachiru.runtime.DopaRuntime
 import com.dopachiru.service.DopaAccessibilityService
+import com.dopachiru.core.points.PointPolicy
 import com.dopachiru.ui.common.HourMinutePicker
 import com.dopachiru.ui.rules.DayOfWeekPicker
+import com.dopachiru.ui.rules.NumberStepper
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -99,6 +101,13 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setStudyPrepMinutes(minutes: Int) {
         viewModelScope.launch { DopaRuntime.settings.setStudyPrepMinutes(minutes) }
+    }
+
+    val pointPolicy: StateFlow<PointPolicy> = DopaRuntime.settings.pointPolicy
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PointPolicy.DEFAULT)
+
+    fun setPointPolicy(policy: PointPolicy) {
+        viewModelScope.launch { DopaRuntime.settings.setPointPolicy(policy) }
     }
 
     /** 有効化と、設定済みゲートの差し替えを兼ねる(キーが同じものを置き換える)。 */
@@ -153,6 +162,7 @@ fun SettingsScreen(
     val selfDefense by viewModel.selfDefense.collectAsState()
     val batterySaver by viewModel.batterySaver.collectAsState()
     val prepMinutes by viewModel.studyPrepMinutes.collectAsState()
+    val pointPolicy by viewModel.pointPolicy.collectAsState()
     var showDevDialog by remember { mutableStateOf(false) }
 
     // 設定アプリから戻ってきたら権限の状態を見直す
@@ -415,6 +425,14 @@ fun SettingsScreen(
         }
 
         item {
+            SectionTitle("ポイント")
+            PointPolicyCard(
+                policy = pointPolicy,
+                onChange = viewModel::setPointPolicy,
+            )
+        }
+
+        item {
             SectionTitle("電池")
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
@@ -568,6 +586,124 @@ private fun DevCodeDialog(onUnlock: () -> Unit, onDismiss: () -> Unit) {
 }
 
 private const val DEV_CODE = "どぱちる"
+
+/**
+ * ポイントの使い道と相場。
+ *
+ * 使い道を2つとも切ると「増減を数えるだけ」になる。切っても加点・減点は
+ * 記録し続けるので、あとから使い道を入れたときに残高がゼロから始まらない。
+ */
+@Composable
+private fun PointPolicyCard(policy: PointPolicy, onChange: (PointPolicy) -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            SwitchRow("ポイントを使う", policy.enabled) { onChange(policy.copy(enabled = it)) }
+            Text(
+                "ルールを守ると貯まり、破ると減ります。切っても記録は残ります。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            if (!policy.enabled) return@Column
+
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+            Text("使い道", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (policy.recordOnly) {
+                    "どちらも切ってあるので、いまは増減を数えるだけです。"
+                } else {
+                    "貯めたポイントで、逃げ道を買えるようにします。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(12.dp))
+            SwitchRow("押し切りに代金をとる", policy.chargeOverride) {
+                onChange(policy.copy(chargeOverride = it))
+            }
+            Text(
+                "ブロックを押し切るのにポイントが要ります。足りなければ押し切れません。" +
+                    "値段はルールごとの「破ったときのポイント」です。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(12.dp))
+            SwitchRow("解禁券を買えるようにする", policy.passEnabled) {
+                onChange(policy.copy(passEnabled = it))
+            }
+            Text(
+                "記録の画面から買えます。買うと、その時間だけ制限が全部止まります。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (policy.passEnabled) {
+                Spacer(Modifier.height(8.dp))
+                PolicyNumber("解禁券の値段", policy.passCost, 1, 500, "pt") {
+                    onChange(policy.copy(passCost = it))
+                }
+                PolicyNumber("解禁券1枚で止まる時間", policy.passMinutes, 5, 180, "分") {
+                    onChange(policy.copy(passMinutes = it))
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+            Text("相場", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "ルール側で「設定どおり」にしてあるぶんに効きます。個別に変えたルールはそのままです。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            PolicyNumber("破ったとき", policy.defaultBreakPoints, -200, 0, "pt") {
+                onChange(policy.copy(defaultBreakPoints = it))
+            }
+            PolicyNumber("引き返したとき", policy.defaultKeepPoints, 0, 50, "pt") {
+                onChange(policy.copy(defaultKeepPoints = it))
+            }
+            PolicyNumber("違反ゼロで一日終えた", policy.cleanDayPoints, 0, 200, "pt") {
+                onChange(policy.copy(cleanDayPoints = it))
+            }
+            PolicyNumber("学習予定を完走した", policy.studyDonePoints, 0, 200, "pt") {
+                onChange(policy.copy(studyDonePoints = it))
+            }
+            PolicyNumber("これ以上は減らない下限", policy.floor, -1000, 0, "pt") {
+                onChange(policy.copy(floor = it))
+            }
+            Text(
+                "下限があるのは、際限なく沈むと「もうどうにでもなれ」に振り切ってしまうからです。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PolicyNumber(
+    label: String,
+    value: Int,
+    min: Int,
+    max: Int,
+    suffix: String,
+    onChange: (Int) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        NumberStepper(value = value, min = min, max = max, suffix = suffix, onChange = onChange)
+    }
+}
 
 @Composable
 private fun SectionTitle(text: String) {

@@ -40,9 +40,8 @@ data class Target(
 /**
  * 条件の木。AND / OR / NOT で入れ子にできる。
  *
- * ver.1 の設定画面は「複数条件の AND」までしか組ませないが、データ構造としては
- * 最初から入れ子を持てるようにしてある。将来アプリ内に条件エディタを載せたとき、
- * 保存済みのルールをそのまま読み書きできる。
+ * 木を組み替える道具は [ConditionTree] にある。設定画面はそちら越しに触るので、
+ * この型そのものは不変のままでよい。
  */
 @Serializable
 sealed interface ConditionNode {
@@ -67,7 +66,7 @@ sealed interface ConditionNode {
 }
 
 /**
- * ルール = 対象 × 条件 × アクション。
+ * ルール = 対象 × 条件 × アクション × 破ったときの報い。
  */
 @Serializable
 data class Rule(
@@ -88,4 +87,12 @@ data class Rule(
     val condition: ConditionNode,
     val actionId: String,
     val actionParams: Params = Params.EMPTY,
+
+    /**
+     * このルールを破った / 守ったときに起きること。
+     *
+     * 既定は「封鎖はしない・ポイントは設定の既定値」。この機能より前に作った
+     * ルールもここに落ちるので、黙って封鎖が始まることはない。
+     */
+    val consequence: Consequence = Consequence.NONE,
 )

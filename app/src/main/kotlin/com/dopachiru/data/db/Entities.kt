@@ -29,6 +29,13 @@ data class RuleEntity(
     val conditionJson: String,
     val actionId: String,
     val actionParamsJson: String,
+    /**
+     * core の Consequence を JSON にしたもの。破った / 守ったときに起きること。
+     *
+     * 空文字なら「指定なし」。この機能より前に作った行がそのまま入るので、
+     * 読むときは Consequence.NONE に落とす。
+     */
+    @ColumnInfo(defaultValue = "''") val consequenceJson: String = "",
     val createdAt: Long,
     val updatedAt: Long,
 )
@@ -130,6 +137,48 @@ data class StudyWindowEntity(
     val goalId: String = "",
     val kind: String = "",
     val receivedAtEpochSec: Long,
+)
+
+/**
+ * ルールを破った罰として閉まっている封鎖。
+ *
+ * DB に置くのは、再起動で罰が消えては罰にならないため。逆に、時刻さえ過ぎれば
+ * 誰の手も借りずに解けるので、こちらの不具合で閉じ込め続けることもない。
+ */
+@Entity(tableName = "lockouts", indices = [Index("untilEpochSec")])
+data class LockoutEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    /** core の Target を JSON にしたもの。科した時点の範囲で固定する。 */
+    val targetJson: String,
+    val untilEpochSec: Long,
+    val reason: String,
+    val createdAtEpochSec: Long,
+)
+
+/**
+ * ポイントが動いた1件。残高はこの合計。
+ *
+ * 残高そのものを持たず出来事を並べるのは、「なぜ減ったのか」を後から辿れるようにするため。
+ * 身に覚えのない減り方をしたときに履歴が無いと、仕組みごと信用できなくなる。
+ */
+@Entity(
+    tableName = "point_events",
+    indices = [
+        Index("atEpochSec"),
+        // 二重加点よけ。SQLite は NULL を重複とみなさないので、
+        // 鍵の要らない出来事は NULL のまま何件でも入る
+        Index(value = ["dedupKey"], unique = true),
+    ],
+)
+data class PointEventEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val delta: Int,
+    /** core の PointReason の名前。 */
+    val reason: String,
+    val note: String = "",
+    val atEpochSec: Long,
+    /** 一度きりにしたい出来事の鍵。例: `study:<予定ID>`、`cleanday:<日>`。 */
+    val dedupKey: String? = null,
 )
 
 /** 1日ぶんの集計。連続達成日数と育成要素の土台。 */

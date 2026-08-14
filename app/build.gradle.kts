@@ -16,8 +16,8 @@ android {
         applicationId = "com.dopachiru"
         minSdk = 31
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.5.1"
+        versionCode = 8
+        versionName = "0.6.0"
     }
 
     signingConfigs {

@@ -40,9 +40,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dopachiru.core.action.ActionRegistry
-import com.dopachiru.core.condition.ConditionRegistry
 import com.dopachiru.core.gate.ChangeKind
-import com.dopachiru.core.model.ConditionNode
+import com.dopachiru.core.model.ConditionTree
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.preset.RulePreset
 import com.dopachiru.core.preset.RulePresets
@@ -287,27 +286,20 @@ private fun describeTarget(context: android.content.Context, rule: Rule): String
     }
 }
 
-/** 条件とアクションを1行に畳む。 */
+/**
+ * 条件・アクション・罰を1行に畳む。
+ *
+ * 入れ子や OR も [ConditionTree.describe] が括弧付きで畳んでくれるので、
+ * 一覧を見ただけで中身の見当がつく。
+ */
 fun describeRule(rule: Rule): String {
-    val conditions = flattenLeaves(rule.condition).mapNotNull { leaf ->
-        ConditionRegistry[leaf.typeId]?.summarize(leaf.params)
-    }
+    val condition = ConditionTree.describe(rule.condition)
     val action = ActionRegistry[rule.actionId]?.summarize(rule.actionParams) ?: rule.actionId
-    val head = if (conditions.isEmpty()) "常に" else conditions.joinToString(" かつ ")
-    return "$head → $action"
-}
-
-/** 単純な AND の木を葉のリストに畳む。入れ子や OR が混じっていたら空を返す。 */
-fun flattenLeaves(node: ConditionNode): List<ConditionNode.Leaf> = when {
-    node is ConditionNode.Leaf -> listOf(node)
-    node is ConditionNode.AllOf && node.children.all { it is ConditionNode.Leaf } ->
-        node.children.filterIsInstance<ConditionNode.Leaf>()
-    else -> emptyList()
-}
-
-/** 単純な AND の木か。ver.1 の編集画面で扱える形かどうかの判定。 */
-fun isSimpleTree(node: ConditionNode): Boolean = when (node) {
-    is ConditionNode.Leaf -> true
-    is ConditionNode.AllOf -> node.children.all { it is ConditionNode.Leaf }
-    else -> false
+    val head = if (ConditionTree.leafCount(rule.condition) == 0) "常に" else condition
+    val consequence = if (rule.consequence.locksNothing) {
+        ""
+    } else {
+        " / 破ったら${rule.consequence.lockScope.label}を${rule.consequence.lockMinutes}分"
+    }
+    return "$head → $action$consequence"
 }

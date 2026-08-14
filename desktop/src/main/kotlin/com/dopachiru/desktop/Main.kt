@@ -30,6 +30,7 @@ import com.dopachiru.desktop.ui.BlockScreen
 import com.dopachiru.desktop.ui.DeclareScreen
 import com.dopachiru.desktop.ui.DesktopApp
 import com.dopachiru.desktop.ui.ESCAPE_HOLD_SECONDS
+import com.dopachiru.desktop.ui.LockedScreen
 import com.dopachiru.desktop.ui.WarnScreen
 import kotlinx.coroutines.delay
 
@@ -114,6 +115,42 @@ fun main() = application {
                     escapeHoldSeconds = escSeconds,
                     onDismiss = { DesktopRuntime.dismissBlock() },
                     onOverride = { DesktopRuntime.overrideBlock() },
+                )
+            }
+        }
+
+        is Presentation.Locked -> {
+            var escHeld by remember(current.key) { mutableStateOf(false) }
+            var escSeconds by remember(current.key) { mutableIntStateOf(0) }
+
+            // 罰の最中でも逃げ道は残す。罰は自分で選んだものだが、
+            // こちらの不具合で閉じられなくなる可能性はブロック画面と変わらない
+            LaunchedEffect(escHeld, current.key) {
+                if (!escHeld) {
+                    escSeconds = 0
+                    return@LaunchedEffect
+                }
+                while (escSeconds < ESCAPE_HOLD_SECONDS) {
+                    delay(1000)
+                    escSeconds += 1
+                }
+                DesktopRuntime.emergencyPause()
+            }
+
+            OverlayWindow(
+                onKeyEvent = { event ->
+                    if (event.key == Key.Escape) {
+                        escHeld = event.type == KeyEventType.KeyDown
+                        true
+                    } else {
+                        false
+                    }
+                }
+            ) {
+                LockedScreen(
+                    locked = current,
+                    escapeHoldSeconds = escSeconds,
+                    onMinimize = { DesktopRuntime.dismissBlock() },
                 )
             }
         }

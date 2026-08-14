@@ -2,6 +2,7 @@ package com.dopachiru.data
 
 import com.dopachiru.core.DopaCore
 import com.dopachiru.core.model.ConditionNode
+import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.model.Target
 import com.dopachiru.core.param.Params
@@ -90,6 +91,13 @@ fun RuleEntity.toRule(): Rule = Rule(
         .getOrDefault(ConditionNode.AllOf()),
     actionId = actionId,
     actionParams = Params.decode(actionParamsJson),
+    // 空文字は「この機能より前に作った行」。罰なしに落とす
+    consequence = consequenceJson.takeIf { it.isNotBlank() }
+        ?.let {
+            runCatching { DopaCore.json.decodeFromString(Consequence.serializer(), it) }
+                .getOrDefault(Consequence.NONE)
+        }
+        ?: Consequence.NONE,
 )
 
 fun Rule.toEntity(createdAt: Long, updatedAt: Long): RuleEntity = RuleEntity(
@@ -101,6 +109,11 @@ fun Rule.toEntity(createdAt: Long, updatedAt: Long): RuleEntity = RuleEntity(
     conditionJson = DopaCore.encodeCondition(condition),
     actionId = actionId,
     actionParamsJson = actionParams.encode(),
+    consequenceJson = if (consequence == Consequence.NONE) {
+        ""
+    } else {
+        DopaCore.json.encodeToString(Consequence.serializer(), consequence)
+    },
     createdAt = createdAt,
     updatedAt = updatedAt,
 )

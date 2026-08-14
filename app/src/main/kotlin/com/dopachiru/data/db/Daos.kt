@@ -149,6 +149,47 @@ interface StudyWindowDao {
 }
 
 @Dao
+interface LockoutDao {
+    @Query("SELECT * FROM lockouts WHERE untilEpochSec > :nowEpochSec ORDER BY untilEpochSec DESC")
+    fun observeActive(nowEpochSec: Long): Flow<List<LockoutEntity>>
+
+    @Query("SELECT * FROM lockouts WHERE untilEpochSec > :nowEpochSec")
+    suspend fun activeAt(nowEpochSec: Long): List<LockoutEntity>
+
+    @Insert
+    suspend fun insert(lockout: LockoutEntity): Long
+
+    @Query("DELETE FROM lockouts WHERE untilEpochSec <= :beforeEpochSec")
+    suspend fun purgeBefore(beforeEpochSec: Long)
+
+    /** 開発ツール専用。ふだんの動作からは呼ばない。 */
+    @Query("DELETE FROM lockouts")
+    suspend fun deleteAll()
+}
+
+@Dao
+interface PointEventDao {
+    @Query("SELECT * FROM point_events ORDER BY atEpochSec DESC LIMIT :limit")
+    fun observeRecent(limit: Int): Flow<List<PointEventEntity>>
+
+    @Query("SELECT COALESCE(SUM(delta), 0) FROM point_events")
+    fun observeBalance(): Flow<Int>
+
+    @Query("SELECT COALESCE(SUM(delta), 0) FROM point_events")
+    suspend fun balance(): Int
+
+    /**
+     * 鍵が重複したら黙って捨てる。
+     * 「その日はもう加点済み」を呼び出し側で数えなくて済ませるため。
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insert(event: PointEventEntity): Long
+
+    @Query("DELETE FROM point_events")
+    suspend fun deleteAll()
+}
+
+@Dao
 interface DayStatDao {
     @Query("SELECT * FROM day_stats ORDER BY epochDay DESC LIMIT :limit")
     fun observeRecent(limit: Int): Flow<List<DayStatEntity>>

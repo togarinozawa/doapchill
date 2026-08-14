@@ -93,7 +93,7 @@ private fun ParamField(
         }
 
         when (spec) {
-            is ParamSpec.IntParam -> Stepper(
+            is ParamSpec.IntParam -> NumberStepper(
                 value = params.int(spec.key, spec.default),
                 min = spec.min,
                 max = spec.max,
@@ -179,13 +179,14 @@ private fun HelpText(help: String) {
     )
 }
 
+/** 数値の増減。条件のパラメータからも、罰の設定からも使う。 */
 @Composable
-private fun Stepper(
+fun NumberStepper(
     value: Int,
     min: Int,
     max: Int,
-    step: Int,
-    suffix: String,
+    step: Int = 1,
+    suffix: String = "",
     onChange: (Int) -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {

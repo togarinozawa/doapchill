@@ -49,6 +49,19 @@ class StudyWindowRepository(
     var lastSyncAtMs: Long = 0L
         private set
 
+    /**
+     * 中断した予定の id。完走の加点から外すために覚えておく。
+     *
+     * [endNow] は窓を「いま終わった」形に縮めるので、記録の上では
+     * 自然に終わったものと見分けがつかなくなる。途中でやめたぶんまで
+     * 完走として加点しては、加点そのものが意味を失う。
+     */
+    private val abortedIds = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    /** 直前まで入っていた予定。[takeCompletedWindowId] だけが触る。 */
+    @Volatile
+    private var lastInSessionId: String? = null
+
     suspend fun warmUp() {
         val nowSec = System.currentTimeMillis() / 1000
         dao.purgeBefore(nowSec - RETENTION_SEC)
@@ -105,6 +118,7 @@ class StudyWindowRepository(
      */
     fun endNow(windowId: String, nowMs: Long = System.currentTimeMillis()) {
         val sec = nowMs / 1000
+        abortedIds += windowId
         windows = windows.mapNotNull { window ->
             when {
                 window.id != windowId -> window
@@ -158,6 +172,19 @@ class StudyWindowRepository(
                 return Instant.ofEpochSecond(earliest).atZone(zone).toLocalDateTime()
             }
         }
+    }
+
+    /**
+     * 入っていた予定が終わっていたら、その id を**1回だけ**返す。中断したものは返さない。
+     *
+     * 呼ぶたびに「直前の予定」を進めるので、呼び出し元は常駐サービスの定期処理1か所だけ。
+     */
+    fun takeCompletedWindowId(nowMs: Long = System.currentTimeMillis()): String? {
+        val currentId = if (inSession(nowMs)) state(nowMs).currentWindowId else null
+        val previous = lastInSessionId
+        lastInSessionId = currentId
+        if (previous == null || previous == currentId) return null
+        return previous.takeIf { it !in abortedIds }
     }
 
     /** 設定画面の表示用。これからの予定。 */

@@ -1,6 +1,9 @@
 package com.dopachiru.desktop.data
 
+import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Rule
+import com.dopachiru.core.points.PointEvent
+import com.dopachiru.core.points.PointPolicy
 import com.dopachiru.desktop.platform.BlockStrength
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -19,6 +22,17 @@ data class DesktopSettings(
 
     /** 押し切ったあと、何分そのアプリを見逃すか。 */
     val overrideGraceMinutes: Int = 5,
+
+    /**
+     * ポイントの使い道と相場。
+     *
+     * Android と別に持つ。同期でルールが渡ってきても、
+     * 「押し切りに代金を取るか」は端末ごとに決めたいことがあるため。
+     */
+    val pointPolicy: PointPolicy = PointPolicy.DEFAULT,
+
+    /** 解禁券で制限が止まっている期限(秒)。過ぎれば勝手に戻る。 */
+    val passUntilSec: Long = 0L,
 )
 
 @Serializable
@@ -52,4 +66,15 @@ object Stores {
     val usage = JsonStore("usage.json", ListSerializer(UsageSession.serializer())) { emptyList() }
     val declarations =
         JsonStore("declarations.json", ListSerializer(Declaration.serializer())) { emptyList() }
+
+    /**
+     * 罰で閉まっているもの。
+     *
+     * ファイルに落とすのは、再起動で罰が消えては罰にならないため。
+     * 逆に期限を過ぎれば勝手に解けるので、閉じ込め続けることもない。
+     */
+    val lockouts = JsonStore("lockouts.json", ListSerializer(Lockout.serializer())) { emptyList() }
+
+    /** ポイントの増減。残高はこの合計。 */
+    val points = JsonStore("points.json", ListSerializer(PointEvent.serializer())) { emptyList() }
 }

@@ -23,6 +23,9 @@ class StatsRepository(
     /** 今日から遡って「守れた日」が何日続いているか。 */
     val streak: Flow<Int> = dayStatDao.observeRecent(400).map { days -> computeStreak(days) }
 
+    /** その日の集計。無ければ null。 */
+    suspend fun dayStat(epochDay: Long): DayStatEntity? = dayStatDao.get(epochDay)
+
     /** その日の行が無ければ作る。常駐サービスから定期的に呼ぶ。 */
     suspend fun ensureToday() {
         val today = LocalDate.now().toEpochDay()

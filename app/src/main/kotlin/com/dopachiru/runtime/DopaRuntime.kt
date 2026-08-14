@@ -9,11 +9,16 @@ import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.engine.RuleEngine
 import com.dopachiru.core.gate.Gate
 import com.dopachiru.core.model.ConditionNode
+import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.Rule
+import com.dopachiru.core.points.PointPolicy
+import com.dopachiru.core.points.PointReason
 import com.dopachiru.core.time.ResetPolicy
 import com.dopachiru.data.CalendarReader
 import com.dopachiru.data.ChangeRequestRepository
 import com.dopachiru.data.DeclarationManager
+import com.dopachiru.data.LockoutRepository
+import com.dopachiru.data.PointsRepository
 import com.dopachiru.data.ProtectedApps
 import com.dopachiru.data.RuleRepository
 import com.dopachiru.data.SettingsStore
@@ -26,6 +31,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.time.Duration
+import java.time.LocalDate
 import java.time.LocalDateTime
 
 /**
@@ -63,6 +69,10 @@ object DopaRuntime {
         private set
     lateinit var studyWindows: StudyWindowRepository
         private set
+    lateinit var lockouts: LockoutRepository
+        private set
+    lateinit var points: PointsRepository
+        private set
 
     /** 何があってもブロックしないアプリ。ルールより強い。 */
     private lateinit var protectedApps: ProtectedApps
@@ -90,6 +100,15 @@ object DopaRuntime {
     @Volatile
     var batterySaverMode: Boolean = false
         private set
+
+    /** ポイントの使い道と相場。判定から同期的に読むのでキャッシュする。 */
+    @Volatile
+    var pointPolicy: PointPolicy = PointPolicy.DEFAULT
+        private set
+
+    /** 解禁券で制限が止まっている期限(秒)。過ぎれば勝手に戻る。 */
+    @Volatile
+    private var passUntilSec: Long = 0L
 
     private var lastCalendarRefreshMs = 0L
     private var lastWrittenScreenMinutes = -1
@@ -128,6 +147,8 @@ object DopaRuntime {
         stats = StatsRepository(db.dayStatDao(), db.blockLogDao())
         calendarReader = CalendarReader(app)
         studyWindows = StudyWindowRepository(db.studyWindowDao(), scope)
+        lockouts = LockoutRepository(db.lockoutDao(), scope)
+        points = PointsRepository(db.pointEventDao(), scope)
         changes = ChangeRequestRepository(
             dao = db.changeRequestDao(),
             ruleRepository = rules,
@@ -141,6 +162,9 @@ object DopaRuntime {
             declarations.warmUp()
             // 再起動をまたいでも学習中のままでいられるように、窓を読み直す
             studyWindows.warmUp()
+            // 罰と残高も同じ。再起動で罰が消えるなら罰にならない
+            lockouts.warmUp()
+            points.warmUp()
             usage.purgeOld()
             stats.ensureToday()
         }
@@ -159,6 +183,8 @@ object DopaRuntime {
         }
         scope.launch { settings.batterySaver.collect { batterySaverMode = it } }
         scope.launch { settings.studyPrepMinutes.collect { studyWindows.prepMinutes = it } }
+        scope.launch { settings.pointPolicy.collect { pointPolicy = it } }
+        scope.launch { settings.passUntilEpochSec.collect { passUntilSec = it } }
     }
 
     @Volatile
@@ -232,14 +258,91 @@ object DopaRuntime {
     fun decide(packageName: String, now: LocalDateTime = now()): Decision {
         if (!initialized) return Decision.Allow
         if (packageName in protectedApps) return Decision.Allow
-        return engine.decide(ruleCache, buildContext(packageName, now)) { tagCache[it] ?: emptySet() }
+        val nowSec = System.currentTimeMillis() / 1000
+        return engine.decide(
+            rules = ruleCache,
+            lockouts = lockouts.current(nowSec),
+            ctx = buildContext(packageName, now),
+            nowSec = nowSec,
+            passUntilSec = passUntilSec,
+        ) { tagCache[it] ?: emptySet() }
+    }
+
+    /** 解禁券が効いているあいだの期限(秒)。効いていなければ 0。 */
+    fun passUntil(): Long = passUntilSec.takeIf { System.currentTimeMillis() / 1000 < it } ?: 0L
+
+    // ------------------------------------------------------------------
+    // 破った / 守ったときに起きること
+
+    /**
+     * ルールを破った。罰を科し、ポイントを引く。
+     *
+     * 封鎖は罰を科した時点の範囲で固定する。あとからルールを書き換えても
+     * 罰の重さが変わらないようにするため。
+     */
+    fun punish(packageName: String, rule: Rule, reason: PointReason) {
+        if (!initialized) return
+        val consequence = rule.consequence
+
+        consequence.resolveTarget(packageName, rule.target)?.let { target ->
+            lockouts.impose(
+                target = target,
+                minutes = consequence.lockMinutes.coerceAtMost(Consequence.MAX_LOCK_MINUTES),
+                reason = rule.name,
+            )
+        }
+
+        val delta = pointPolicy.breakDelta(consequence.breakPoints)
+        if (pointPolicy.enabled && delta != 0) {
+            points.record(
+                delta = delta,
+                reason = reason,
+                note = rule.name,
+                floor = pointPolicy.floor,
+            )
+        }
+    }
+
+    /** ブロック画面から引き返した。 */
+    fun reward(rule: Rule) {
+        if (!initialized || !pointPolicy.enabled) return
+        val delta = pointPolicy.keepDelta(rule.consequence.keepPoints)
+        if (delta != 0) points.record(delta, PointReason.BACKED_OFF, rule.name)
+    }
+
+    /** 押し切るのにいくら要るか。0 なら代金は取らない。 */
+    fun overrideCost(rule: Rule): Int = pointPolicy.overrideCost(rule.consequence.breakPoints)
+
+    /** その値段を払えるか。払えないと押し切りボタンが出ない。 */
+    fun canAfford(cost: Int): Boolean = cost <= 0 || points.currentBalance() >= cost
+
+    /**
+     * 解禁券を買う。買えたら true。
+     *
+     * 期限を持たせてあるので、買ったまま解除を忘れて縛りが死ぬことがない。
+     */
+    suspend fun buyPass(): Boolean {
+        if (!initialized) return false
+        val policy = pointPolicy
+        if (!policy.enabled || !policy.passEnabled) return false
+        if (points.currentBalance() < policy.passCost) return false
+
+        points.record(-policy.passCost, PointReason.PASS_BOUGHT, "${policy.passMinutes}分")
+        val until = System.currentTimeMillis() / 1000 + policy.passMinutes * 60L
+        settings.setPassUntil(until)
+        passUntilSec = until
+        return true
     }
 
     /** 何らかのルールが対象にしているアプリか。監視の当たり判定を安く済ませるため。 */
     fun isTargeted(packageName: String): Boolean {
         if (initialized && packageName in protectedApps) return false
         val tags = tagCache[packageName] ?: emptySet()
-        return ruleCache.any { it.enabled && it.target.matches(packageName, tags) }
+        if (ruleCache.any { it.enabled && it.target.matches(packageName, tags) }) return true
+        // 罰で閉まっているアプリも見に行く。ルールが狙っていない範囲まで閉める罰
+        // (「逃がすもの以外ぜんぶ」など)があるので、ここを落とすと罰が効かない
+        return initialized &&
+            lockouts.current().any { it.target.matches(packageName, tags) }
     }
 
     /** 学習予定の最中か。押し切りを止めるかどうかの判断に使う。 */
@@ -304,6 +407,24 @@ object DopaRuntime {
 
     fun devClearStudyWindows() = studyWindows.replaceAll(emptyList())
 
+    /** 罰を1つ科す。封鎖画面と、解けたあとの戻りを確かめるため。 */
+    fun devImposeLockout(minutes: Int, everything: Boolean) {
+        val target = if (everything) {
+            com.dopachiru.core.model.Target(matchAll = true)
+        } else {
+            com.dopachiru.core.model.Target(
+                packages = setOfNotNull(currentForegroundPackage)
+            )
+        }
+        lockouts.impose(target, minutes, "開発ツールから")
+    }
+
+    fun devClearLockouts() = lockouts.clearAll()
+
+    fun devAddPoints(delta: Int) = points.record(delta, PointReason.MANUAL, "開発ツール")
+
+    fun devClearPoints() = points.clearAll()
+
     /**
      * 次に判定を見に来るまでの待ち時間。
      *
@@ -313,10 +434,20 @@ object DopaRuntime {
     fun nextCheckDelayMs(packageName: String, floorMs: Long, ceilMs: Long): Long {
         if (!initialized) return ceilMs
         val now = now()
+
+        // 罰が解ける時刻。ここで起きないと、時間が過ぎても画面が開かない
+        val tags = tagCache[packageName] ?: emptySet()
+        val lockLiftsInMs = lockouts.current()
+            .filter { it.target.matches(packageName, tags) }
+            .minOfOrNull { it.untilEpochSec }
+            ?.let { it * 1000 - System.currentTimeMillis() }
+
         val at = engine.nextChangeAt(ruleCache, buildContext(packageName, now)) {
             tagCache[it] ?: emptySet()
-        } ?: return ceilMs
-        val ms = Duration.between(now, at).toMillis()
+        }
+        val ruleChangeInMs = at?.let { Duration.between(now, it).toMillis() }
+
+        val ms = listOfNotNull(lockLiftsInMs, ruleChangeInMs).minOrNull() ?: return ceilMs
         return ms.coerceIn(floorMs, ceilMs)
     }
 
@@ -334,10 +465,13 @@ object DopaRuntime {
         val foreground = currentForegroundPackage
         usage.tick()
         declarations.tick(foreground)
+        lockouts.purgeExpired()
         refreshCalendarIfStale()
+        awardStudyIfCompleted()
 
         scope.launch {
             stats.ensureToday()
+            awardCleanDayIfDue()
             val minutes = usage.totalMinutesIn(ResetPolicy())
             // 値が動いていないのに毎分書きに行かない
             if (minutes != lastWrittenScreenMinutes) {
@@ -346,6 +480,37 @@ object DopaRuntime {
             }
         }
         return if (batterySaverMode) SAVER_TICK_MS else ACTIVE_TICK_MS
+    }
+
+    /** 学習予定を完走していたら加点する。中断したものは対象外。 */
+    private fun awardStudyIfCompleted() {
+        val policy = pointPolicy
+        if (!policy.enabled || policy.studyDonePoints == 0) return
+        val windowId = studyWindows.takeCompletedWindowId() ?: return
+        points.record(
+            delta = policy.studyDonePoints,
+            reason = PointReason.STUDY_DONE,
+            dedupKey = "study:$windowId",
+        )
+    }
+
+    /**
+     * 昨日を押し切りゼロで終えていたら加点する。
+     *
+     * 誘惑が一度も無かった日まで加点すると、端末を触らなかっただけで貯まる。
+     * ブロックが1度は出た日に限る。
+     */
+    private suspend fun awardCleanDayIfDue() {
+        val policy = pointPolicy
+        if (!policy.enabled || policy.cleanDayPoints == 0) return
+        val yesterday = LocalDate.now().toEpochDay() - 1
+        val stat = stats.dayStat(yesterday) ?: return
+        if (!stat.kept || stat.blockShownCount == 0) return
+        points.record(
+            delta = policy.cleanDayPoints,
+            reason = PointReason.CLEAN_DAY,
+            dedupKey = "cleanday:$yesterday",
+        )
     }
 
     /**

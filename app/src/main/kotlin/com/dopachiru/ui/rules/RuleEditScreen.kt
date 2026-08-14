@@ -45,12 +45,14 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dopachiru.core.action.ActionRegistry
 import com.dopachiru.core.action.types.BlockAction
-import com.dopachiru.core.condition.ConditionRegistry
 import com.dopachiru.core.gate.ChangeKind
 import com.dopachiru.core.model.ConditionNode
+import com.dopachiru.core.model.ConditionTree
+import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.model.Target
 import com.dopachiru.core.param.Params
+import com.dopachiru.core.points.PointPolicy
 import com.dopachiru.runtime.DopaRuntime
 import com.dopachiru.ui.common.AppPickerList
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -59,8 +61,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-
-data class ConditionDraft(val typeId: String, val params: Params)
 
 data class RuleEditState(
     val id: Long = 0L,
@@ -71,18 +71,17 @@ data class RuleEditState(
     val matchAll: Boolean = false,
     val exceptPackages: Set<String> = emptySet(),
     val exceptTags: Set<String> = emptySet(),
-    val conditions: List<ConditionDraft> = emptyList(),
+    /** 条件の木。AND / OR / NOT の入れ子をそのまま保持する。 */
+    val condition: ConditionNode = ConditionTree.EMPTY,
     val actionId: String = BlockAction.id,
     val actionParams: Params = Params.defaultsOf(BlockAction.params),
+    val consequence: Consequence = Consequence.NONE,
+    val pointPolicy: PointPolicy = PointPolicy.DEFAULT,
     val availableTags: List<String> = emptyList(),
-    /** 既存ルールの条件が入れ子や OR を含み、この画面では編集しきれない。 */
-    val tooComplexToEdit: Boolean = false,
     val loaded: Boolean = false,
 ) {
     val canSave: Boolean
-        get() = name.isNotBlank() &&
-            (matchAll || packages.isNotEmpty() || tags.isNotEmpty()) &&
-            !tooComplexToEdit
+        get() = name.isNotBlank() && (matchAll || packages.isNotEmpty() || tags.isNotEmpty())
 }
 
 class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
@@ -97,17 +96,12 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
         if (_state.value.loaded) return
         viewModelScope.launch {
             val tags = DopaRuntime.rules.tags.first()
-            if (ruleId == 0L) {
-                _state.update { it.copy(availableTags = tags, loaded = true) }
-                return@launch
-            }
-            val rule = DopaRuntime.rules.getById(ruleId)
+            val policy = DopaRuntime.settings.pointPolicy.first()
+            val rule = if (ruleId == 0L) null else DopaRuntime.rules.getById(ruleId)
             if (rule == null) {
-                _state.update { it.copy(availableTags = tags, loaded = true) }
+                _state.update { it.copy(availableTags = tags, pointPolicy = policy, loaded = true) }
                 return@launch
             }
-            val leaves = flattenLeaves(rule.condition)
-            val simple = isSimpleTree(rule.condition)
             _state.value = RuleEditState(
                 id = rule.id,
                 name = rule.name,
@@ -116,11 +110,12 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
                 matchAll = rule.target.matchAll,
                 exceptPackages = rule.target.exceptPackages,
                 exceptTags = rule.target.exceptTags,
-                conditions = leaves.map { ConditionDraft(it.typeId, it.params) },
+                condition = rule.condition,
                 actionId = rule.actionId,
                 actionParams = rule.actionParams,
+                consequence = rule.consequence,
+                pointPolicy = policy,
                 availableTags = tags,
-                tooComplexToEdit = !simple,
                 loaded = true,
             )
         }
@@ -149,24 +144,10 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
         it.copy(exceptTags = if (tag in it.exceptTags) it.exceptTags - tag else it.exceptTags + tag)
     }
 
-    fun addCondition(typeId: String) {
-        val type = ConditionRegistry[typeId] ?: return
-        _state.update {
-            it.copy(conditions = it.conditions + ConditionDraft(typeId, Params.defaultsOf(type.params)))
-        }
-    }
+    fun setCondition(condition: ConditionNode) = _state.update { it.copy(condition = condition) }
 
-    fun removeCondition(index: Int) = _state.update {
-        it.copy(conditions = it.conditions.filterIndexed { i, _ -> i != index })
-    }
-
-    fun updateCondition(index: Int, params: Params) = _state.update { state ->
-        state.copy(
-            conditions = state.conditions.mapIndexed { i, draft ->
-                if (i == index) draft.copy(params = params) else draft
-            }
-        )
-    }
+    fun setConsequence(consequence: Consequence) =
+        _state.update { it.copy(consequence = consequence) }
 
     fun setAction(actionId: String) {
         val action = ActionRegistry[actionId] ?: return
@@ -194,11 +175,10 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
                     exceptPackages = current.exceptPackages,
                     exceptTags = current.exceptTags,
                 ),
-                condition = ConditionNode.AllOf(
-                    current.conditions.map { ConditionNode.Leaf(it.typeId, it.params) }
-                ),
+                condition = current.condition,
                 actionId = current.actionId,
                 actionParams = current.actionParams,
+                consequence = current.consequence,
             )
             val isNew = current.id == 0L
             val gates = if (isNew) emptyList() else DopaRuntime.settings.gates.first()
@@ -234,7 +214,6 @@ fun RuleEditScreen(
     val context = LocalContext.current
     var showAppPicker by remember { mutableStateOf(false) }
     var showExceptPicker by remember { mutableStateOf(false) }
-    var showConditionPicker by remember { mutableStateOf(false) }
     var queuedNotice by remember { mutableStateOf(false) }
 
     androidx.compose.runtime.LaunchedEffect(ruleId) { viewModel.load(ruleId) }
@@ -251,18 +230,6 @@ fun RuleEditScreen(
             fontWeight = FontWeight.SemiBold,
         )
         Spacer(Modifier.height(16.dp))
-
-        if (state.tooComplexToEdit) {
-            Card(Modifier.fillMaxWidth()) {
-                Text(
-                    "このルールは入れ子や OR を含んでいて、この画面では編集できません。" +
-                        "条件エディタを載せるまでは、作り直すか無効化してください。",
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(12.dp),
-                )
-            }
-            Spacer(Modifier.height(16.dp))
-        }
 
         OutlinedTextField(
             value = state.name,
@@ -360,43 +327,17 @@ fun RuleEditScreen(
             }
         }
 
-        SectionHeader("条件(すべて満たしたとき)")
-        if (state.conditions.isEmpty()) {
-            Text(
-                "条件なし = 対象アプリを常に制限します(完全封印)。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        state.conditions.forEachIndexed { index, draft ->
-            val type = ConditionRegistry[draft.typeId]
-            Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-                Column(Modifier.padding(14.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(
-                            type?.displayName ?: draft.typeId,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        TextButton(onClick = { viewModel.removeCondition(index) }) { Text("削除") }
-                    }
-                    if (type != null) {
-                        Spacer(Modifier.height(8.dp))
-                        ParamEditor(
-                            specs = type.params,
-                            params = draft.params,
-                            onChange = { viewModel.updateCondition(index, it) },
-                        )
-                    }
-                }
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton(onClick = { showConditionPicker = true }) { Text("条件を足す") }
+        SectionHeader("条件")
+        Text(
+            ConditionTree.describe(state.condition),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.height(10.dp))
+        ConditionTreeEditor(
+            root = state.condition,
+            onChange = viewModel::setCondition,
+        )
 
         SectionHeader("どうする")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -422,6 +363,19 @@ fun RuleEditScreen(
                 onChange = viewModel::setActionParams,
             )
         }
+
+        SectionHeader("破ったら / 守ったら")
+        Text(
+            "その場の措置とは別に、あとから効く報い。既定では封鎖なし・ポイントだけ動きます。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(12.dp))
+        ConsequenceEditor(
+            consequence = state.consequence,
+            policy = state.pointPolicy,
+            onChange = viewModel::setConsequence,
+        )
 
         Spacer(Modifier.height(24.dp))
         HorizontalDivider()
@@ -464,16 +418,6 @@ fun RuleEditScreen(
         )
     }
 
-    if (showConditionPicker) {
-        ConditionPickerDialog(
-            onPick = {
-                viewModel.addCondition(it)
-                showConditionPicker = false
-            },
-            onDismiss = { showConditionPicker = false },
-        )
-    }
-
     if (queuedNotice) {
         AlertDialog(
             onDismissRequest = { queuedNotice = false; onDone() },
@@ -510,36 +454,3 @@ fun AppPickerDialog(
     )
 }
 
-@Composable
-private fun ConditionPickerDialog(
-    onPick: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("条件を選ぶ") },
-        text = {
-            LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                items(ConditionRegistry.all(), key = { it.id }) { type ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        onClick = { onPick(type.id) },
-                    ) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text(type.displayName, style = MaterialTheme.typography.titleSmall)
-                            Spacer(Modifier.height(2.dp))
-                            Text(
-                                type.description,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("やめる") } },
-    )
-}

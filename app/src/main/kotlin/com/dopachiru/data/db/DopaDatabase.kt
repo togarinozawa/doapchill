@@ -17,8 +17,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BlockLogEntity::class,
         StudyWindowEntity::class,
         DayStatEntity::class,
+        LockoutEntity::class,
+        PointEventEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class DopaDatabase : RoomDatabase() {
@@ -30,6 +32,8 @@ abstract class DopaDatabase : RoomDatabase() {
     abstract fun blockLogDao(): BlockLogDao
     abstract fun studyWindowDao(): StudyWindowDao
     abstract fun dayStatDao(): DayStatDao
+    abstract fun lockoutDao(): LockoutDao
+    abstract fun pointEventDao(): PointEventDao
 
     companion object {
         /**
@@ -70,6 +74,54 @@ abstract class DopaDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * 罰(封鎖)とポイントを足した(ver.0.6)。
+         *
+         * ルールに consequenceJson を1列足し、テーブルを2つ増やすだけ。既存の行は
+         * 空文字のまま入り、読むときに「罰なし・ポイントは設定の既定値」に落ちる。
+         * 更新した瞬間に黙って封鎖が始まることはない。
+         */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_3_4_SQL.forEach { db.execSQL(it) }
+            }
+        }
+
+        /**
+         * 3→4 で流す SQL。
+         *
+         * 定数として外に出してあるのは、Room が生成した `schemas/4.json` と
+         * 突き合わせるテストから読むため。手書きの SQL と生成されたスキーマは
+         * ずれても**移行するまで気づけない**ので、機械に見比べさせている。
+         *
+         * `AUTOINCREMENT` まで含めて Room の生成物と一字一句そろえてある。
+         * Room の検証は PRAGMA を見るだけで AUTOINCREMENT の有無を見ないが、
+         * 無いと削除した行の id が再利用される ── 検証を通ることと
+         * 同じ挙動になることは別なので、生成物をそのまま写す。
+         */
+        internal val MIGRATION_3_4_SQL: List<String> = listOf(
+            "ALTER TABLE `rules` ADD COLUMN `consequenceJson` TEXT NOT NULL DEFAULT ''",
+            "CREATE TABLE IF NOT EXISTS `lockouts` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`targetJson` TEXT NOT NULL, " +
+                "`untilEpochSec` INTEGER NOT NULL, " +
+                "`reason` TEXT NOT NULL, " +
+                "`createdAtEpochSec` INTEGER NOT NULL)",
+            "CREATE INDEX IF NOT EXISTS `index_lockouts_untilEpochSec` " +
+                "ON `lockouts` (`untilEpochSec`)",
+            "CREATE TABLE IF NOT EXISTS `point_events` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`delta` INTEGER NOT NULL, " +
+                "`reason` TEXT NOT NULL, " +
+                "`note` TEXT NOT NULL, " +
+                "`atEpochSec` INTEGER NOT NULL, " +
+                "`dedupKey` TEXT)",
+            "CREATE INDEX IF NOT EXISTS `index_point_events_atEpochSec` " +
+                "ON `point_events` (`atEpochSec`)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_point_events_dedupKey` " +
+                "ON `point_events` (`dedupKey`)",
+        )
+
         @Volatile
         private var instance: DopaDatabase? = null
 
@@ -80,7 +132,7 @@ abstract class DopaDatabase : RoomDatabase() {
                     DopaDatabase::class.java,
                     "dopachiru.db",
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { instance = it }
             }

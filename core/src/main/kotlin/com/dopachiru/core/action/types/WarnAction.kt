@@ -14,6 +14,7 @@ object WarnAction : ActionType {
     const val KEY_MESSAGE = "message"
     const val KEY_SECONDS = "seconds"
     const val KEY_REPEAT_MINUTES = "repeatMinutes"
+    const val KEY_IGNORE_MINUTES = "ignoreMinutes"
 
     override val id = "warn"
     override val displayName = "警告表示"
@@ -36,6 +37,15 @@ object WarnAction : ActionType {
             max = 120,
             unit = "分",
             help = "条件が成立し続けているあいだ、この間隔で出し直す",
+        ),
+        ParamSpec.IntParam(
+            KEY_IGNORE_MINUTES,
+            "無視したとみなすまで",
+            default = 5,
+            min = 0,
+            max = 120,
+            unit = "分",
+            help = "警告のあとも居座り続けたら「破った」扱いにする。0 にすると罰しない",
         ),
     )
 

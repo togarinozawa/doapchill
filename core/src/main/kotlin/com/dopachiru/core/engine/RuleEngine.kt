@@ -4,6 +4,7 @@ import com.dopachiru.core.action.ActionRegistry
 import com.dopachiru.core.action.ActionType
 import com.dopachiru.core.condition.ConditionRegistry
 import com.dopachiru.core.model.ConditionNode
+import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.param.Params
 import java.time.LocalDateTime
@@ -19,6 +20,14 @@ sealed interface Decision {
         val action: ActionType,
         val params: Params,
     ) : Decision
+
+    /**
+     * ルールを破った罰で閉まっている。
+     *
+     * ルールの評価より先に決まる。条件を満たしていようがいまいが関係なく、
+     * 時間が来るまで開かない ── そうでなければ罰にならない。
+     */
+    data class Locked(val lockout: Lockout) : Decision
 }
 
 /**
@@ -35,6 +44,40 @@ class RuleEngine {
      *
      * @param tagsOf パッケージ名からそのアプリに付いたタグを引く。
      */
+    /**
+     * 罰 → 解禁券 → ルール の順で見る。この順番そのものが仕様なので、
+     * 端末ごとに書かずにここへ置いてある。
+     *
+     * **罰がいちばん強い。** 閉まっているあいだは、どのルールが成立していようと
+     * 関係ない。逆にすると「罰の最中に条件が外れたので開いた」が起きて罰にならない。
+     *
+     * **解禁券では罰は解けない。** ポイントで買えるのはルールの免除であって、
+     * 科された罰の時間ではない。ここを通すと、罰が「もっとポイントを払えば消える」
+     * ものに変わり、封鎖画面の「押し切る手段はありません」が嘘になる。
+     *
+     * @param passUntilSec 解禁券が効いている期限。0 なら効いていない。
+     */
+    fun decide(
+        rules: List<Rule>,
+        lockouts: List<Lockout>,
+        ctx: EvalContext,
+        nowSec: Long,
+        passUntilSec: Long,
+        tagsOf: (String) -> Set<String>,
+    ): Decision {
+        if (lockouts.isNotEmpty()) {
+            val locked = com.dopachiru.core.model.Lockouts.activeFor(
+                all = lockouts,
+                packageName = ctx.packageName,
+                tagsOfApp = tagsOf(ctx.packageName),
+                nowSec = nowSec,
+            )
+            if (locked != null) return Decision.Locked(locked)
+        }
+        if (nowSec < passUntilSec) return Decision.Allow
+        return decide(rules, ctx, tagsOf)
+    }
+
     fun decide(
         rules: List<Rule>,
         ctx: EvalContext,
