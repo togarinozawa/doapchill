@@ -257,7 +257,7 @@ override fun nextChangeAt(p: Params, ctx: EvalContext): LocalDateTime =
 | `session_count` | セッション回数 | 集計期間を指定できる |
 | `total_usage` | 合計使用時間 | 集計期間を指定できる |
 | `declared_budget` | 宣言した時間の超過 | |
-| `calendar_busy` | カレンダー予定 | 予定名で絞れる(例: `#集中` の予定中だけ封印) |
+| `calendar_busy` | カレンダー予定 | **凍結中**。予定名で絞れる(例: `#集中` の予定中だけ封印) |
 | `power_save` | 省電力モード | 端末が省電力モードのあいだ制限を強める |
 | `study_session` | 学習予定 | 連携アプリから受け取った予定の最中。[INTEGRATION.md](INTEGRATION.md) |
 
@@ -392,14 +392,42 @@ Android 14 以降 `foregroundServiceType` が必須なので `specialUse` を宣
 | `miniGame` | 計算問題を N 問。途中で間違えると最初から |
 | `password` | パスワード(PBKDF2-HMAC-SHA256 / 12万回) |
 | `timeWindow` | **曜日と時刻**の窓。日をまたぐ指定も可(例: 金 22:00〜02:00) |
-| `calendarWindow` | **カレンダーに特定の予定があるあいだだけ**変更できる |
+| `calendarWindow` | **カレンダーに特定の予定があるあいだだけ**変更できる(凍結中は常に開く) |
 
 `cooldown` / `timeWindow` / `calendarWindow` は状況で自動判定されるので、
 条件を満たせば勝手に通過し、外れればまた塞がります。
 `calendarWindow` は「#可変」という予定を自分で先に入れておく使い方を想定していて、
 予定を入れる行為そのものが事前のコミットメントになります。
 
-### カレンダーは端末の Provider から読む
+### カレンダー連携は凍結中(2026-08-15〜)
+
+連携相手のスキマスが完全ローカルになり、学習予定はブロードキャストで直接届くように
+なりました([INTEGRATION.md](INTEGRATION.md))。カレンダーを経由する理由が無くなったので、
+読みに行くのをやめています。
+
+凍結の switch は `core` の `DopaFeatures.CALENDAR_ENABLED` 1か所です。
+
+| | 凍結中 |
+|---|---|
+| 端末のカレンダー | 一切読まない。`READ_CALENDAR` は**マニフェストの宣言ごと外してある** |
+| `calendar_busy` 条件 | 常に成立しない |
+| `Gate.CalendarWindow` | 常に通過扱い |
+| 条件・ゲート・雛形の選択肢 | 出ない |
+| 保存済みのルール | 残る。編集画面に「凍結中」と出る |
+
+**条件とゲートで倒す向きが逆**なのが肝です。素直に「カレンダーは空」として扱うと、
+
+- 「予定が**無い**あいだ封印」(`duringEvent = false`)が永久に成立して端末が閉まりっぱなしになる
+- 「予定中だけ変更できる」の関門が永久に閉じて、ルールを一生直せなくなる
+
+の両方が起きます。どちらも「止めた機能が、止めたせいで人を縛る」形なので、
+条件は成立しない側に、ゲートは開く側に倒しています。`CalendarFreezeTest` で押さえています。
+
+戻すときは `CALENDAR_ENABLED` を `true` にして、マニフェストの `READ_CALENDAR` を
+生かす2箇所だけです。
+
+<details>
+<summary>凍結前の作り(戻すときの参考)</summary>
 
 Google Calendar API も OAuth も Google Cloud のプロジェクトも使っていません。
 **Google カレンダーは端末に同期された時点で標準のカレンダー Provider に入る**ので、
@@ -410,6 +438,8 @@ Google Calendar API も OAuth も Google Cloud のプロジェクトも使って
 - Google 以外のカレンダー(Exchange など)も同じ経路で読める
 
 終日予定は UTC の 0:00 で入っているので、端末のローカル日に読み替えています。
+
+</details>
 
 ### タグでアプリをまとめる
 
@@ -504,7 +534,7 @@ Google Calendar API も OAuth も Google Cloud のプロジェクトも使って
 | 端末間の同期 | サーバーは書き上げ済み。クライアントが未着手。[SYNC.md](SYNC.md) |
 | ブラウザ拡張 | 未着手 |
 | Device Owner レベルの制御 | 対象外(設計上の決定) |
-| カレンダーへの書き込み | 読み取りのみ。`#可変` の予定はカレンダーアプリ側で入れる |
+| カレンダー連携 | **凍結中**。スキマスが完全ローカルになり、経由する理由が無くなった |
 | Windows 版の対象アプリ編集 | 雛形で選んだものから変えられない。条件と罰は編集できる |
 
 ---
@@ -520,6 +550,7 @@ Google Calendar API も OAuth も Google Cloud のプロジェクトも使って
 | ルールエンジン・集計期間・ゲート・学習予定 | 38 |
 | 条件の木(AND/OR/NOT と組み替え) | 13 |
 | 罰とポイント(範囲・優先順位・JSON往復) | 14 |
+| カレンダー凍結中の振る舞い | 6 |
 | 学習予定リポジトリ | 14 |
 | 移行 SQL と生成スキーマの突き合わせ | 4 |
 

@@ -1,5 +1,6 @@
 package com.dopachiru.core.gate
 
+import com.dopachiru.core.DopaFeatures
 import com.dopachiru.core.engine.CalendarState
 import com.dopachiru.core.time.ALL_DAYS
 import com.dopachiru.core.time.describeDays
@@ -99,9 +100,26 @@ sealed interface Gate {
     @SerialName("calendarWindow")
     data class CalendarWindow(val keyword: String = "#可変") : Gate {
         override val key get() = "calendarWindow"
-        override fun describe() = "カレンダーに「$keyword」の予定が入っているあいだだけ変更できる"
 
-        fun isOpen(calendar: CalendarState): Boolean = calendar.inEventMatching(keyword)
+        override fun describe(): String =
+            if (DopaFeatures.CALENDAR_ENABLED) {
+                "カレンダーに「$keyword」の予定が入っているあいだだけ変更できる"
+            } else {
+                "(カレンダー連携は凍結中のため、この関門は開いたままです)"
+            }
+
+        /**
+         * 凍結中は**常に開く**。
+         *
+         * カレンダーを読まないまま「予定が入っていない」と答えると、この関門は
+         * 二度と開かない = ルールを一生直せなくなる。抑止のための関門が、
+         * 止めた機能のせいで出口の無い檻になってはいけない。
+         *
+         * 条件([com.dopachiru.core.condition.types.CalendarBusyCondition])とは
+         * 倒す向きが逆だが、狙いは同じ ──「凍結で縛りがきつくなる」ほうを避ける。
+         */
+        fun isOpen(calendar: CalendarState): Boolean =
+            !DopaFeatures.CALENDAR_ENABLED || calendar.inEventMatching(keyword)
     }
 
     /** なぜ変えたいのかを書かせる。書いた内容は履歴に残る。 */

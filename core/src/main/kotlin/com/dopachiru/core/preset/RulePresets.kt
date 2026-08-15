@@ -1,5 +1,6 @@
 package com.dopachiru.core.preset
 
+import com.dopachiru.core.DopaFeatures
 import com.dopachiru.core.action.types.BlockAction
 import com.dopachiru.core.action.types.DeclareAction
 import com.dopachiru.core.action.types.WarnAction
@@ -40,6 +41,8 @@ data class RulePreset(
     val appPrompt: String = "対象アプリを選んでください",
     /** 1つも選ばずに作れるか。許可リスト型だけ true。 */
     val allowEmptyApps: Boolean = false,
+    /** カレンダー連携が要る雛形か。凍結中は一覧に出さない。 */
+    val requiresCalendar: Boolean = false,
     private val builder: (Set<String>) -> Rule,
 ) {
     fun build(packages: Set<String>): Rule = builder(packages)
@@ -47,7 +50,11 @@ data class RulePreset(
 
 object RulePresets {
 
-    val all: List<RulePreset> = listOf(
+    /** いま選べる雛形。凍結した機能を使うものは出さない。 */
+    val all: List<RulePreset>
+        get() = defined.filter { !it.requiresCalendar || DopaFeatures.CALENDAR_ENABLED }
+
+    private val defined: List<RulePreset> = listOf(
         RulePreset(
             id = "night",
             name = "夜は開かない",
@@ -238,6 +245,7 @@ object RulePresets {
             id = "calendar_focus",
             name = "予定が入っている間は封印",
             description = "カレンダーに「#集中」の予定があるあいだ封印する。予定を入れる行為が先約になる。",
+            requiresCalendar = true,
         ) { packages ->
             rule(
                 name = "#集中 の予定中は封印",

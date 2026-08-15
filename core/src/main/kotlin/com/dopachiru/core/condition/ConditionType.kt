@@ -30,6 +30,15 @@ interface ConditionType {
     /** この条件が必要とするパラメータ。 */
     val params: List<ParamSpec>
 
+    /**
+     * いま新しく選べるか。false なら条件の一覧に出さない。
+     *
+     * 凍結した機能を**レジストリから外さない**ために要る。外してしまうと
+     * 保存済みのルールがその条件を引けなくなり、一覧の説明が ID の生文字列に化ける。
+     * 選ばせないことと、読めなくすることは別。
+     */
+    val available: Boolean get() = true
+
     /** 条件が成立していれば true。 */
     fun evaluate(p: Params, ctx: EvalContext): Boolean
 

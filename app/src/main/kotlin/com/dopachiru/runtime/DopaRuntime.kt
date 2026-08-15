@@ -3,6 +3,7 @@ package com.dopachiru.runtime
 import android.content.Context
 import android.os.PowerManager
 import com.dopachiru.core.DopaCore
+import com.dopachiru.core.DopaFeatures
 import com.dopachiru.core.condition.types.CalendarBusyCondition
 import com.dopachiru.core.engine.Decision
 import com.dopachiru.core.engine.EvalContext
@@ -191,11 +192,20 @@ object DopaRuntime {
     private var gateCache: List<Gate> = emptyList()
 
     private fun recomputeCalendarNeed() {
+        // 凍結中は、使っているルールが残っていても読みに行かない
+        if (!DopaFeatures.CALENDAR_ENABLED) {
+            calendarNeeded = false
+            return
+        }
         val usedByRule = ruleCache.any { it.enabled && usesCalendar(it.condition) }
         val usedByGate = gateCache.any { it is Gate.CalendarWindow }
         calendarNeeded = usedByRule || usedByGate
         if (calendarNeeded) refreshCalendarIfStale(force = true)
     }
+
+    /** そのルールが、凍結中の機能に頼っていて動かないか。編集画面で知らせるため。 */
+    fun usesFrozenFeature(rule: Rule): Boolean =
+        !DopaFeatures.CALENDAR_ENABLED && usesCalendar(rule.condition)
 
     private fun usesCalendar(node: ConditionNode): Boolean = when (node) {
         is ConditionNode.Leaf -> node.typeId == CalendarBusyCondition.id
@@ -526,8 +536,9 @@ object DopaRuntime {
         scope.launch { calendarReader.refresh() }
     }
 
-    /** 設定画面のプレビュー用。設定の状態に関わらず読みにいく。 */
+    /** 設定画面のプレビュー用。設定の状態に関わらず読みにいく(凍結中は何もしない)。 */
     fun refreshCalendarNow() {
+        if (!DopaFeatures.CALENDAR_ENABLED) return
         lastCalendarRefreshMs = System.currentTimeMillis()
         scope.launch { calendarReader.refresh() }
     }

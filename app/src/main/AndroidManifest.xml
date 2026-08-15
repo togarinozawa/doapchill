@@ -19,11 +19,17 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!--
-      カレンダー連動の条件・ゲート用。
+      カレンダー連動の条件・ゲート用。いまは凍結中なので宣言ごと外してある。
+      (core の DopaFeatures.CALENDAR_ENABLED を参照)
+
+      使わない権限を宣言したままにしないのは、「端末の外に何も出さない」と
+      言っておきながらカレンダーを読める状態にしておくのが、いちばん信用を削るため。
+      戻すときは下の1行を生かす。
+
       Google カレンダーは端末に同期された時点でこの Provider に入るので、
       OAuth も Google Cloud のプロジェクトも要らない。
     -->
-    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <!-- <uses-permission android:name="android.permission.READ_CALENDAR" /> -->
 
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />

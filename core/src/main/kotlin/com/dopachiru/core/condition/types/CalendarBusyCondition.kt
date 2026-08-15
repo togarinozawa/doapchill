@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.DopaFeatures
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -10,6 +11,8 @@ import com.dopachiru.core.param.Params
  *
  * 予定は端末のカレンダー Provider から読む。Google カレンダーを端末に同期していれば
  * その予定がそのまま見えるので、OAuth も通信も要らない。
+ *
+ * **いまは凍結中**。[DopaFeatures.CALENDAR_ENABLED] を参照。
  */
 object CalendarBusyCondition : ConditionType {
     const val KEY_DURING_EVENT = "duringEvent"
@@ -34,7 +37,17 @@ object CalendarBusyCondition : ConditionType {
         ),
     )
 
+    /** 凍結中は選択肢に出さない。保存済みのルールはそのまま読める。 */
+    override val available: Boolean get() = DopaFeatures.CALENDAR_ENABLED
+
     override fun evaluate(p: Params, ctx: EvalContext): Boolean {
+        // 凍結中は成立しない。
+        //
+        // カレンダーを「空」として素直に評価すると、「予定が無いあいだ封印」
+        // (duringEvent = false)が**永久に成立**して端末が閉まりっぱなしになる。
+        // 止めた機能が、止めたせいで人を縛るのはおかしい。
+        if (!DopaFeatures.CALENDAR_ENABLED) return false
+
         val keyword = p.string(KEY_KEYWORD)
         val matched =
             if (keyword.isBlank()) ctx.calendar.busy else ctx.calendar.inEventMatching(keyword)

@@ -22,6 +22,13 @@ object ConditionRegistry {
 
     fun all(): List<ConditionType> = types.values.toList()
 
+    /**
+     * いま新しく選べる条件だけ。設定画面の選択肢はこちらを使う。
+     *
+     * 凍結した条件は [all] には残る ── 保存済みのルールを読むために要るため。
+     */
+    fun selectable(): List<ConditionType> = types.values.filter { it.available }
+
     /** テスト用。 */
     fun clear() = types.clear()
 }

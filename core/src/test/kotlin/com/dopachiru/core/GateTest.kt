@@ -61,8 +61,13 @@ class GateTest {
         assertFalse(gate.contains(fri.withHour(12)))        // 時刻が範囲外
     }
 
+    /**
+     * カレンダー凍結中は、この関門は常に開く。
+     * 閉じたままだとルールを二度と直せなくなるため([CalendarFreezeTest] を参照)。
+     */
     @Test
     fun `カレンダーの窓は該当する予定があるあいだだけ開く`() {
+        if (!DopaFeatures.CALENDAR_ENABLED) return
         val gate = Gate.CalendarWindow("#可変")
 
         assertTrue(gate.isOpen(calendarWith("#可変 設定を見直す")))
@@ -83,6 +88,7 @@ class GateTest {
 
     @Test
     fun `いったん開いた窓も条件が外れれば塞がる`() {
+        if (!DopaFeatures.CALENDAR_ENABLED) return
         val gates = listOf(Gate.CalendarWindow("#可変"))
         val createdAt = thu
 

@@ -57,6 +57,7 @@ import com.dopachiru.data.CalendarReader
 import com.dopachiru.data.SettingsStore
 import com.dopachiru.runtime.DopaRuntime
 import com.dopachiru.service.DopaAccessibilityService
+import com.dopachiru.core.DopaFeatures
 import com.dopachiru.core.points.PointPolicy
 import com.dopachiru.ui.common.HourMinutePicker
 import com.dopachiru.ui.rules.DayOfWeekPicker
@@ -239,40 +240,61 @@ fun SettingsScreen(
             SectionTitle("カレンダー連携")
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
-                    Text(
-                        "端末に同期済みのカレンダーを読みます。Google カレンダーを端末で同期していれば、" +
-                            "そのまま使えます。ログインも API キーも要りません。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    CheckRow(
-                        label = "カレンダーの読み取りを許可",
-                        done = calendarGranted,
-                        detail = "予定を条件やゲートに使えるようになります",
-                        onAction = { calendarPermission.launch(Manifest.permission.READ_CALENDAR) },
-                    )
-
-                    if (calendarGranted) {
-                        val events = remember(refreshKey, calendarGranted) { viewModel.upcomingEvents() }
+                    if (DopaFeatures.CALENDAR_ENABLED) {
+                        Text(
+                            "端末に同期済みのカレンダーを読みます。Google カレンダーを端末で同期していれば、" +
+                                "そのまま使えます。ログインも API キーも要りません。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         Spacer(Modifier.height(12.dp))
-                        Text("これからの予定", style = MaterialTheme.typography.labelMedium)
-                        Spacer(Modifier.height(4.dp))
-                        if (events.isEmpty()) {
-                            Text(
-                                "直近に予定はありません。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        } else {
-                            events.forEach { event ->
+                        CheckRow(
+                            label = "カレンダーの読み取りを許可",
+                            done = calendarGranted,
+                            detail = "予定を条件やゲートに使えるようになります",
+                            onAction = {
+                                calendarPermission.launch(Manifest.permission.READ_CALENDAR)
+                            },
+                        )
+
+                        if (calendarGranted) {
+                            val events =
+                                remember(refreshKey, calendarGranted) { viewModel.upcomingEvents() }
+                            Spacer(Modifier.height(12.dp))
+                            Text("これからの予定", style = MaterialTheme.typography.labelMedium)
+                            Spacer(Modifier.height(4.dp))
+                            if (events.isEmpty()) {
                                 Text(
-                                    "${formatTime(event.startMs)}  ${event.title}",
+                                    "直近に予定はありません。",
                                     style = MaterialTheme.typography.bodySmall,
-                                    modifier = Modifier.padding(vertical = 1.dp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
+                            } else {
+                                events.forEach { event ->
+                                    Text(
+                                        "${formatTime(event.startMs)}  ${event.title}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.padding(vertical = 1.dp),
+                                    )
+                                }
                             }
                         }
+                    } else {
+                        Text("凍結中", style = MaterialTheme.typography.titleSmall)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "学習予定はスキマスから直接届くようになったので、カレンダーは読んでいません。" +
+                                "読み取り権限そのものを外してあります。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "カレンダーを使っていたルールは残っていますが、凍結中は成立しません。" +
+                                "「予定が入っているあいだだけ変更できる」の関門は、開いたままになります。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }
@@ -326,16 +348,27 @@ fun SettingsScreen(
                     )
 
                     val calendarWindow = gates.filterIsInstance<Gate.CalendarWindow>().firstOrNull()
-                    GateRow(
-                        label = "カレンダーの予定中だけ変更できる",
-                        gate = calendarWindow ?: Gate.CalendarWindow(),
-                        gates = gates,
-                        enabled = calendarGranted,
-                        disabledHint = "先にカレンダーの読み取りを許可してください",
-                        currentDescription = calendarWindow?.describe(),
-                        onConfigure = { editingCalendarWindow = calendarWindow ?: Gate.CalendarWindow() },
-                        onToggle = viewModel::putGate,
-                    )
+                    // 凍結中は新しく掛けさせない。すでに掛けてあるものは、
+                    // 外せるように行だけ残す(凍結中は開いたままなので実害は無いが、
+                    // 「掛けたはずの関門が効いていない」ことは見えていたほうがよい)
+                    if (DopaFeatures.CALENDAR_ENABLED || calendarWindow != null) {
+                        GateRow(
+                            label = "カレンダーの予定中だけ変更できる",
+                            gate = calendarWindow ?: Gate.CalendarWindow(),
+                            gates = gates,
+                            enabled = DopaFeatures.CALENDAR_ENABLED && calendarGranted,
+                            disabledHint = if (DopaFeatures.CALENDAR_ENABLED) {
+                                "先にカレンダーの読み取りを許可してください"
+                            } else {
+                                "カレンダー連携は凍結中。この関門はいま開いたままです"
+                            },
+                            currentDescription = calendarWindow?.describe(),
+                            onConfigure = {
+                                editingCalendarWindow = calendarWindow ?: Gate.CalendarWindow()
+                            },
+                            onToggle = viewModel::putGate,
+                        )
+                    }
 
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(onClick = { showPasswordDialog = true }) {
@@ -477,14 +510,19 @@ fun SettingsScreen(
             Spacer(Modifier.height(16.dp))
             // ここを長押しすると開発ツールへの入口が出る。
             // ふだん目に入らないところに置いてあるだけで、隠しているわけではない。
+            //
+            // 文字が小さいので、当たり判定は padding で広げてある。
+            // 隠す意図はないのに「押せなくて見つからない」のはただの不便。
             Text(
-                "ドパチル",
+                "ドパチル(長押しで開発ツール)",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.combinedClickable(
-                    onClick = {},
-                    onLongClick = { showDevDialog = true },
-                ),
+                modifier = Modifier
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = { showDevDialog = true },
+                    )
+                    .padding(vertical = 12.dp, horizontal = 8.dp),
             )
             Spacer(Modifier.height(32.dp))
         }

@@ -137,7 +137,8 @@ fun ConditionTreeEditor(
             title = { Text("条件を選ぶ") },
             text = {
                 LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                    items(ConditionRegistry.all(), key = { it.id }) { type ->
+                    // 凍結した条件は出さない。保存済みのルールでは引き続き引ける
+                    items(ConditionRegistry.selectable(), key = { it.id }) { type ->
                         Card(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                             onClick = {
@@ -291,6 +292,14 @@ private fun LeafCard(root: ConditionNode, path: NodePath, onChange: (ConditionNo
             )
 
             if (type != null) {
+                if (!type.available) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "この条件はいま凍結中です。設定は残っていますが、成立しません。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 Spacer(Modifier.height(8.dp))
                 ParamEditor(
                     specs = type.params,
