@@ -87,7 +87,37 @@ class UsageLedger(private val zone: ZoneId = ZoneId.systemDefault()) {
                 val from = policy.periodStart(now).atZone(zone).toEpochSecond()
                 return history.count { (start, _) -> start >= from }
             }
+
+            /**
+             * いま開いている区間の手前に空いていた時間。
+             * 現在時刻ではなく**開いた時刻を基準に**測る
+             * (開いたまま経つと隙間が伸びて、途中で条件が外れる)。
+             */
+            override val minutesSinceLastSession: Int?
+                get() {
+                    val start = openStart ?: return null
+                    val previousEnd = history
+                        .filter { (s, _) -> s < start }
+                        .maxOfOrNull { (_, end) -> end }
+                        ?: return null
+                    return ((start - previousEnd) / 60).toInt().coerceAtLeast(0)
+                }
         }
+    }
+
+    /** いま開いている区間を識別する種。開き直すと変わる。 */
+    fun currentSessionSeed(): Long = synchronized(lock) { open?.startSec ?: 0L }
+
+    /** いま前面にあるものの1つ前。無ければ null。 */
+    fun previousProcess(): String? = synchronized(lock) {
+        val current = open ?: return@synchronized null
+        for (index in entries.indices.reversed()) {
+            val entry = entries[index]
+            if (entry === current) continue
+            if (entry.startSec > current.startSec) continue
+            return@synchronized entry.processName.takeIf { it != current.processName }
+        }
+        null
     }
 
     /** アプリごとの使用分数。多い順。 */

@@ -34,9 +34,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.dopachiru.core.action.types.BlockAction
 import com.dopachiru.desktop.Presentation
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
+
+/** 押し切るために打ち込ませる言葉。 */
+private const val RELEASE_PHRASE = "いま見なくていい"
 
 /**
  * 完全封印の画面。Android 版と同じ文言・同じ間で出す。
@@ -51,6 +55,8 @@ fun BlockScreen(
     onOverride: () -> Unit,
 ) = DopaTheme {
     var remaining by remember(block.key) { mutableIntStateOf(block.minSeconds) }
+    var showEffortGate by remember(block.key) { mutableStateOf(false) }
+    var typed by remember(block.key) { mutableStateOf("") }
 
     LaunchedEffect(block.key) {
         remaining = block.minSeconds
@@ -116,7 +122,17 @@ fun BlockScreen(
                 }
                 Spacer(Modifier.height(12.dp))
                 if (block.allowOverride) {
-                    TextButton(onClick = onOverride, enabled = block.canAfford) {
+                    TextButton(
+                        // 1タップで通れる警告は92%が無視される。手を動かさせる
+                        onClick = {
+                            if (block.releaseEffort == BlockAction.Effort.TAP) {
+                                onOverride()
+                            } else {
+                                showEffortGate = true
+                            }
+                        },
+                        enabled = block.canAfford,
+                    ) {
                         Text(
                             if (block.overrideCost > 0) {
                                 "それでも使う(${block.overrideCost}ポイント)"
@@ -154,6 +170,54 @@ fun BlockScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+
+                // 押し切る前のひと手間。1タップで通れるものは事実上そこに無いのと同じ
+                if (showEffortGate) {
+                    Spacer(Modifier.height(16.dp))
+                    if (block.releaseEffort == BlockAction.Effort.TYPE) {
+                        Text(
+                            "「$RELEASE_PHRASE」と打ち込むと進めます",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = typed,
+                            onValueChange = { typed = it },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = onOverride,
+                            enabled = typed.trim() == RELEASE_PHRASE,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                        ) {
+                            Text("それでも使う", modifier = Modifier.padding(vertical = 6.dp))
+                        }
+                    } else {
+                        // Windows では押しっぱなしの判定が素直に取れないので、
+                        // 同じ「意識的な操作」を数え上げで代替する
+                        Text(
+                            "もう一度押すと進めます",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = onOverride,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                        ) {
+                            Text("本当に使う", modifier = Modifier.padding(vertical = 6.dp))
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    TextButton(onClick = { showEffortGate = false; typed = "" }) {
+                        Text("やめておく", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
             }
 
             Spacer(Modifier.height(48.dp))
@@ -180,6 +244,100 @@ fun BlockScreen(
 
 /** これだけ押し続けたら一時停止。うっかりでは通らない程度に長く。 */
 const val ESCAPE_HOLD_SECONDS = 3
+
+/**
+ * 数秒待たせてから、必ず通す画面。
+ *
+ * 押し切りボタンが無いのが肝。拒まれないので反発が起きにくく、
+ * それでいて反射で掴んだ手を一度止められる。
+ */
+@Composable
+fun DelayScreen(delay: Presentation.Delay, onDone: () -> Unit) = DopaTheme {
+    var remaining by remember(delay.key) { mutableIntStateOf(delay.seconds) }
+
+    LaunchedEffect(delay.key) {
+        remaining = delay.seconds
+        while (remaining > 0) {
+            kotlinx.coroutines.delay(1000)
+            remaining -= 1
+        }
+        onDone()
+    }
+
+    Box(
+        modifier = Modifier.fillMaxSize().background(Color(0xFF0B0B12)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier.widthIn(max = 560.dp).padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                delay.label,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(40.dp))
+            Text(
+                delay.message,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(48.dp))
+            Text(
+                "$remaining",
+                fontSize = 56.sp,
+                fontWeight = FontWeight.Light,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                "秒たったら開きます",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (delay.rotationNote.isNotBlank()) {
+                Spacer(Modifier.height(32.dp))
+                Text(
+                    delay.rotationNote,
+                    style = MaterialTheme.typography.labelSmall,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                )
+            }
+        }
+    }
+}
+
+/** 経過時間だけを隅に出す。何も遮らない。 */
+@Composable
+fun SessionTimerScreen(timer: Presentation.Timer) = DopaTheme {
+    Card(
+        modifier = Modifier.fillMaxSize(),
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xCC1E1E2E)),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.End,
+        ) {
+            Text(
+                "${timer.minutes}分",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            if (timer.todayMinutes != null) {
+                Text(
+                    "今日 ${timer.todayMinutes}分",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
 
 /**
  * 罰で閉まっているときの画面。

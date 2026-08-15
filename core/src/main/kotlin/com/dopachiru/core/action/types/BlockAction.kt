@@ -10,6 +10,19 @@ object BlockAction : ActionType {
     const val KEY_MIN_SECONDS = "minSeconds"
     const val KEY_COVER_SYSTEM_BARS = "coverSystemBars"
     const val KEY_ALLOW_OVERRIDE = "allowOverride"
+    const val KEY_RELEASE_EFFORT = "releaseEffort"
+
+    /** 押し切るのに要る手間。 */
+    object Effort {
+        /** ボタンを1回押すだけ。 */
+        const val TAP = "tap"
+
+        /** 3秒押し続ける。 */
+        const val HOLD = "hold"
+
+        /** 決められた言葉を打ち込む。 */
+        const val TYPE = "type"
+    }
 
     override val id = "block"
     override val displayName = "完全封印"
@@ -22,7 +35,7 @@ object BlockAction : ActionType {
             "反省文",
             default = "これを開こうとした理由を、いま一度考える。",
             multiline = true,
-            help = "ブロック画面に出る文章。自分に効く言葉を書く",
+            help = "改行で分けると、開くたびに1つずつ選ばれる。同じ文が続くと慣れて効かなくなる",
         ),
         ParamSpec.IntParam(
             KEY_MIN_SECONDS,
@@ -43,6 +56,19 @@ object BlockAction : ActionType {
             "押し切って使えるようにする",
             default = true,
             help = "オフにすると逃げ道が無くなる。学習予定中は、この設定に関わらず押し切れない",
+        ),
+        // 警告ダイアログの92%は「使い続ける」で無視された(GoalKeeper, IMWUT 2019)。
+        // 1タップで通れるものは、事実上そこに無いのと変わらない。
+        ParamSpec.EnumParam(
+            KEY_RELEASE_EFFORT,
+            "押し切るのに要る手間",
+            options = listOf(
+                ParamSpec.EnumParam.Option(Effort.TAP, "1回押す"),
+                ParamSpec.EnumParam.Option(Effort.HOLD, "3秒押し続ける"),
+                ParamSpec.EnumParam.Option(Effort.TYPE, "言葉を打ち込む"),
+            ),
+            default = Effort.HOLD,
+            help = "1タップで通れる警告は92%が無視される。手を動かさせるほど効く",
         ),
     )
 

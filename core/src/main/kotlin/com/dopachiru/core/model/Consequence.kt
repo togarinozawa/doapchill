@@ -42,6 +42,18 @@ data class Consequence(
     /** [LockScope.EVERYTHING] のときに逃がすタグ。 */
     val lockAllowTags: Set<String> = emptySet(),
 
+    /**
+     * 繰り返すたびに封鎖を長くする。
+     *
+     * GoalKeeper(IMWUT 2019)が比べた3段階のうち、いちばん割が良かったのは
+     * **段階的ロック**(1→5→15→30→60分)だった ── 削減 -50.4分/日で選好52.8%。
+     * いきなり強いロック(-73.7分)は効果こそ最大だが選好13.9%で、
+     * しかも**20名が目標そのものを緩めた**(弱い条件では5名)。
+     *
+     * 1回目は軽く済ませ、繰り返したときだけ重くする。
+     */
+    val lockEscalates: Boolean = false,
+
     /** 破ったときのポイント増減。ふつうは負。null なら設定の既定値。 */
     val breakPoints: Int? = null,
 
@@ -70,6 +82,23 @@ data class Consequence(
                 exceptTags = lockAllowTags,
             )
         }
+    }
+
+    /**
+     * [repeatIndex] 回目(0 始まり)の封鎖の長さ。
+     *
+     * 段階を切っていれば毎回同じ。切っていれば 1→2→4→8 倍と伸びる。
+     * 上限は必ず [MAX_LOCK_MINUTES] で止まる。
+     */
+    fun lockMinutesFor(repeatIndex: Int): Int {
+        if (!lockEscalates || repeatIndex <= 0) {
+            return lockMinutes.coerceAtMost(MAX_LOCK_MINUTES)
+        }
+        // 8回目より先は伸ばさない。Int が溢れるより先に上限で止まるが、
+        // 計算の途中で溢れないよう段数のほうを抑えておく
+        val steps = repeatIndex.coerceAtMost(8)
+        val scaled = lockMinutes.toLong() shl steps
+        return scaled.coerceAtMost(MAX_LOCK_MINUTES.toLong()).toInt()
     }
 
     fun summarize(): String {

@@ -131,7 +131,22 @@ interface BlockLogDao {
 
     @Query("UPDATE block_logs SET overridden = 1 WHERE id = :id")
     suspend fun markOverridden(id: Long)
+
+    /**
+     * ルールごとの押し切り回数。「そのルールに慣れたか」の判定に使う。
+     *
+     * Flow ではなく都度引くのは、対象期間が「いまから遡って1週間」で動き続けるため。
+     * Flow にすると購読した時刻で窓が固定される。
+     */
+    @Query(
+        "SELECT ruleId, COUNT(*) AS count FROM block_logs " +
+            "WHERE overridden = 1 AND atEpochSec >= :sinceEpochSec GROUP BY ruleId"
+    )
+    suspend fun overrideCountsSince(sinceEpochSec: Long): List<RuleOverrideCount>
 }
+
+/** [BlockLogDao.overrideCountsSince] の戻り。 */
+data class RuleOverrideCount(val ruleId: Long, val count: Int)
 
 @Dao
 interface StudyWindowDao {

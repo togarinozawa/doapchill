@@ -18,6 +18,15 @@ interface UsageSnapshot {
     /** policy が定める現在の集計期間に、そのアプリを開いた回数。 */
     fun sessionCountIn(policy: ResetPolicy): Int
 
+    /**
+     * このアプリを前回閉じてから、今回開くまでに空いていた時間(分)。
+     * 記録が無ければ null。
+     *
+     * 「閉じた直後にまた開く」= 目的があって開いたのではない確認行動、を捉えるため。
+     * Tran らの言う "Nothing Specific"(無自覚に掴む)がこれにあたる。
+     */
+    val minutesSinceLastSession: Int? get() = null
+
     companion object {
         /** 何も使っていない状態。テストと、実績がまだ取れていない初回起動時に使う。 */
         val EMPTY: UsageSnapshot = object : UsageSnapshot {

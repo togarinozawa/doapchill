@@ -43,6 +43,7 @@ import com.dopachiru.core.action.ActionRegistry
 import com.dopachiru.core.gate.ChangeKind
 import com.dopachiru.core.model.ConditionTree
 import com.dopachiru.core.model.Rule
+import com.dopachiru.core.preset.PresetGroup
 import com.dopachiru.core.preset.RulePreset
 import com.dopachiru.core.preset.RulePresets
 import com.dopachiru.runtime.DopaRuntime
@@ -242,26 +243,71 @@ private fun PresetPickerDialog(
     onPick: (RulePreset) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    // 弱いものから順に並べる。強い介入ほど効くが、いちばん助けが要る人ほど拒む
+    // (依存傾向が高い群の41.7%が最弱を選好した)。上から目に入る順番が既定になる。
+    val grouped = remember { RulePresets.all.groupBy { it.group } }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("雛形を選ぶ") },
         text = {
             LazyColumn(Modifier.heightIn(max = 440.dp)) {
-                items(RulePresets.all, key = { it.id }) { preset ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        onClick = { onPick(preset) },
-                    ) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text(preset.name, style = MaterialTheme.typography.titleSmall)
-                            Spacer(Modifier.height(2.dp))
-                            Text(
-                                preset.description,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                item {
+                    Text(
+                        "上ほど軽く、下ほど強い措置です。強いものから始めると、" +
+                            "だいたい続かないか、目標のほうを緩めることになります。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                PresetGroup.entries.forEach { group ->
+                    val presets = grouped[group].orEmpty()
+                    if (presets.isEmpty()) return@forEach
+
+                    item(key = "header-${group.name}") {
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            group.label,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            group.help,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                    }
+
+                    items(presets, key = { it.id }) { preset ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            onClick = { onPick(preset) },
+                        ) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text(preset.name, style = MaterialTheme.typography.titleSmall)
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    preset.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                // なぜ効くのかを添える。理由の分かる縛りのほうが守られる
+                                if (preset.evidence.isNotBlank()) {
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(
+                                        preset.evidence,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            .copy(alpha = 0.75f),
+                                    )
+                                }
+                            }
                         }
                     }
                 }

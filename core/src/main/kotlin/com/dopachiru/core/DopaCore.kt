@@ -3,14 +3,20 @@ package com.dopachiru.core
 import com.dopachiru.core.action.ActionRegistry
 import com.dopachiru.core.action.types.BlockAction
 import com.dopachiru.core.action.types.DeclareAction
+import com.dopachiru.core.action.types.DelayAction
+import com.dopachiru.core.action.types.TimerAction
 import com.dopachiru.core.action.types.WarnAction
 import com.dopachiru.core.condition.ConditionRegistry
 import com.dopachiru.core.condition.types.AlwaysCondition
+import com.dopachiru.core.condition.types.AppChainCondition
 import com.dopachiru.core.condition.types.CalendarBusyCondition
+import com.dopachiru.core.condition.types.ChanceCondition
 import com.dopachiru.core.condition.types.ContinuousUsageCondition
 import com.dopachiru.core.condition.types.DayOfWeekCondition
 import com.dopachiru.core.condition.types.DeclaredBudgetCondition
+import com.dopachiru.core.condition.types.HabituationCondition
 import com.dopachiru.core.condition.types.PowerSaveCondition
+import com.dopachiru.core.condition.types.QuickReopenCondition
 import com.dopachiru.core.condition.types.SessionCountCondition
 import com.dopachiru.core.condition.types.StudyPrepCondition
 import com.dopachiru.core.condition.types.StudySessionCondition
@@ -57,12 +63,18 @@ object DopaCore {
             PowerSaveCondition,
             StudySessionCondition,
             StudyPrepCondition,
+            AppChainCondition,
+            QuickReopenCondition,
+            ChanceCondition,
+            HabituationCondition,
         )
 
         ActionRegistry.register(
-            BlockAction,
+            TimerAction,
             WarnAction,
+            DelayAction,
             DeclareAction,
+            BlockAction,
         )
     }
 

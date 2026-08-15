@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.PowerManager
 import com.dopachiru.core.DopaCore
 import com.dopachiru.core.DopaFeatures
+import com.dopachiru.core.action.Rotation
 import com.dopachiru.core.condition.types.CalendarBusyCondition
 import com.dopachiru.core.engine.Decision
 import com.dopachiru.core.engine.EvalContext
@@ -166,6 +167,7 @@ object DopaRuntime {
             // 罰と残高も同じ。再起動で罰が消えるなら罰にならない
             lockouts.warmUp()
             points.warmUp()
+            overrideCounts = stats.overrideCountsByRule()
             usage.purgeOld()
             stats.ensureToday()
         }
@@ -247,6 +249,13 @@ object DopaRuntime {
 
     // ------------------------------------------------------------------
 
+    /**
+     * ルールごとの押し切り回数(直近1週間)。慣れの判定に使う。
+     * 定期処理で入れ替える。判定から同期的に読むのでキャッシュしている。
+     */
+    @Volatile
+    private var overrideCounts: Map<Long, Int> = emptyMap()
+
     private fun buildContext(packageName: String, now: LocalDateTime) = EvalContext(
         now = now,
         packageName = packageName,
@@ -255,6 +264,9 @@ object DopaRuntime {
         study = studyWindows.state(),
         powerSaveMode = isDevicePowerSaving(),
         declaredRemainingMinutes = declarations.remainingMinutes(packageName),
+        previousPackage = usage.previousPackage(),
+        sessionSeed = usage.currentSessionSeed(),
+        overrideCountOf = { ruleId -> overrideCounts[ruleId] ?: 0 },
     )
 
     /**
@@ -295,9 +307,12 @@ object DopaRuntime {
         val consequence = rule.consequence
 
         consequence.resolveTarget(packageName, rule.target)?.let { target ->
+            // 段階を切ってあれば、直近24時間に同じルールで科した回数だけ長くなる。
+            // 1回目から重くしないのは、強い制約は目標そのものを緩めさせるため
+            val repeats = if (consequence.lockEscalates) lockouts.recentCountFor(rule.name) else 0
             lockouts.impose(
                 target = target,
-                minutes = consequence.lockMinutes.coerceAtMost(Consequence.MAX_LOCK_MINUTES),
+                minutes = consequence.lockMinutesFor(repeats),
                 reason = rule.name,
             )
         }
@@ -357,6 +372,27 @@ object DopaRuntime {
 
     /** 学習予定の最中か。押し切りを止めるかどうかの判断に使う。 */
     fun studyInSession(): Boolean = initialized && studyWindows.inSession()
+
+    /** いま開いているセッションの種。画面のキーに混ぜて、開き直しを見分けるため。 */
+    fun sessionSeed(): Long = if (initialized) usage.currentSessionSeed() else 0L
+
+    /**
+     * 改行で分けた候補から1つ選ぶ。同じ使用のあいだは同じものが返る。
+     *
+     * 同じ文が続くと慣れる(固定の介入は露出1日ごとに効果25%減)。
+     * 判定と同じ種を使うので、画面の出し直しで文が入れ替わることもない。
+     */
+    fun rotate(packageName: String, ruleId: Long, text: String, fallback: String): String {
+        if (!initialized) return text.ifBlank { fallback }
+        val ctx = EvalContext(
+            now = now(),
+            packageName = packageName,
+            usage = com.dopachiru.core.engine.UsageSnapshot.EMPTY,
+            sessionSeed = usage.currentSessionSeed(),
+            currentRuleId = ruleId,
+        )
+        return Rotation.pick(text, ctx, fallback)
+    }
 
     // ------------------------------------------------------------------
     // 開発ツールから使うもの。ふだんの動作には関わらない。
@@ -481,6 +517,7 @@ object DopaRuntime {
 
         scope.launch {
             stats.ensureToday()
+            overrideCounts = stats.overrideCountsByRule()
             awardCleanDayIfDue()
             val minutes = usage.totalMinutesIn(ResetPolicy())
             // 値が動いていないのに毎分書きに行かない

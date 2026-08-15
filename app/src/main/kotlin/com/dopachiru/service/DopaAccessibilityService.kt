@@ -15,16 +15,22 @@ import android.view.inputmethod.InputMethodManager
 import com.dopachiru.R
 import com.dopachiru.block.BlockScreen
 import com.dopachiru.block.DeclareScreen
+import com.dopachiru.block.DelayScreen
 import com.dopachiru.block.LockoutScreen
 import com.dopachiru.block.OverlayHost
 import com.dopachiru.block.OverlayMode
 import com.dopachiru.block.SelfDefenseScreen
+import com.dopachiru.block.SessionTimerScreen
 import com.dopachiru.block.UnlockPromptScreen
 import com.dopachiru.block.WarnScreen
+import com.dopachiru.core.action.Rotation
 import com.dopachiru.core.action.types.BlockAction
 import com.dopachiru.core.action.types.DeclareAction
+import com.dopachiru.core.action.types.DelayAction
+import com.dopachiru.core.action.types.TimerAction
 import com.dopachiru.core.action.types.WarnAction
 import com.dopachiru.core.engine.Decision
+import com.dopachiru.core.time.ResetPolicy
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.points.PointReason
@@ -80,6 +86,9 @@ class DopaAccessibilityService : AccessibilityService() {
      * 「無視して使い続けた」は**その一続きにつき1回**と数える。
      */
     private val punishedWarnIgnores = HashSet<String>()
+
+    /** 待ち時間を通したセッション。同じ使用のあいだ出し直さないため。 */
+    private val passedDelays = HashSet<String>()
 
     private val systemReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -334,8 +343,62 @@ class DopaAccessibilityService : AccessibilityService() {
 
             WarnAction.id -> showWarn(pkg, act)
             DeclareAction.id -> showDeclareOrPass(pkg, act)
+            DelayAction.id -> showDelay(pkg, act)
+            TimerAction.id -> showTimer(pkg, act)
             else -> Unit
         }
+    }
+
+    /**
+     * 数秒待たせて、必ず通す。
+     *
+     * 通したあとは同じセッションのあいだ出し直さない。待つたびに出ては
+     * 遅延ではなくロックになってしまう。
+     */
+    private fun showDelay(pkg: String, act: Decision.Act) {
+        val seconds = act.params.int(DelayAction.KEY_SECONDS, 5)
+        val key = "$pkg|delay|${act.rule.id}|${DopaRuntime.sessionSeed()}"
+        if (overlay.currentKey == key) return
+        if (key in passedDelays) return
+
+        val text = act.params.string(DelayAction.KEY_MESSAGE)
+        val message = DopaRuntime.rotate(pkg, act.rule.id, text, "何をしに開いた?")
+        val label = appLabel(pkg)
+
+        DopaRuntime.scope.launch {
+            DopaRuntime.stats.recordBlockShown(pkg, act.rule.id, act.rule.name, act.action.id)
+        }
+
+        overlay.show(key, OverlayMode.BLOCKING) {
+            DelayScreen(
+                appLabel = label,
+                message = message,
+                seconds = seconds,
+                rotationNote = if (Rotation.rotates(text)) Rotation.EXPLANATION else "",
+                onDone = {
+                    passedDelays.add(key)
+                    overlay.hide()
+                },
+            )
+        }
+    }
+
+    /** 経過時間を隅に出し続ける。操作は一切止めない。 */
+    private fun showTimer(pkg: String, act: Decision.Act) {
+        val afterMinutes = act.params.int(TimerAction.KEY_AFTER_MINUTES, 0)
+        val minutes = DopaRuntime.usage.snapshotFor(pkg, DopaRuntime.now()).currentSessionMinutes
+        if (minutes < afterMinutes) return
+
+        val today = if (act.params.bool(TimerAction.KEY_SHOW_TODAY, true)) {
+            DopaRuntime.usage.snapshotFor(pkg, DopaRuntime.now()).usageMinutesIn(ResetPolicy())
+        } else {
+            null
+        }
+
+        // 分が変わるたびにキーが変わる = 表示が更新される
+        val key = "$pkg|timer|${act.rule.id}|$minutes|$today"
+        if (overlay.currentKey == key) return
+        overlay.show(key, OverlayMode.PASS_THROUGH) { SessionTimerScreen(minutes, today) }
     }
 
     private fun showBlock(
@@ -360,6 +423,7 @@ class DopaAccessibilityService : AccessibilityService() {
 
         val cost = DopaRuntime.overrideCost(rule)
         val balance = DopaRuntime.points.currentBalance()
+        val rotated = DopaRuntime.rotate(pkg, ruleId, reflection, "いま開く必要はある?")
 
         // 逃げ道の有無と値段をキーに含める。ブロック画面を出したあとに予定が始まったり
         // 残高が変わったりしたら、同じルールでも出し直して表示を合わせる必要がある。
@@ -375,12 +439,17 @@ class DopaAccessibilityService : AccessibilityService() {
             BlockScreen(
                 appLabel = label,
                 ruleName = ruleName,
-                reflection = reflection,
+                reflection = rotated,
                 minSeconds = minSeconds,
                 allowOverride = canOverride,
                 overrideCost = cost,
                 balance = balance,
                 penaltyNote = penaltyNote(rule),
+                releaseEffort = rule.actionParams.string(
+                    BlockAction.KEY_RELEASE_EFFORT,
+                    BlockAction.Effort.TAP,
+                ),
+                rotationNote = if (Rotation.rotates(reflection)) Rotation.EXPLANATION else "",
                 onAbortStudy = abortWindowId?.let { windowId ->
                     {
                         // 相手に伝えたあと、送り直しを待たずにこちらでも解く。

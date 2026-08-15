@@ -66,7 +66,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi)
             packageName = "Dopachiru"
-            packageVersion = "1.1.1"
+            packageVersion = "1.2.0"
             // WiX の MSI 生成が非 ASCII で転ぶので、ここだけ英語にしてある
             description = "Dopachiru - self-imposed app usage limits"
             vendor = "dopachiru"

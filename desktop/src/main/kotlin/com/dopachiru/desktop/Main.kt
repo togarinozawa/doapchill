@@ -28,9 +28,11 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import com.dopachiru.desktop.ui.BlockScreen
 import com.dopachiru.desktop.ui.DeclareScreen
+import com.dopachiru.desktop.ui.DelayScreen
 import com.dopachiru.desktop.ui.DesktopApp
 import com.dopachiru.desktop.ui.ESCAPE_HOLD_SECONDS
 import com.dopachiru.desktop.ui.LockedScreen
+import com.dopachiru.desktop.ui.SessionTimerScreen
 import com.dopachiru.desktop.ui.WarnScreen
 import kotlinx.coroutines.delay
 
@@ -153,6 +155,27 @@ fun main() = application {
                     onMinimize = { DesktopRuntime.dismissBlock() },
                 )
             }
+        }
+
+        is Presentation.Delay -> OverlayWindow {
+            DelayScreen(delay = current, onDone = { DesktopRuntime.passDelay() })
+        }
+
+        // 何も遮らないので、小さな枠で隅に置くだけ。操作は下に届く
+        is Presentation.Timer -> Window(
+            onCloseRequest = {},
+            title = "ドパチル",
+            undecorated = true,
+            transparent = true,
+            alwaysOnTop = true,
+            focusable = false,
+            resizable = false,
+            state = rememberWindowState(
+                size = DpSize(150.dp, 64.dp),
+                position = WindowPosition(Alignment.TopEnd),
+            ),
+        ) {
+            SessionTimerScreen(current)
         }
 
         is Presentation.Declare -> OverlayWindow {

@@ -83,6 +83,7 @@ value class Params(val json: JsonObject) {
                         is ParamSpec.TextParam -> JsonPrimitive(spec.default)
                         is ParamSpec.EnumParam -> JsonPrimitive(spec.default)
                         is ParamSpec.DayOfWeekParam -> JsonArray(spec.default.map { JsonPrimitive(it) })
+                        is ParamSpec.PackagesParam -> JsonArray(spec.default.map { JsonPrimitive(it) })
                         is ParamSpec.ResetPolicyParam ->
                             JSON.encodeToJsonElement(ResetPolicy.serializer(), spec.default)
                     }

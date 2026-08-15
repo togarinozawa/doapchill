@@ -58,8 +58,30 @@ class LockoutRepository(
             createdAtEpochSec = now,
         )
         cache = cache + lockout
+        imposedLog.add(reason to now)
         scope.launch { dao.insert(lockout.toEntity()) }
     }
+
+    private companion object {
+        /** 段階を数える窓。これより古い封鎖は「別の機会」として数え直す。 */
+        const val ESCALATION_WINDOW_SEC = 24L * 60 * 60
+    }
+
+    /**
+     * 直近24時間に、その理由で何回封鎖したか。段階的に長くするための回数。
+     *
+     * 期限切れも数えるので、キャッシュではなく DB を見たいところだが、
+     * 判定は同期的に呼ばれる。ここは「科した記録」を別に持つ ──
+     * 解けた封鎖も24時間は覚えておく。
+     */
+    fun recentCountFor(reason: String, nowSec: Long = nowSec()): Int {
+        val since = nowSec - ESCALATION_WINDOW_SEC
+        imposedLog.removeAll { (_, at) -> at < since }
+        return imposedLog.count { (name, _) -> name == reason }
+    }
+
+    /** 科した記録。解けたあとも段階を数えるために残す。 */
+    private val imposedLog = java.util.Collections.synchronizedList(ArrayList<Pair<String, Long>>())
 
     /** 期限切れを掃除する。常駐サービスの定期処理から呼ぶ。 */
     fun purgeExpired() {

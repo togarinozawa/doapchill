@@ -118,7 +118,42 @@ class UsageTracker(
                 val from = policy.periodStart(now).atZone(zone).toEpochSecond()
                 return history.count { (start, _) -> start >= from }
             }
+
+            /**
+             * いま開いているセッションの手前に空いていた時間。
+             *
+             * 「開き直し」の判定に使うので、開いている最中でも**開いた時刻を基準に**測る。
+             * 現在時刻から測ると、開いたまま時間が経つほど隙間が伸びていき、
+             * 途中で条件が外れてブロックが勝手に消える。
+             */
+            override val minutesSinceLastSession: Int?
+                get() {
+                    val start = openStart ?: return null
+                    val previousEnd = history
+                        .filter { (s, _) -> s < start }
+                        .maxOfOrNull { (_, end) -> end }
+                        ?: return null
+                    return ((start - previousEnd) / 60).toInt().coerceAtLeast(0)
+                }
         }
+    }
+
+    /** いま開いているセッションを識別する種。開くたびに変わる。 */
+    fun currentSessionSeed(): Long = synchronized(lock) { current?.startSec ?: 0L }
+
+    /**
+     * いま開いているアプリの1つ前に前面にあったアプリ。
+     * ホームやランチャーから開いたなら null(そこは記録していないため)。
+     */
+    fun previousPackage(): String? = synchronized(lock) {
+        val open = current ?: return@synchronized null
+        for (index in sessions.indices.reversed()) {
+            val session = sessions[index]
+            if (session === open) continue
+            if (session.startSec > open.startSec) continue
+            return@synchronized session.packageName.takeIf { it != open.packageName }
+        }
+        null
     }
 
     /** ダッシュボード用。全アプリ合計の使用分数。 */

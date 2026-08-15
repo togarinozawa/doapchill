@@ -1,8 +1,11 @@
 package com.dopachiru.desktop
 
 import com.dopachiru.core.DopaCore
+import com.dopachiru.core.action.Rotation
 import com.dopachiru.core.action.types.BlockAction
 import com.dopachiru.core.action.types.DeclareAction
+import com.dopachiru.core.action.types.DelayAction
+import com.dopachiru.core.action.types.TimerAction
 import com.dopachiru.core.action.types.WarnAction
 import com.dopachiru.core.engine.Decision
 import com.dopachiru.core.engine.EvalContext
@@ -47,6 +50,10 @@ sealed interface Presentation {
         val reflection: String,
         val minSeconds: Int,
         val allowOverride: Boolean,
+        /** 同じ文が続かないよう回している旨の説明。回していなければ空。 */
+        val rotationNote: String = "",
+        /** 押し切るのに要る手間。 */
+        val releaseEffort: String = BlockAction.Effort.TAP,
         /** 押し切るのに要るポイント。0 なら代金を取らない。 */
         val overrideCost: Int = 0,
         val balance: Int = 0,
@@ -66,6 +73,22 @@ sealed interface Presentation {
         val label: String,
         val reason: String,
         val untilEpochSec: Long,
+    ) : Presentation
+
+    /** 数秒待たせて必ず通す。押し切りボタンは無い。 */
+    data class Delay(
+        override val key: String,
+        val label: String,
+        val message: String,
+        val seconds: Int,
+        val rotationNote: String,
+    ) : Presentation
+
+    /** 経過時間だけを隅に出す。操作は止めない。 */
+    data class Timer(
+        override val key: String,
+        val minutes: Int,
+        val todayMinutes: Int?,
     ) : Presentation
 
     data class Warn(override val key: String, val message: String) : Presentation
@@ -145,6 +168,18 @@ object DesktopRuntime {
      * 「無視して使い続けた」は**その一続きにつき1回**と数える。
      */
     private val punishedWarnIgnores = HashSet<String>()
+
+    /**
+     * ルールごとの押し切り回数。慣れの判定に使う。
+     * Android は記録テーブルから引くが、こちらは押し切った時点で数える。
+     */
+    private val overrideCounts = HashMap<Long, Int>()
+
+    /** 待ち時間を通したセッション。同じ使用のあいだ出し直さないため。 */
+    private val passedDelays = HashSet<String>()
+
+    /** 段階的な封鎖のために、直近に科した記録を覚えておく。 */
+    private val imposedLog = ArrayList<Pair<String, Long>>()
 
     /**
      * 宣言超過の罰を科し終えた組み合わせ。
@@ -262,7 +297,10 @@ object DesktopRuntime {
 
         // 罰を先に科してから猶予を置く。順番が逆だと、
         // 罰で閉まる前に猶予が効いて素通りになる
-        heldRule?.let { punish(held.processName, it, PointReason.OVERRIDE) }
+        heldRule?.let {
+            overrideCounts[it.id] = (overrideCounts[it.id] ?: 0) + 1
+            punish(held.processName, it, PointReason.OVERRIDE)
+        }
         overrideUntil[held.processName] =
             System.currentTimeMillis() + _settings.value.overrideGraceMinutes * 60_000L
         _presentation.value = null
@@ -287,8 +325,17 @@ object DesktopRuntime {
         val policy = _settings.value.pointPolicy
 
         consequence.resolveTarget(processName, rule.target)?.let { target ->
-            val minutes = consequence.lockMinutes.coerceAtMost(Consequence.MAX_LOCK_MINUTES)
             val now = nowSec()
+            // 段階を切ってあれば、直近24時間に同じルールで科した回数だけ長くなる
+            imposedLog.removeAll { (_, at) -> at < now - ESCALATION_WINDOW_SEC }
+            val repeats = if (consequence.lockEscalates) {
+                imposedLog.count { (name, _) -> name == rule.name }
+            } else {
+                0
+            }
+            val minutes = consequence.lockMinutesFor(repeats)
+            imposedLog.add(rule.name to now)
+
             _lockouts.value = _lockouts.value + Lockout(
                 target = target,
                 untilEpochSec = now + minutes * 60L,
@@ -363,6 +410,14 @@ object DesktopRuntime {
     fun clearLockouts() {
         _lockouts.value = emptyList()
         Stores.lockouts.save(emptyList())
+    }
+
+    /** 待ち時間が終わった。同じ使用のあいだは出し直さない。 */
+    fun passDelay() {
+        val key = _presentation.value?.key ?: return
+        passedDelays.add(key)
+        _presentation.value = null
+        releaseHold()
     }
 
     fun declare(processName: String, minutes: Int, reason: String) {
@@ -496,6 +551,9 @@ object DesktopRuntime {
             packageName = fg.processName,
             usage = ledger.snapshotFor(fg.processName),
             declaredRemainingMinutes = declarations.remainingMinutes(fg.processName),
+            previousPackage = ledger.previousProcess(),
+            sessionSeed = ledger.currentSessionSeed(),
+            overrideCountOf = { ruleId -> overrideCounts[ruleId] ?: 0 },
         )
 
         when (val decision = engine.decide(file.rules, context) { file.tags[it] ?: emptySet() }) {
@@ -559,6 +617,7 @@ object DesktopRuntime {
                 reflection = act.params.string(BlockAction.KEY_REFLECTION),
                 minSeconds = act.params.int(BlockAction.KEY_MIN_SECONDS, 15),
                 allowOverride = act.params.bool(BlockAction.KEY_ALLOW_OVERRIDE, true),
+                params = act.params,
             )
 
             WarnAction.id -> {
@@ -581,6 +640,45 @@ object DesktopRuntime {
                     delay(seconds * 1000L)
                     if (_presentation.value?.key == key) _presentation.value = null
                 }
+            }
+
+            DelayAction.id -> {
+                val key = "${fg.processName}|delay|${act.rule.id}|${ledger.currentSessionSeed()}"
+                if (_presentation.value?.key == key || key in passedDelays) return
+
+                val text = act.params.string(DelayAction.KEY_MESSAGE)
+                val ctx = EvalContext(
+                    now = LocalDateTime.now(),
+                    packageName = fg.processName,
+                    usage = ledger.snapshotFor(fg.processName),
+                    sessionSeed = ledger.currentSessionSeed(),
+                    currentRuleId = act.rule.id,
+                )
+                heldApp = fg
+                heldRule = act.rule
+                _presentation.value = Presentation.Delay(
+                    key = key,
+                    label = fg.label,
+                    message = Rotation.pick(text, ctx, "何をしに開いた?"),
+                    seconds = act.params.int(DelayAction.KEY_SECONDS, 5),
+                    rotationNote = if (Rotation.rotates(text)) Rotation.EXPLANATION else "",
+                )
+            }
+
+            TimerAction.id -> {
+                val snapshot = ledger.snapshotFor(fg.processName)
+                val minutes = snapshot.currentSessionMinutes
+                if (minutes < act.params.int(TimerAction.KEY_AFTER_MINUTES, 0)) return
+
+                val today = if (act.params.bool(TimerAction.KEY_SHOW_TODAY, true)) {
+                    snapshot.usageMinutesIn(ResetPolicy())
+                } else {
+                    null
+                }
+                val key = "${fg.processName}|timer|${act.rule.id}|$minutes|$today"
+                if (_presentation.value?.key == key) return
+                // 押さえない。何も止めないので heldApp は取らない
+                _presentation.value = Presentation.Timer(key, minutes, today)
             }
 
             DeclareAction.id -> {
@@ -614,6 +712,7 @@ object DesktopRuntime {
                                 .ifBlank { "宣言した時間は終わり。" },
                             minSeconds = 15,
                             allowOverride = true,
+                            params = act.params,
                         )
                     }
 
@@ -632,6 +731,7 @@ object DesktopRuntime {
         reflection: String,
         minSeconds: Int,
         allowOverride: Boolean,
+        params: com.dopachiru.core.param.Params,
     ) {
         val policy = _settings.value.pointPolicy
         val cost = policy.overrideCost(rule.consequence.breakPoints)
@@ -652,12 +752,26 @@ object DesktopRuntime {
         }
         heldApp = fg
         heldRule = rule
+
+        val ctx = EvalContext(
+            now = LocalDateTime.now(),
+            packageName = fg.processName,
+            usage = ledger.snapshotFor(fg.processName),
+            sessionSeed = ledger.currentSessionSeed(),
+            currentRuleId = rule.id,
+        )
+
         _presentation.value = Presentation.Block(
             key = key,
             processName = fg.processName,
             label = fg.label,
             ruleName = rule.name,
-            reflection = reflection,
+            reflection = Rotation.pick(reflection, ctx, "いま開く必要はある?"),
+            rotationNote = if (Rotation.rotates(reflection)) Rotation.EXPLANATION else "",
+            releaseEffort = params.string(
+                BlockAction.KEY_RELEASE_EFFORT,
+                BlockAction.Effort.TAP,
+            ),
             minSeconds = minSeconds,
             allowOverride = allowOverride,
             overrideCost = cost,
@@ -712,6 +826,9 @@ object DesktopRuntime {
 
     /** ポイント履歴の保持件数。増減の理由を辿れれば足りるので、際限なくは持たない。 */
     private const val POINT_HISTORY_LIMIT = 500
+
+    /** 段階を数える窓。これより古い封鎖は「別の機会」として数え直す。 */
+    private const val ESCALATION_WINDOW_SEC = 24L * 60 * 60
 
     /** 「やめる」を押したあと、そのアプリを見逃す時間。離れる隙を作るため。 */
     private const val DISMISS_GRACE_MS = 6_000L

@@ -11,17 +11,25 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.dopachiru.core.param.ParamSpec
@@ -140,6 +148,11 @@ private fun ParamField(
                 onChange = { onValueChange(spec.key, it.toList()) },
             )
 
+            is ParamSpec.PackagesParam -> PackagesPicker(
+                selected = params.stringSet(spec.key, spec.default),
+                onChange = { onValueChange(spec.key, it.toList()) },
+            )
+
             is ParamSpec.TextParam -> OutlinedTextField(
                 value = params.string(spec.key, spec.default),
                 onValueChange = { onValueChange(spec.key, it) },
@@ -208,6 +221,47 @@ fun NumberStepper(
         ) {
             Icon(Icons.Filled.Add, contentDescription = "増やす", modifier = Modifier.size(20.dp))
         }
+    }
+}
+
+/**
+ * 条件の中でアプリを選ぶ。ルールの「対象アプリ」とは別物。
+ * 「直前に使っていたアプリ」のように、条件がアプリを指すときに使う。
+ */
+@Composable
+private fun PackagesPicker(selected: Set<String>, onChange: (Set<String>) -> Unit) {
+    val context = LocalContext.current
+    var showPicker by remember { mutableStateOf(false) }
+
+    Column {
+        if (selected.isEmpty()) {
+            Text(
+                "まだ選ばれていません",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            selected.forEach { pkg ->
+                AssistChip(
+                    onClick = { onChange(selected - pkg) },
+                    label = { Text(InstalledApps.labelOf(context, pkg)) },
+                    trailingIcon = { Icon(Icons.Filled.Close, contentDescription = "外す") },
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = { showPicker = true }) { Text("アプリを選ぶ") }
+    }
+
+    if (showPicker) {
+        AppPickerDialog(
+            selected = selected,
+            onToggle = { pkg ->
+                onChange(if (pkg in selected) selected - pkg else selected + pkg)
+            },
+            onDismiss = { showPicker = false },
+        )
     }
 }
 

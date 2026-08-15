@@ -23,6 +23,18 @@ class StatsRepository(
     /** 今日から遡って「守れた日」が何日続いているか。 */
     val streak: Flow<Int> = dayStatDao.observeRecent(400).map { days -> computeStreak(days) }
 
+    /**
+     * ルールごとの、直近[days]日の押し切り回数。
+     *
+     * 「このルールはもう効いていない」を測るための唯一の材料。
+     * 固定の介入は露出1日ごとに効果が25%落ちるので、効かなくなったことに
+     * 気づく手立てが無いと、ずっと効かないまま置かれる。
+     */
+    suspend fun overrideCountsByRule(days: Int = 7): Map<Long, Int> {
+        val since = System.currentTimeMillis() / 1000 - days * 24L * 60 * 60
+        return blockLogDao.overrideCountsSince(since).associate { it.ruleId to it.count }
+    }
+
     /** その日の集計。無ければ null。 */
     suspend fun dayStat(epochDay: Long): DayStatEntity? = dayStatDao.get(epochDay)
 

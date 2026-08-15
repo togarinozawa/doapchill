@@ -71,6 +71,19 @@ sealed interface ParamSpec {
         override val help: String = "",
     ) : ParamSpec
 
+    /**
+     * アプリの集合。パッケージ名(Windows では実行ファイル名)を保持する。
+     *
+     * ルールの「対象アプリ」とは別物。条件の中でアプリを指すために要る
+     * (「直前に使っていたのがこのアプリなら」など)。
+     */
+    data class PackagesParam(
+        override val key: String,
+        override val label: String,
+        val default: Set<String> = emptySet(),
+        override val help: String = "",
+    ) : ParamSpec
+
     /** 選択肢から1つ。value が保存され、label が表示される。 */
     data class EnumParam(
         override val key: String,
