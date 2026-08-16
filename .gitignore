@@ -24,6 +24,16 @@ Desktop.ini
 *.keystore
 keystore.properties
 
+# SSH 鍵。作業ディレクトリには置かない(置き場所は ~/.ssh)。
+# これは方針が破れたときの最後の網 ── このリポジトリは公開なので、
+# 事故で紛れ込んだものを push すると取り返しがつかない。
+.ssh/
+id_rsa
+id_ecdsa
+id_ed25519
+*.pem
+*.ppk
+
 # 個人的なメモ。手元には残すが公開しない
 dopa.md
 dopa_design_doc.md
