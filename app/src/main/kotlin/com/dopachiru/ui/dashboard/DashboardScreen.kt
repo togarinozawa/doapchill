@@ -77,17 +77,9 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
     private val _breakdown = MutableStateFlow<List<Pair<String, Int>>>(emptyList())
     val breakdown: StateFlow<List<Pair<String, Int>>> = _breakdown.asStateFlow()
 
-    init {
-        viewModelScope.launch {
-            while (true) {
-                val policy = ResetPolicy()
-                _todayMinutes.value = DopaRuntime.usage.totalMinutesIn(policy)
-                _breakdown.value = DopaRuntime.usage.breakdownIn(policy).take(8)
-                _passUntil.value = DopaRuntime.passUntil()
-                delay(15_000)
-            }
-        }
-    }
+    /** 解禁券で制限が止まっている期限(秒)。0 なら効いていない。 */
+    private val _passUntil = MutableStateFlow(0L)
+    val passUntil: StateFlow<Long> = _passUntil.asStateFlow()
 
     val balance: StateFlow<Int> = DopaRuntime.points.balance
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
@@ -101,9 +93,25 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
     val lockouts: StateFlow<List<Lockout>> = DopaRuntime.lockouts.active
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /** 解禁券で制限が止まっている期限(秒)。0 なら効いていない。 */
-    private val _passUntil = MutableStateFlow(0L)
-    val passUntil: StateFlow<Long> = _passUntil.asStateFlow()
+    /**
+     * ここは**必ず全部のプロパティ宣言より下に置くこと**。
+     *
+     * viewModelScope は `Dispatchers.Main.immediate` なので、メインスレッドから
+     * 作られたこの launch は**予約されずにその場で走りきる**。
+     * init より下で宣言したプロパティはこの時点でまだ null で、触った瞬間に落ちる。
+     * (0.6.0〜0.7.1 の `_passUntil` がこれで、ダッシュボードが開けなくなっていた)
+     */
+    init {
+        viewModelScope.launch {
+            while (true) {
+                val policy = ResetPolicy()
+                _todayMinutes.value = DopaRuntime.usage.totalMinutesIn(policy)
+                _breakdown.value = DopaRuntime.usage.breakdownIn(policy).take(8)
+                _passUntil.value = DopaRuntime.passUntil()
+                delay(15_000)
+            }
+        }
+    }
 
     fun buyPass(onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
