@@ -14,10 +14,18 @@ android {
 
     defaultConfig {
         applicationId = "com.dopachiru"
-        minSdk = 31
+        /**
+         * Android 10。手持ちのうち一番古い AQUOS R2 SH-03K が
+         * 2020年3月の更新で Android 10 に上がったきり打ち止めなので、そこに合わせている。
+         *
+         * ここを下げるときに効いてくるもの:
+         *  - 29 未満: `AppOpsManager.unsafeCheckOpNoThrow`(AppUsageRanking)が無い
+         *  - 26 未満: core が使う java.time に脱糖(desugaring)が要る
+         */
+        minSdk = 29
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.7.0"
+        versionCode = 11
+        versionName = "0.7.1"
     }
 
     signingConfigs {

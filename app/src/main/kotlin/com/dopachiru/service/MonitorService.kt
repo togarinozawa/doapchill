@@ -6,6 +6,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.dopachiru.DopaApplication
@@ -71,11 +72,17 @@ class MonitorService : Service() {
             .setContentIntent(open)
             .build()
 
-        startForeground(
-            NOTIFICATION_ID,
-            notification,
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
-        )
+        // 型の指定が要るのは Android 14 以降。それより前に specialUse(14 で足された値)を
+        // 渡すと、端末側が知らない型を受け取ることになるので渡さない。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
     }
 
     companion object {

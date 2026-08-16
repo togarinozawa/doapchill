@@ -2,9 +2,31 @@
 
 ドーパミン依存的なスマホ使用習慣からの立ち直りを支援する、個人用のアプリ使用制限アプリ。
 
-- 対象: Android 12 (API 31) 以上 / targetSdk 36 (Android 16)
+- 対象: Android 10 (API 29) 以上 / targetSdk 36 (Android 16)
 - 配布: 個人用サイドロード
 - パッケージ名: `com.dopachiru`
+
+### 対応バージョンの決めかた
+
+手持ちで一番古い **AQUOS R2 SH-03K** が
+[2020年3月の更新で Android 10 に上がったきり打ち止め](https://k-tai.sharp.co.jp/support/osv/docomo/osv10/index.html)
+なので、そこに合わせて **API 29** にしてあります。
+**dtab Compact d-42A** は Android 11 出荷・
+[2022年11月に Android 12](https://www.docomo.ne.jp/support/product_update/d42a/20221101.html)
+なので、更新の当たっていない 11 のままでも入ります。
+
+古い端末に向けて振る舞いを変えているのは1か所だけです。
+
+| | 効く範囲 | 古い端末での扱い |
+|---|---|---|
+| `foregroundServiceType="specialUse"` | Android 14 以降 | 型を渡さずに常駐する(14 未満は型の指定自体が不要) |
+| `<property>` / `dataExtractionRules` | Android 12 以降 | 端末が知らない要素として読み飛ばされる。`allowBackup="false"` は全バージョンで効く |
+| `POST_NOTIFICATIONS` | Android 13 以降 | 要求しない(古い端末では通知は既定で出る) |
+
+さらに下げるときに効いてくるもの:
+
+- **API 29 未満** — `AppOpsManager.unsafeCheckOpNoThrow` が無い(使用状況の許可判定)。旧 `checkOpNoThrow` で代替できる
+- **API 26 未満** — `core` が使う `java.time` に脱糖(desugaring)が要る
 
 ---
 
@@ -58,10 +80,13 @@ adb install -r dist/dopachiru-0.1.0-minified.apk
 > Play ストアに出さないので debug キーストアで署名しています。
 > 同じ鍵で署名し続けるかぎり、アンインストールせずに上書き更新できます。
 
-### ⚠ 導入時にほぼ確実に詰まるところ
+### ⚠ 導入時にほぼ確実に詰まるところ(Android 13 以降のみ)
 
 **Android 13 以降、ストア以外から入れたアプリはユーザー補助(Accessibility)を有効にできません。**
 設定画面でスイッチが灰色になり、押しても反応しません。
+
+> Android 12 以前(SH-03K・d-42A はどちらもここ)にこの制限はありません。
+> 設定 → ユーザー補助 から普通に ON にできるので、以下は読み飛ばして構いません。
 
 adb が使えるなら、これが一番速い:
 
