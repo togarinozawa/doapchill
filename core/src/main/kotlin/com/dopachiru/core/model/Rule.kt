@@ -26,15 +26,33 @@ data class Target(
     val matchAll: Boolean = false,
     val exceptPackages: Set<String> = emptySet(),
     val exceptTags: Set<String> = emptySet(),
+
+    /**
+     * URL の指定。ブラウザ相手のときだけ効く。書き方は [SitePattern]。
+     *
+     * パッケージ名と**同じ列に並ぶ**(和で足される)。ブラウザを対象に足す必要は
+     * ない ── 「youtube.com/shorts」とだけ書けば、そのページを開いたときに当たる。
+     */
+    val sites: Set<String> = emptySet(),
+    val exceptSites: Set<String> = emptySet(),
 ) {
-    fun matches(packageName: String, tagsOfApp: Set<String>): Boolean {
+    /**
+     * @param url いま見ているページ。ブラウザでなければ null。
+     *   null のとき [sites] は**当たらない**。URL が取れないことを
+     *   「当たらない」ではなく「当たる」に倒すと、ブラウザ以外のアプリまで
+     *   サイト規則で巻き込む。
+     */
+    fun matches(packageName: String, tagsOfApp: Set<String>, url: String? = null): Boolean {
         if (packageName in exceptPackages) return false
         if (exceptTags.any { it in tagsOfApp }) return false
+        if (SitePattern.matchesAny(exceptSites, url)) return false
         if (matchAll) return true
-        return packageName in packages || tags.any { it in tagsOfApp }
+        if (packageName in packages || tags.any { it in tagsOfApp }) return true
+        return SitePattern.matchesAny(sites, url)
     }
 
-    val isEmpty: Boolean get() = !matchAll && packages.isEmpty() && tags.isEmpty()
+    val isEmpty: Boolean
+        get() = !matchAll && packages.isEmpty() && tags.isEmpty() && sites.isEmpty()
 }
 
 /**

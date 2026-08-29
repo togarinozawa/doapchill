@@ -22,6 +22,7 @@ import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.LockScope
 import com.dopachiru.core.model.Rule
+import com.dopachiru.core.model.SiteCatalog
 import com.dopachiru.core.model.Target
 import com.dopachiru.core.param.Params
 import com.dopachiru.core.time.ResetPolicy
@@ -567,6 +568,65 @@ object RulePresets {
                 ),
             )
         },
+
+        // ---- URL で止めるもの ------------------------------------------
+        // アプリを選ばせないので allowEmptyApps = true。
+        // 対象はパッケージ名ではなく URL 側に入っている。
+
+        RulePreset(
+            id = "site_shorts",
+            name = "短い動画だけ止める",
+            description = "YouTube のショート・TikTok・Instagram のリールだけを塞ぐ。" +
+                "YouTube の通常の動画や検索は通るので、調べ物には使えるまま。",
+            group = PresetGroup.TRIGGER,
+            evidence = "同じサイトでも害の濃さは一様でない。" +
+                "全部止めると必要な用まで巻き添えになり、結局ルールごと外される。",
+            allowEmptyApps = true,
+        ) {
+            rule(
+                name = "短い動画だけ止める",
+                packages = emptySet(),
+                sites = SiteCatalog.SHORT_VIDEO.patterns.toSet(),
+                conditions = emptyList(),
+                actionId = BlockAction.id,
+                actionParams = Params.of(
+                    BlockAction.KEY_REFLECTION to
+                        "短いのを1本、で終わったことがない。\n" +
+                        "いま見たいのは中身? それとも次が来ること?\n" +
+                        "スクロールを止めたくて、ここに来たはずだった。",
+                    BlockAction.KEY_MIN_SECONDS to 10,
+                ),
+            )
+        },
+
+        RulePreset(
+            id = "site_social_night",
+            name = "夜はSNSを開かない",
+            description = "23時から6時まで、SNS のページを塞ぐ。" +
+                "眠る前のスクロールは、翌日の分まで持っていく。",
+            group = PresetGroup.LIMIT,
+            evidence = "就寝前の使用は入眠を遅らせ、翌日の自己制御そのものを弱める。",
+            allowEmptyApps = true,
+        ) {
+            rule(
+                name = "夜はSNSを開かない",
+                packages = emptySet(),
+                sites = SiteCatalog.SOCIAL.patterns.toSet(),
+                conditions = listOf(
+                    leaf(
+                        TimeRangeCondition.id,
+                        TimeRangeCondition.KEY_START to 23 * 60,
+                        TimeRangeCondition.KEY_END to 6 * 60,
+                    ),
+                ),
+                actionId = BlockAction.id,
+                actionParams = Params.of(
+                    BlockAction.KEY_REFLECTION to "明日の自分から借りている時間。",
+                    BlockAction.KEY_MIN_SECONDS to 20,
+                    BlockAction.KEY_COVER_SYSTEM_BARS to true,
+                ),
+            )
+        },
     )
 
     private fun leaf(typeId: String, vararg params: Pair<String, Any?>): ConditionNode.Leaf =
@@ -579,9 +639,10 @@ object RulePresets {
         actionId: String,
         actionParams: Params,
         consequence: Consequence = Consequence.NONE,
+        sites: Set<String> = emptySet(),
     ): Rule = Rule(
         name = name,
-        target = Target(packages = packages),
+        target = Target(packages = packages, sites = sites),
         condition = ConditionNode.AllOf(conditions),
         actionId = actionId,
         actionParams = actionParams,

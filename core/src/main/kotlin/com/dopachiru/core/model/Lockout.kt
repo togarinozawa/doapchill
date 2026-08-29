@@ -41,8 +41,9 @@ object Lockouts {
         packageName: String,
         tagsOfApp: Set<String>,
         nowSec: Long,
+        url: String? = null,
     ): Lockout? = all
-        .filter { it.isActiveAt(nowSec) && it.target.matches(packageName, tagsOfApp) }
+        .filter { it.isActiveAt(nowSec) && it.target.matches(packageName, tagsOfApp, url) }
         .maxByOrNull { it.untilEpochSec }
 
     /** 期限の切れたものを落とす。 */

@@ -15,6 +15,15 @@ data class EvalContext(
     /** 今フォアグラウンドにあるアプリのパッケージ名。 */
     val packageName: String,
 
+    /**
+     * いま見ているページの URL。ブラウザ以外では null。
+     *
+     * ブラウザは1つのアプリなので、これが無いと「YouTube のショートだけ」が
+     * 書けない。取れなかったときは null のままにすること ── 空文字にすると
+     * 「URL は取れたが何にも当たらない」と区別が付かなくなる。
+     */
+    val url: String? = null,
+
     /** そのアプリの使用実績。 */
     val usage: UsageSnapshot,
 
