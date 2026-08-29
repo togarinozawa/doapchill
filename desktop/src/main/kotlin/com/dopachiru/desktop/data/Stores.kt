@@ -33,6 +33,17 @@ data class DesktopSettings(
 
     /** 解禁券で制限が止まっている期限(秒)。過ぎれば勝手に戻る。 */
     val passUntilSec: Long = 0L,
+
+    /** ブラウザ拡張からの URL 受け口を開けるか。 */
+    val bridgeEnabled: Boolean = true,
+
+    /**
+     * 拡張と分け合う合言葉。
+     *
+     * 空なら「まだ繋いでいない」。設定から「つなぐ」を押した2分のあいだだけ
+     * 配られるので、ここが埋まっている = 一度は自分の手で繋いだ、という意味になる。
+     */
+    val bridgeToken: String = "",
 )
 
 @Serializable

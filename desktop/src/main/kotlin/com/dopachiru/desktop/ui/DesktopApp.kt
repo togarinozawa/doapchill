@@ -20,6 +20,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -498,6 +499,94 @@ private fun PointCard(
 
 // ----------------------------------------------------------------------
 
+/** 拡張から最後に連絡が来てから、これを過ぎたら「止まっているかも」と出す(秒)。 */
+private const val FRESH_SEC = 180L
+
+/**
+ * ブラウザ拡張とのつなぎ。
+ *
+ * URL は本体が判定するので、ここで繋がっていないと
+ * 「youtube.com/shorts を止める」ルールは一切効かない。
+ * 効いていないことに気づけるよう、状態をそのまま出す。
+ */
+@Composable
+private fun BrowserBridgeSection() {
+    val settings by DesktopRuntime.settings.collectAsState()
+    val status by DesktopRuntime.bridgeStatus.collectAsState()
+
+    Text("ブラウザ拡張", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "URL でページを止めるには、Chrome の拡張が要ります。判定はこちら側で行うので、" +
+            "時間帯・連続時間・ポイント・罰は、アプリのときとまったく同じに効きます。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(12.dp))
+
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("受け口を開ける", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "127.0.0.1 だけで待ち受けます。同じ機械の中からしか触れません。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = settings.bridgeEnabled,
+            onCheckedChange = { DesktopRuntime.setBridgeEnabled(it) },
+        )
+    }
+
+    if (settings.bridgeEnabled) {
+        Spacer(Modifier.height(12.dp))
+
+        val seenSecAgo = status.lastSeenSecAgo
+        val line = when {
+            !status.running -> "ポートを掴めませんでした"
+            status.pairing -> "つなぐのを待っています(2分)。Chrome の拡張の設定で「本体につなぐ」を押してください"
+            !status.paired -> "まだ繋いでいません"
+            seenSecAgo == null -> "繋いであります。まだ拡張から連絡はありません"
+            seenSecAgo < FRESH_SEC -> "つながっています"
+            else -> "繋いでありますが、しばらく連絡がありません(拡張が止まっているかもしれません)"
+        }
+        val good = status.running && status.paired && (seenSecAgo ?: Long.MAX_VALUE) < FRESH_SEC
+
+        Text(
+            line,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (good) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.error
+            },
+        )
+
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { DesktopRuntime.startPairing() }, enabled = status.running) {
+                Text(if (status.paired) "つなぎ直す" else "ブラウザ拡張とつなぐ")
+            }
+            if (status.paired) {
+                OutlinedButton(onClick = { DesktopRuntime.unpairBridge() }) { Text("縁を切る") }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "拡張が黙ってから2分半で、URL の規則は自動的に外れます(= 通ります)。" +
+                "拡張が落ちただけでブラウザが使えなくなるほうが、取り返しがつかないためです。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 @Composable
 private fun SettingsTab() {
     val settings by DesktopRuntime.settings.collectAsState()
@@ -554,6 +643,12 @@ private fun SettingsTab() {
                 onCheckedChange = { DesktopRuntime.updateSettings { s -> s.copy(paused = it) } },
             )
         }
+
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(20.dp))
+
+        BrowserBridgeSection()
 
         Spacer(Modifier.height(20.dp))
         HorizontalDivider()

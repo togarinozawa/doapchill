@@ -17,12 +17,14 @@ import com.dopachiru.core.model.Rule
 import com.dopachiru.core.points.PointEvent
 import com.dopachiru.core.points.PointReason
 import com.dopachiru.core.time.ResetPolicy
+import com.dopachiru.desktop.bridge.LocalBridge
 import com.dopachiru.desktop.data.DeclarationTracker
 import com.dopachiru.desktop.data.DesktopSettings
 import com.dopachiru.desktop.data.RuleFile
 import com.dopachiru.desktop.data.Stores
 import com.dopachiru.desktop.data.UsageLedger
 import com.dopachiru.desktop.platform.BlockStrength
+import com.dopachiru.desktop.platform.Browsers
 import com.dopachiru.desktop.platform.ForegroundApp
 import com.dopachiru.desktop.platform.ForegroundWatcher
 import com.dopachiru.desktop.platform.ProtectedProcesses
@@ -199,6 +201,101 @@ object DesktopRuntime {
 
     private val ownPid: Long = ProcessHandle.current().pid()
 
+    // ---- ブラウザ拡張との橋 ------------------------------------------
+
+    /**
+     * 拡張が最後に報せてきた URL と、その時刻。
+     *
+     * 時刻を持つのは、**拡張が黙ったときに開けるため**。URL だけを覚えていると、
+     * 拡張が落ちた瞬間のページで判定が凍りつき、別のページに移っても
+     * 塞がったままになる。古い報せは無かったことにして通す。
+     */
+    @Volatile
+    private var browserUrl: String? = null
+
+    @Volatile
+    private var browserUrlAtMs: Long = 0L
+
+    private val bridge = LocalBridge(
+        onUrl = ::onBrowserUrl,
+        tokenStore = object : LocalBridge.TokenStore {
+            override fun current(): String = _settings.value.bridgeToken
+            override fun save(token: String) = updateSettings { it.copy(bridgeToken = token) }
+        },
+    )
+
+    /** 拡張とのつながり具合。設定画面に出す。 */
+    data class BridgeStatus(
+        val running: Boolean = false,
+        val port: Int = 0,
+        val paired: Boolean = false,
+        val pairing: Boolean = false,
+        /** 最後に拡張から話しかけられてからの秒数。一度も無ければ null。 */
+        val lastSeenSecAgo: Long? = null,
+    )
+
+    private val _bridgeStatus = MutableStateFlow(BridgeStatus())
+    val bridgeStatus: StateFlow<BridgeStatus> = _bridgeStatus.asStateFlow()
+
+    /**
+     * 拡張から「いまこの URL を見ている」と報せが来たとき。
+     *
+     * ここで評価まで済ませて、いま画面に出ているものをそのまま返す。
+     * 返り値は拡張がタブを退避させるためのもの ── 本体の全画面は音を止められないので、
+     * 動画が裏で鳴り続けるのを拡張側に止めてもらう必要がある。
+     */
+    @Synchronized
+    private fun onBrowserUrl(url: String?): LocalBridge.Verdict {
+        browserUrl = url
+        browserUrlAtMs = System.currentTimeMillis()
+
+        val fg = _foreground.value ?: return LocalBridge.Verdict()
+        // 前面がブラウザでなければ、URL は判定に関わらない
+        if (fg.processName !in Browsers) return LocalBridge.Verdict()
+
+        evaluate(fg)
+
+        return when (val p = _presentation.value) {
+            is Presentation.Block -> LocalBridge.Verdict(true, p.ruleName)
+            is Presentation.Locked -> LocalBridge.Verdict(true, p.reason)
+            is Presentation.Delay -> LocalBridge.Verdict(true, "少し待つ")
+            else -> LocalBridge.Verdict()
+        }
+    }
+
+    /** 設定から「つなぐ」を押したとき。2分だけ合言葉の窓が開く。 */
+    fun startPairing() {
+        if (!bridge.isRunning) bridge.start()
+        bridge.openPairing()
+        refreshBridgeStatus()
+    }
+
+    /** 拡張との縁を切る。合言葉を捨てるので、次は繋ぎ直しになる。 */
+    fun unpairBridge() {
+        updateSettings { it.copy(bridgeToken = "") }
+        browserUrl = null
+        refreshBridgeStatus()
+    }
+
+    fun setBridgeEnabled(enabled: Boolean) {
+        updateSettings { it.copy(bridgeEnabled = enabled) }
+        if (enabled) bridge.start() else bridge.stop()
+        if (!enabled) browserUrl = null
+        refreshBridgeStatus()
+    }
+
+    private fun refreshBridgeStatus() {
+        _bridgeStatus.value = BridgeStatus(
+            running = bridge.isRunning,
+            port = bridge.port,
+            paired = _settings.value.bridgeToken.isNotBlank(),
+            pairing = bridge.isPairing,
+            lastSeenSecAgo = bridge.lastSeenAtMs
+                .takeIf { it > 0L }
+                ?.let { (System.currentTimeMillis() - it) / 1000 },
+        )
+    }
+
     fun start() {
         DopaCore.registerAll()
         _settings.value = Stores.settings.load()
@@ -209,6 +306,9 @@ object DesktopRuntime {
         _lockouts.value = Lockouts.prune(Stores.lockouts.load(), nowSec())
         _points.value = Stores.points.load()
         _balance.value = _points.value.sumOf { it.delta }
+
+        if (_settings.value.bridgeEnabled) bridge.start()
+        refreshBridgeStatus()
 
         scope.launch { watchLoop() }
         scope.launch { persistLoop() }
@@ -487,6 +587,7 @@ object DesktopRuntime {
             delay(PERSIST_MS)
             Stores.usage.save(ledger.snapshotForStorage())
             Stores.declarations.save(declarations.snapshotForStorage())
+            refreshBridgeStatus()
         }
     }
 
@@ -494,11 +595,13 @@ object DesktopRuntime {
     fun flush() {
         runCatching { Stores.usage.save(ledger.snapshotForStorage()) }
         runCatching { Stores.declarations.save(declarations.snapshotForStorage()) }
+        runCatching { bridge.stop() }
         WindowControl.resumeAll()
     }
 
     // ------------------------------------------------------------------
 
+    @Synchronized
     private fun evaluate(fg: ForegroundApp?) {
         if (fg == null || fg.processName in ProtectedProcesses) {
             if (_presentation.value != null) {
@@ -520,6 +623,12 @@ object DesktopRuntime {
 
         val file = _ruleFile.value
 
+        // 拡張から来た URL。ブラウザが前面のときだけ、しかも報せが新しいときだけ使う。
+        // 黙った拡張の古い URL で塞ぎ続けると、拡張が落ちただけで閉じ込められる
+        val url = browserUrl?.takeIf {
+            fg.processName in Browsers && now - browserUrlAtMs < URL_STALE_MS
+        }
+
         // 罰で閉まっているかは、押し切りの猶予より先に見る。
         // 押し切りの罰が猶予に隠れてしまうと、罰が一度も効かない
         val locked = Lockouts.activeFor(
@@ -527,6 +636,7 @@ object DesktopRuntime {
             packageName = fg.processName,
             tagsOfApp = file.tags[fg.processName] ?: emptySet(),
             nowSec = nowSec,
+            url = url,
         )
         if (locked != null) {
             showLocked(fg, locked)
@@ -549,6 +659,7 @@ object DesktopRuntime {
         val context = EvalContext(
             now = LocalDateTime.now(),
             packageName = fg.processName,
+            url = url,
             usage = ledger.snapshotFor(fg.processName),
             declaredRemainingMinutes = declarations.remainingMinutes(fg.processName),
             previousPackage = ledger.previousProcess(),
@@ -838,4 +949,18 @@ object DesktopRuntime {
 
     /** 記録をディスクに落とす間隔。 */
     private const val PERSIST_MS = 60_000L
+
+    /**
+     * 拡張からの報せをいつまで信じるか。
+     *
+     * 拡張は 30 秒ごとに近況を送ってくる(MV3 の目覚ましはこれが下限)。
+     * 遅れることがあるので、その 5 倍待ってから見限る。
+     *
+     * 短すぎると、同じページに座り続けているだけで規則が外れる ──
+     * 「15分見たら止める」のような後から効く規則が、いちばん要る場面で効かなくなる。
+     * 長すぎると、拡張が落ちたあともブラウザが塞がったままになる。
+     *
+     * なおブラウザが前面に無いあいだは、そもそも URL を見ないので影響しない。
+     */
+    private const val URL_STALE_MS = 150_000L
 }

@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "ドパチル",
+  "version": "0.1.0",
+  "description": "見ているページをドパチル本体に伝えて、本体の判定どおりに止める。判定はここではしない。",
+  "permissions": ["tabs", "storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": { "service_worker": "background.js" },
+  "options_page": "options.html",
+  "action": { "default_title": "ドパチル" }
+}

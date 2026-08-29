@@ -1,0 +1,49 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ドパチル拡張の設定</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+    max-width: 40rem; margin: 2.5rem auto; padding: 0 1.5rem; line-height: 1.85;
+  }
+  h1 { font-size: 1.2rem; }
+  section { margin: 2rem 0; padding-top: 1.5rem; border-top: 1px solid #8883; }
+  button { font: inherit; padding: .5rem 1.1rem; border-radius: .4rem; cursor: pointer; }
+  .status { margin-top: .8rem; font-size: .9rem; }
+  .ok { color: #2e7d32; }
+  .ng { color: #c62828; }
+  .help { color: #8883; }
+  .help, small { font-size: .85rem; }
+  label { display: flex; gap: .6rem; align-items: flex-start; }
+</style>
+
+<h1>ドパチル拡張</h1>
+<p><small>この拡張は「何を止めるか」を持ちません。見ているページを本体に伝えて、本体の判定どおりに動きます。</small></p>
+
+<section>
+  <h2 style="font-size:1rem">本体につなぐ</h2>
+  <p><small>
+    先に<strong>ドパチル本体の設定で「ブラウザ拡張とつなぐ」を押して</strong>ください。
+    そこから2分のあいだだけ、合言葉を受け取れます。
+  </small></p>
+  <button id="pair">本体につなぐ</button>
+  <button id="check">状態を見る</button>
+  <p class="status" id="status">—</p>
+</section>
+
+<section>
+  <h2 style="font-size:1rem">本体が起きていないとき</h2>
+  <label>
+    <input type="checkbox" id="offline">
+    <span>
+      本体につながらないあいだ、ブラウザを丸ごと止める<br>
+      <small class="help">
+        既定は<strong>通す</strong>です。塞ぐ側にすると、本体が落ちただけで
+        どのページも開けなくなります。逆に通す側は、本体を終了させれば抜けられます。
+        どちらが自分に合うかで選んでください。
+      </small>
+    </span>
+  </label>
+</section>
+<script src="options.js"></script>

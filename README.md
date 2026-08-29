@@ -112,6 +112,32 @@ adb shell appops set com.dopachiru ACCESS_RESTRICTED_SETTINGS allow
 
 ---
 
+## URL でページを止める
+
+ブラウザは1つのアプリなので、プロセス名では「YouTube のショートだけ」が書けません。
+ルールの対象に **URL** を足してあります。
+
+書き方は `ホスト` か `ホスト/パスの先頭` だけです。正規表現は受け付けません
+── **書き間違いが「どこにも当たらないルール」になって静かに効かなくなる**のが、
+止めているつもりで止まっていない状態を作るからです。
+
+| 書いたもの | 当たる | 当たらない |
+|---|---|---|
+| `youtube.com` | youtube.com のすべて | それ以外 |
+| `youtube.com/shorts` | `/shorts` と その下 | `/watch`, `/shortstack` |
+| `tiktok.com` | `www.` `m.` などの下位ドメインも | `nottiktok.com` |
+
+除外(`exceptSites`)は全指定にも効くので、「ブラウザは丸ごと止めるが
+Google ドキュメントだけ通す」が書けます。罰の封鎖もサイト単位で科せます。
+
+`SiteCatalog` によく挙がるサイトの束が4つ入っています。
+**短い動画をサイト全体と分けてある**のは、「YouTube は調べ物に要るが、
+ショートだけ止めたい」がいちばん多い形だからです。
+
+判定を動かすには Chrome 拡張が要ります → [extension/README.md](extension/README.md)
+
+---
+
 ## Windows 版
 
 `:desktop` モジュール。Kotlin + Compose Desktop で、**ルールエンジンは Android と同じ

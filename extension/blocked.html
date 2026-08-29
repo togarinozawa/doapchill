@@ -1,0 +1,32 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ドパチル</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    font-family: "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+    background: #14110f; color: #f3ece4;
+  }
+  main { max-width: 34rem; padding: 2.5rem 2rem; text-align: center; }
+  h1 { font-size: 1.35rem; font-weight: 600; margin: 0 0 1.25rem; letter-spacing: .02em; }
+  .reason { color: #d8a25f; font-size: .95rem; margin-bottom: 2rem; }
+  .note { color: #8d8781; font-size: .85rem; line-height: 1.9; }
+  .url {
+    margin-top: 2rem; color: #6a655f; font-size: .75rem;
+    word-break: break-all; line-height: 1.7;
+  }
+  .waiting { margin-top: 1.5rem; color: #6a655f; font-size: .8rem; }
+</style>
+<main>
+  <h1>ここは、いま開かない</h1>
+  <p class="reason" id="reason"></p>
+  <p class="note">
+    続けるかどうかは<strong>ドパチル本体の画面</strong>で決めます。<br>
+    このページには押し切るボタンはありません。
+  </p>
+  <p class="waiting" id="waiting">本体の判定を待っています…</p>
+  <p class="url" id="url"></p>
+</main>
+<script src="blocked.js"></script>

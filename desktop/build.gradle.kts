@@ -65,6 +65,9 @@ compose.desktop {
 
         nativeDistributions {
             targetFormats(TargetFormat.Msi)
+            // ブラウザ拡張の受け口(com.sun.net.httpserver)。
+            // jlink で削られると、配布版でだけ拡張が繋がらなくなる
+            modules("jdk.httpserver")
             packageName = "Dopachiru"
             packageVersion = "1.2.0"
             // WiX の MSI 生成が非 ASCII で転ぶので、ここだけ英語にしてある
