@@ -69,7 +69,7 @@ compose.desktop {
             // jlink で削られると、配布版でだけ拡張が繋がらなくなる
             modules("jdk.httpserver")
             packageName = "Dopachiru"
-            packageVersion = "1.2.0"
+            packageVersion = "1.3.0"
             // WiX の MSI 生成が非 ASCII で転ぶので、ここだけ英語にしてある
             description = "Dopachiru - self-imposed app usage limits"
             vendor = "dopachiru"

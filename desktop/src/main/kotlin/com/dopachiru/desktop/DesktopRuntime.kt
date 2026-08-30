@@ -10,6 +10,8 @@ import com.dopachiru.core.action.types.WarnAction
 import com.dopachiru.core.engine.Decision
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.engine.RuleEngine
+import com.dopachiru.core.io.ImportPlan
+import com.dopachiru.core.io.RuleBundleIo
 import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Lockouts
@@ -343,6 +345,38 @@ object DesktopRuntime {
     }
 
     fun removeRule(id: Long) = updateRules { it.copy(rules = it.rules.filter { r -> r.id != id }) }
+
+    // ---- 持ち出しと取り込み --------------------------------------------
+
+    /** いまのルールを1つの JSON にする。条件やアクションの目録も添える。 */
+    fun exportRules(): String {
+        val file = _ruleFile.value
+        return RuleBundleIo.export(
+            rules = file.rules,
+            tags = file.tags,
+            exportedAt = LocalDateTime.now().toString(),
+        )
+    }
+
+    /** 読んだだけ。**まだ何も変えない。** */
+    fun planImport(text: String): Result<ImportPlan> =
+        when (val parsed = RuleBundleIo.parse(text)) {
+            is RuleBundleIo.ParseResult.Failed -> Result.failure(IllegalArgumentException(parsed.message))
+            is RuleBundleIo.ParseResult.Ok ->
+                Result.success(RuleBundleIo.plan(parsed.bundle, _ruleFile.value.rules))
+        }
+
+    /** 見せた計画をそのまま実行する。ここで初めて中身が変わる。 */
+    fun applyImport(plan: ImportPlan) = updateRules { file ->
+        var nextId = file.nextId
+        val added = plan.added.map { rule -> rule.copy(id = nextId++) }
+        val replacedByUid = plan.replaced.associate { (before, after) -> before.uid to after }
+        file.copy(
+            rules = file.rules.map { replacedByUid[it.uid] ?: it } + added,
+            nextId = nextId,
+            tags = file.tags + plan.tags,
+        )
+    }
 
     /** ルールを1つ差し替える。条件・罰の編集から使う。 */
     fun updateRule(rule: Rule) = updateRules { file ->

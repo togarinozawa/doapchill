@@ -21,6 +21,10 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Button
+import com.dopachiru.core.io.ImportPlan
+import java.awt.FileDialog
+import java.awt.Frame
+import java.io.File
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -587,6 +591,119 @@ private fun BrowserBridgeSection() {
     }
 }
 
+/**
+ * ルールの持ち出しと取り込み。
+ *
+ * 込み入ったルールを画面でこねるより、書き出して手元の道具に直してもらうほうが早い。
+ * 書き出しには条件とアクションの目録が入るので、**このファイル1つ渡せば**
+ * 正しい形のルールを書いてもらえる。
+ *
+ * 取り込みは押した瞬間には何も変えない。何件増えて何件差し替わるかを先に見せる。
+ */
+@Composable
+private fun RuleTransferSection() {
+    var plan by remember { mutableStateOf<ImportPlan?>(null) }
+    var message by remember { mutableStateOf("") }
+
+    Text("ルールの持ち出し", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "書き出した JSON には、使える条件・措置・サイトの目録が入っています。" +
+            "そのファイルを渡せば、外の道具にルールを書いてもらえます。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(12.dp))
+
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = {
+            val path = chooseFile(save = true) ?: return@Button
+            message = runCatching {
+                File(path).writeText(DesktopRuntime.exportRules(), Charsets.UTF_8)
+                "書き出しました: " + path
+            }.getOrElse { "書き出せませんでした: " + (it.message ?: "") }
+        }) { Text("書き出す") }
+
+        OutlinedButton(onClick = {
+            val path = chooseFile(save = false) ?: return@OutlinedButton
+            val text = runCatching { File(path).readText(Charsets.UTF_8) }.getOrNull()
+            if (text == null) {
+                message = "ファイルを読めませんでした"
+                return@OutlinedButton
+            }
+            DesktopRuntime.planImport(text)
+                .onSuccess { plan = it; message = "" }
+                .onFailure { message = it.message ?: "読めませんでした" }
+        }) { Text("読み込む") }
+    }
+
+    if (message.isNotBlank()) {
+        Spacer(Modifier.height(8.dp))
+        Text(message, style = MaterialTheme.typography.bodySmall)
+    }
+
+    plan?.let { p ->
+        AlertDialog(
+            onDismissRequest = { plan = null },
+            title = { Text("取り込む前に") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(p.summary(), style = MaterialTheme.typography.titleSmall)
+                    if (p.added.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        Text("増えるもの", style = MaterialTheme.typography.labelMedium)
+                        p.added.forEach { Text("・" + it.name, style = MaterialTheme.typography.bodySmall) }
+                    }
+                    if (p.replaced.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        Text("差し替わるもの", style = MaterialTheme.typography.labelMedium)
+                        p.replaced.forEach { (before, after) ->
+                            Text("・" + before.name + " → " + after.name, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    if (p.problems.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            "取り込めないもの",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        p.problems.forEach {
+                            Text(
+                                "・" + it.ruleName + ": " + it.reason,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        DesktopRuntime.applyImport(p)
+                        message = p.summary()
+                        plan = null
+                    },
+                    enabled = !p.isEmpty,
+                ) { Text("取り込む") }
+            },
+            dismissButton = { TextButton(onClick = { plan = null }) { Text("やめる") } },
+        )
+    }
+}
+
+/** Windows の素のファイル選択。Compose Desktop には無いので AWT を借りる。 */
+private fun chooseFile(save: Boolean): String? {
+    val dialog = FileDialog(null as Frame?, if (save) "書き出し先" else "読み込むファイル",
+        if (save) FileDialog.SAVE else FileDialog.LOAD)
+    if (save) dialog.file = "dopachiru-rules.json"
+    dialog.isVisible = true
+    val dir = dialog.directory ?: return null
+    val name = dialog.file ?: return null
+    return dir + name
+}
+
 @Composable
 private fun SettingsTab() {
     val settings by DesktopRuntime.settings.collectAsState()
@@ -649,6 +766,12 @@ private fun SettingsTab() {
         Spacer(Modifier.height(20.dp))
 
         BrowserBridgeSection()
+
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(20.dp))
+
+        RuleTransferSection()
 
         Spacer(Modifier.height(20.dp))
         HorizontalDivider()

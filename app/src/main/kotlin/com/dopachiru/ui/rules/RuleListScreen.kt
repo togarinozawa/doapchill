@@ -113,6 +113,7 @@ fun RuleListScreen(
                 )
                 Spacer(Modifier.height(20.dp))
                 Button(onClick = { pickingPreset = true }) { Text("雛形から作る") }
+                RuleTransferControls()
                 Spacer(Modifier.height(8.dp))
                 TextButton(onClick = onCreate) { Text("ゼロから組む") }
             }
@@ -128,6 +129,8 @@ fun RuleListScreen(
                     ) {
                         Text("雛形から足す")
                     }
+                    // 込み入ったルールは、書き出して手元の道具に直してもらうほうが早い
+                    RuleTransferControls()
                 }
 
                 items(rules, key = { it.id }) { rule ->
