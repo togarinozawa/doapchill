@@ -66,10 +66,10 @@ adb install -r dist/dopachiru-0.8.0.apk
 
 ### 配布用 APK
 
-> **⚠ APK は GitHub には置いていません。**
-> `dist/` は [.gitignore](.gitignore) に入っているので、**このリポジトリを
-> clone しても APK は付いてきません**。Releases も作っていません。
-> 手元でビルドするか、別の手段で受け取ってください。
+**[Releases](https://github.com/togarinozawa/doapchill/releases) から落とせます。**
+
+> `dist/` は [.gitignore](.gitignore) に入っているので、**clone しても APK は付いてきません。**
+> リポジトリの中を探しても無いのが正しい状態です。配布物は Releases 側にあります。
 
 ```bash
 ./gradlew :app:dist        # dist/dopachiru-<版>.apk
