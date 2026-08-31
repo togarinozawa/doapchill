@@ -60,22 +60,29 @@ USB デバッグを有効にした端末を繋いで、次を実行するとイ�
 手でやる場合:
 
 ```bash
-adb install -r dist/dopachiru-0.1.0-minified.apk
+./gradlew :app:dist
+adb install -r dist/dopachiru-0.8.0.apk
 ```
 
 ### 配布用 APK
 
-`dist/` に2つ置いてあります。どちらも同じ鍵(debug キーストア)で署名済みで、
-中身は同じです。
+> **⚠ APK は GitHub には置いていません。**
+> `dist/` は [.gitignore](.gitignore) に入っているので、**このリポジトリを
+> clone しても APK は付いてきません**。Releases も作っていません。
+> 手元でビルドするか、別の手段で受け取ってください。
 
-| ファイル | サイズ | |
-|---|---|---|
-| `dopachiru-0.1.0-minified.apk` | 3.2 MB | R8 で圧縮済み。ふだんはこちら |
-| `dopachiru-0.1.0.apk` | 47.1 MB | 圧縮なし。圧縮版で不可解な挙動が出たときの切り分け用 |
+```bash
+./gradlew :app:dist        # dist/dopachiru-<版>.apk
+./gradlew :desktop:packagePortable   # dist/dopachiru-windows-portable.zip
+```
 
-圧縮版は、条件・アクションの実装とシリアライザ(`ConditionNode` / `Gate` の
-各サブタイプの `$$serializer` と `Companion`)が難読化も削除もされずに
-残っていることを確認済みです。
+`dist/` に版つきで出ます。`app/build/outputs/apk/release/app-release.apk` は
+版が名前に入らず次のビルドで黙って上書きされるので、渡すものはこちらを使います。
+
+R8 で圧縮した版が既定です。条件・アクションの実装とシリアライザ
+(`ConditionNode` / `Gate` の各サブタイプの `$$serializer` と `Companion`)が
+難読化も削除もされずに残っていることは mapping.txt で確認済みです。
+圧縮が原因かを切り分けたいときは `-PnoMinify=true` を付けてビルドします。
 
 > Play ストアに出さないので debug キーストアで署名しています。
 > 同じ鍵で署名し続けるかぎり、アンインストールせずに上書き更新できます。

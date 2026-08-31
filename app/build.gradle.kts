@@ -78,6 +78,29 @@ android {
     }
 }
 
+/**
+ * 配布用の APK を `dist/` に版つきで置く。
+ *
+ * `gradlew :app:dist`
+ *
+ * build/ の中の app-release.apk は版が分からず、次のビルドで黙って上書きされる。
+ * どの版を渡したのかが後から辿れないと、「入れたはずのものが動かない」を
+ * 切り分けられない。desktop 側の packagePortable と対にしてある。
+ *
+ * なお `dist/` は gitignore されている ── APK は GitHub には上がらない。
+ */
+tasks.register<Copy>("dist") {
+    group = "distribution"
+    description = "release APK を dist/ に版つきでコピーする"
+    dependsOn("assembleRelease")
+    from(layout.buildDirectory.file("outputs/apk/release/app-release.apk"))
+    into(rootProject.layout.projectDirectory.dir("dist"))
+    // 版は設定時に読んでおく。実行時に android {} を触ると
+    // 構成キャッシュが Project を掴もうとして落ちる
+    val name = "dopachiru-" + android.defaultConfig.versionName + ".apk"
+    rename { name }
+}
+
 kotlin {
     jvmToolchain(21)
     compilerOptions {
