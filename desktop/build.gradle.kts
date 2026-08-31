@@ -8,6 +8,9 @@ plugins {
     alias(libs.plugins.compose.multiplatform)
 }
 
+/** Windows 版の版番号。持ち運び版の名前と MSI の両方で使う。 */
+val desktopVersion = "1.4.0"
+
 kotlin {
     jvmToolchain(21)
     compilerOptions {
@@ -47,7 +50,8 @@ tasks.register<Zip>("packagePortable") {
     description = "app イメージを zip に固める(管理者権限なしで動かせる)"
     dependsOn("createDistributable")
     from(layout.buildDirectory.dir("compose/binaries/main/app"))
-    archiveFileName.set("dopachiru-windows-portable.zip")
+    // 版を名前に入れる。入れないと、どれを渡したのか後から辿れない
+    archiveFileName.set("dopachiru-windows-$desktopVersion.zip")
     destinationDirectory.set(rootProject.layout.projectDirectory.dir("dist"))
 }
 
@@ -69,7 +73,7 @@ compose.desktop {
             // jlink で削られると、配布版でだけ拡張が繋がらなくなる
             modules("jdk.httpserver")
             packageName = "Dopachiru"
-            packageVersion = "1.4.0"
+            packageVersion = desktopVersion
             // WiX の MSI 生成が非 ASCII で転ぶので、ここだけ英語にしてある
             description = "Dopachiru - self-imposed app usage limits"
             vendor = "dopachiru"
