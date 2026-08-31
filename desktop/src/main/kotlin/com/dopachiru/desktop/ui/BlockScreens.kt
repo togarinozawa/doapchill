@@ -18,6 +18,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -35,6 +36,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dopachiru.core.action.types.BlockAction
+import com.dopachiru.core.model.Focus
 import com.dopachiru.desktop.Presentation
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
@@ -353,6 +355,8 @@ fun LockedScreen(
     locked: Presentation.Locked,
     escapeHoldSeconds: Int = 0,
     onMinimize: () -> Unit,
+    onExtendFocus: (Int) -> Unit = {},
+    onEndFocus: () -> Unit = {},
 ) = DopaTheme {
     var remainingSec by remember(locked.key) {
         mutableIntStateOf((locked.untilEpochSec - System.currentTimeMillis() / 1000).coerceAtLeast(0).toInt())
@@ -420,13 +424,18 @@ fun LockedScreen(
             ) {
                 Text("このアプリを閉じる", modifier = Modifier.padding(vertical = 6.dp))
             }
-            Spacer(Modifier.height(10.dp))
-            Text(
-                "押し切る手段はありません。時間が過ぎれば自動で開きます。",
-                style = MaterialTheme.typography.labelSmall,
-                textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (locked.isFocus) {
+                Spacer(Modifier.height(20.dp))
+                FocusPanel(locked, onExtendFocus, onEndFocus)
+            } else {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "押し切る手段はありません。時間が過ぎれば自動で開きます。",
+                    style = MaterialTheme.typography.labelSmall,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
 
             Spacer(Modifier.height(32.dp))
             Text(
@@ -553,6 +562,70 @@ fun DeclareScreen(
             TextButton(onClick = onCancel) {
                 Text("やっぱりやめる", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+        }
+    }
+}
+
+/**
+ * 集中中の「足す」と「切り上げる」。
+ *
+ * 足すほうを先に、押しやすく置いてある。短く始めて足す前提なので、
+ * ここがいちばんよく使う操作になる。
+ */
+@Composable
+private fun FocusPanel(
+    locked: Presentation.Locked,
+    onExtend: (Int) -> Unit,
+    onEnd: () -> Unit,
+) {
+    var confirming by remember { mutableStateOf(false) }
+    val canAfford = locked.abortCost <= 0 || locked.balance >= locked.abortCost
+
+    Text(
+        "まだ足りなければ足せます",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Focus.EXTEND_CHOICES.forEach { minutes ->
+            OutlinedButton(onClick = { onExtend(minutes) }) { Text("+${minutes}分") }
+        }
+    }
+
+    Spacer(Modifier.height(16.dp))
+    if (!confirming) {
+        TextButton(onClick = { confirming = true }) {
+            Text(
+                if (locked.abortCost > 0) "切り上げる(${locked.abortCost}ポイント)" else "取り消す",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    } else if (!canAfford) {
+        Text(
+            "ポイントが足りないので切り上げられません(残り ${locked.balance})。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(4.dp))
+        TextButton(onClick = { confirming = false }) { Text("戻る") }
+    } else {
+        Text(
+            if (locked.abortCost > 0) {
+                "本当に切り上げますか。${locked.abortCost} ポイント引かれます(残り ${locked.balance})"
+            } else {
+                "いまなら無料で取り消せます"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = { confirming = false }) { Text("やめる") }
+            OutlinedButton(onClick = onEnd) { Text("切り上げる") }
         }
     }
 }

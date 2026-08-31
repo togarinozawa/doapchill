@@ -177,6 +177,18 @@ interface LockoutDao {
     @Query("DELETE FROM lockouts WHERE untilEpochSec <= :beforeEpochSec")
     suspend fun purgeBefore(beforeEpochSec: Long)
 
+    /**
+     * 集中の延長と取り消しは uid で引く。
+     *
+     * 挿入した行の id はメモリ上のキャッシュに戻していないので、
+     * id で引くと別の行を触る。uid なら作った時点で決まっている。
+     */
+    @Query("UPDATE lockouts SET untilEpochSec = :untilEpochSec WHERE uid = :uid AND uid != ''")
+    suspend fun extendByUid(uid: String, untilEpochSec: Long)
+
+    @Query("DELETE FROM lockouts WHERE uid = :uid AND uid != ''")
+    suspend fun deleteByUid(uid: String)
+
     /** 開発ツール専用。ふだんの動作からは呼ばない。 */
     @Query("DELETE FROM lockouts")
     suspend fun deleteAll()

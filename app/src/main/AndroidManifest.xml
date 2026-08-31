@@ -79,7 +79,23 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
+
+        <!--
+          ホーム画面から1タップで集中を始める入口。画面は出さずにすぐ閉じる。
+          exported なのはランチャーから叩かれるため。受け取るのは
+          「何分か」だけで、外から状態を変えられるものは持たせていない。
+        -->
+        <activity
+            android:name=".focus.FocusShortcutActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <!--
           フォアグラウンドアプリの検知とブロック画面の表示を担う本体。

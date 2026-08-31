@@ -21,6 +21,8 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Button
+import com.dopachiru.core.model.Focus
+import androidx.compose.foundation.layout.width
 import com.dopachiru.core.io.ImportPlan
 import java.awt.FileDialog
 import java.awt.Frame
@@ -503,6 +505,70 @@ private fun PointCard(
 
 // ----------------------------------------------------------------------
 
+/**
+ * その場かぎりの集中。
+ *
+ * ルールが「いつ・どの条件で」を先に決めておくものなのに対して、
+ * これは思い立った瞬間に始めて、時間が来たら勝手に解ける。
+ *
+ * 既定を短くしてあるのは、長く始めすぎたときの逃げ方が高くつくため。
+ * 短く始めて足すほうが余計な代金を払わずに済む。
+ */
+@Composable
+private fun FocusSection() {
+    val settings by DesktopRuntime.settings.collectAsState()
+    val lockouts by DesktopRuntime.lockouts.collectAsState()
+    var minutes by remember { mutableStateOf(settings.focus.defaultMinutes) }
+
+    val running = Focus.activeIn(lockouts, System.currentTimeMillis() / 1000)
+
+    Text("集中モード", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "選んだ時間だけ、逃がすもの以外が閉まります。時間が来れば勝手に解けます。" +
+            "エクスプローラやタスクマネージャは集中中も開いたままです。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(12.dp))
+
+    if (running != null) {
+        Text(
+            "あと ${running.remainingMinutesAt(System.currentTimeMillis() / 1000)} 分",
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Focus.EXTEND_CHOICES.forEach { add ->
+                OutlinedButton(onClick = { DesktopRuntime.extendFocus(add) }) { Text("+${add}分") }
+            }
+        }
+        return
+    }
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(
+            onClick = { minutes = (minutes - Focus.STEP_MINUTES).coerceAtLeast(Focus.MIN_MINUTES) },
+            enabled = minutes > Focus.MIN_MINUTES,
+        ) { Text("−") }
+        Text("$minutes 分", style = MaterialTheme.typography.titleMedium)
+        TextButton(
+            onClick = { minutes = (minutes + Focus.STEP_MINUTES).coerceAtMost(Focus.MAX_MINUTES) },
+            enabled = minutes < Focus.MAX_MINUTES,
+        ) { Text("+") }
+        Spacer(Modifier.width(12.dp))
+        Button(onClick = { DesktopRuntime.startFocus(minutes) }) { Text("始める") }
+    }
+    Spacer(Modifier.height(8.dp))
+    Text(
+        "短めに始めるのを勧めます。足りなければ足せますが、" +
+            "長すぎたぶんを切り上げるにはポイントが要ります。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
 /** 拡張から最後に連絡が来てから、これを過ぎたら「止まっているかも」と出す(秒)。 */
 private const val FRESH_SEC = 180L
 
@@ -760,6 +826,12 @@ private fun SettingsTab() {
                 onCheckedChange = { DesktopRuntime.updateSettings { s -> s.copy(paused = it) } },
             )
         }
+
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(20.dp))
+
+        FocusSection()
 
         Spacer(Modifier.height(20.dp))
         HorizontalDivider()

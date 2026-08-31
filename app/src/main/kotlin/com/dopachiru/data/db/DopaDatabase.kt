@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         LockoutEntity::class,
         PointEventEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class DopaDatabase : RoomDatabase() {
@@ -122,6 +122,24 @@ abstract class DopaDatabase : RoomDatabase() {
                 "ON `point_events` (`dedupKey`)",
         )
 
+        /**
+         * 4→5。封鎖に uid と earlyExitJson を足すだけ。
+         *
+         * 既存の行はどちらも空で入る。earlyExitJson が空 = 罰なので、
+         * **移行前に科されていた罰が、更新した瞬間に解けるようにはならない。**
+         */
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_4_5_SQL.forEach { db.execSQL(it) }
+            }
+        }
+
+        /** 4→5 で流す SQL。[MIGRATION_3_4_SQL] と同じくテストから読む。 */
+        internal val MIGRATION_4_5_SQL: List<String> = listOf(
+            "ALTER TABLE `lockouts` ADD COLUMN `uid` TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE `lockouts` ADD COLUMN `earlyExitJson` TEXT NOT NULL DEFAULT ''",
+        )
+
         @Volatile
         private var instance: DopaDatabase? = null
 
@@ -132,7 +150,7 @@ abstract class DopaDatabase : RoomDatabase() {
                     DopaDatabase::class.java,
                     "dopachiru.db",
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .build()
                     .also { instance = it }
             }

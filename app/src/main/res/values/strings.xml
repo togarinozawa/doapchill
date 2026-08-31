@@ -6,4 +6,8 @@
 
     <string name="notification_channel_monitor">常駐監視</string>
     <string name="notification_monitor_title">ドパチル 稼働中</string>
+    <string name="focus_15">15分集中</string>
+    <string name="focus_15_long">15分だけ集中する</string>
+    <string name="focus_30">30分集中</string>
+    <string name="focus_30_long">30分だけ集中する</string>
 </resources>

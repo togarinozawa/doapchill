@@ -20,11 +20,16 @@ import kotlin.test.assertTrue
  */
 class MigrationSqlTest {
 
-    private val schema: JsonObject by lazy {
-        val file = File("schemas/com.dopachiru.data.db.DopaDatabase/4.json")
+    private fun schemaOf(version: Int): JsonObject {
+        val file = File("schemas/com.dopachiru.data.db.DopaDatabase/$version.json")
         assertTrue(file.exists(), "スキーマが見つからない: ${file.absolutePath}")
-        Json.parseToJsonElement(file.readText()).jsonObject["database"]!!.jsonObject
+        return Json.parseToJsonElement(file.readText()).jsonObject["database"]!!.jsonObject
     }
+
+    private val schema: JsonObject by lazy { schemaOf(4) }
+
+    /** いまの版。移行を足したらここを上げる。 */
+    private val latest: JsonObject by lazy { schemaOf(5) }
 
     private fun createSqlOf(tableName: String): String = entity(tableName)["createSql"]!!
         .jsonPrimitive.content
@@ -43,6 +48,7 @@ class MigrationSqlTest {
     @Test
     fun `スキーマの版と database の版がそろっている`() {
         assertEquals(4, schema["version"]!!.jsonPrimitive.content.toInt())
+        assertEquals(5, latest["version"]!!.jsonPrimitive.content.toInt())
     }
 
     @Test
@@ -76,6 +82,54 @@ class MigrationSqlTest {
                     it.contains("`consequenceJson` TEXT NOT NULL DEFAULT ''")
             }
         )
+    }
+
+    // ---- 4 から 5 ---------------------------------------------------------
+
+    private fun fieldOf(version: Int, table: String, column: String): JsonObject =
+        schemaOf(version)["entities"]!!.jsonArray
+            .map { it.jsonObject }
+            .first { it["tableName"]!!.jsonPrimitive.content == table }["fields"]!!.jsonArray
+            .map { it.jsonObject }
+            .first { it["columnName"]!!.jsonPrimitive.content == column }
+
+    @Test
+    fun `封鎖に足した2列が生成物と一致する`() {
+        listOf("uid", "earlyExitJson").forEach { column ->
+            val field = fieldOf(5, "lockouts", column)
+            assertEquals("''", field["defaultValue"]!!.jsonPrimitive.content, column)
+            assertEquals("TEXT", field["affinity"]!!.jsonPrimitive.content, column)
+            assertEquals(true, field["notNull"]!!.jsonPrimitive.content.toBoolean(), column)
+
+            assertTrue(
+                DopaDatabase.MIGRATION_4_5_SQL.any {
+                    it == "ALTER TABLE `lockouts` ADD COLUMN `$column` TEXT NOT NULL DEFAULT ''"
+                },
+                "$column の ALTER がずれている: ${DopaDatabase.MIGRATION_4_5_SQL}",
+            )
+        }
+    }
+
+    @Test
+    fun `4から5で増えた列はこの2つだけ`() {
+        // 列を足したのに移行を書き忘れると、更新した端末でだけ落ちる
+        fun columns(version: Int) = schemaOf(version)["entities"]!!.jsonArray
+            .map { it.jsonObject }
+            .flatMap { e ->
+                val table = e["tableName"]!!.jsonPrimitive.content
+                e["fields"]!!.jsonArray.map { table + "." + it.jsonObject["columnName"]!!.jsonPrimitive.content }
+            }.toSet()
+
+        val added = columns(5) - columns(4)
+        assertEquals(setOf("lockouts.uid", "lockouts.earlyExitJson"), added)
+        assertEquals(2, DopaDatabase.MIGRATION_4_5_SQL.size)
+    }
+
+    @Test
+    fun `4から5でテーブルは増えていない`() {
+        fun tables(version: Int) = schemaOf(version)["entities"]!!.jsonArray
+            .map { it.jsonObject["tableName"]!!.jsonPrimitive.content }.toSet()
+        assertEquals(tables(4), tables(5))
     }
 
     @Test

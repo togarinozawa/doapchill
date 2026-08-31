@@ -1,5 +1,6 @@
 package com.dopachiru.desktop.data
 
+import com.dopachiru.core.model.FocusSettings
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.points.PointEvent
@@ -36,6 +37,9 @@ data class DesktopSettings(
 
     /** ブラウザ拡張からの URL 受け口を開けるか。 */
     val bridgeEnabled: Boolean = true,
+
+    /** 集中モードの既定値。Android と同じ形なので、いずれ同期に載せられる。 */
+    val focus: FocusSettings = FocusSettings(),
 
     /**
      * 拡張と分け合う合言葉。

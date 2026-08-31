@@ -13,6 +13,7 @@ import com.dopachiru.core.engine.RuleEngine
 import com.dopachiru.core.io.ImportPlan
 import com.dopachiru.core.io.RuleBundleIo
 import com.dopachiru.core.model.Consequence
+import com.dopachiru.core.model.Focus
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Lockouts
 import com.dopachiru.core.model.Rule
@@ -77,6 +78,16 @@ sealed interface Presentation {
         val label: String,
         val reason: String,
         val untilEpochSec: Long,
+        /**
+         * 自分で始めた集中か。罰なら false。
+         *
+         * 同じ封鎖の仕組みで動くが、画面に出す約束が正反対になる ──
+         * 罰は「押し切る手段はありません」、集中は「足せる・切り上げられる」。
+         */
+        val isFocus: Boolean = false,
+        /** いま切り上げるのに要るポイント。0 なら無料。 */
+        val abortCost: Int = 0,
+        val balance: Int = 0,
     ) : Presentation
 
     /** 数秒待たせて必ず通す。押し切りボタンは無い。 */
@@ -538,6 +549,81 @@ object DesktopRuntime {
     }
 
     /** 解禁券が効いているあいだの期限(秒)。効いていなければ 0。 */
+    // ---- 自分で始める集中 ------------------------------------------------
+
+    /** いま走っている集中。罰は含まない。 */
+    fun activeFocus(): Lockout? = Focus.activeIn(_lockouts.value, nowSec())
+
+    /**
+     * 集中を始める。すでに走っていれば何もしない。
+     *
+     * 止める仕組みは罰と同じ封鎖。違うのは出口があることだけ。
+     */
+    fun startFocus(minutes: Int = _settings.value.focus.defaultMinutes): Boolean {
+        if (activeFocus() != null) return false
+        val policy = _settings.value.pointPolicy
+        val focus = Focus.start(
+            nowSec = nowSec(),
+            minutes = minutes,
+            allowPackages = _settings.value.focus.allowPackages,
+            allowTags = _settings.value.focus.allowTags,
+            effort = _settings.value.focus.abortEffort,
+            abortPoints = if (policy.enabled) policy.focusAbortCost else 0,
+        )
+        _lockouts.value = _lockouts.value + focus
+        Stores.lockouts.save(_lockouts.value)
+        evaluate(_foreground.value)
+        return true
+    }
+
+    fun extendFocus(addMinutes: Int): Boolean {
+        val now = nowSec()
+        val focus = activeFocus() ?: return false
+        val longer = Focus.extend(focus, addMinutes, now)
+        _lockouts.value = _lockouts.value.map { if (it.uid == focus.uid) longer else it }
+        Stores.lockouts.save(_lockouts.value)
+        evaluate(_foreground.value)
+        return true
+    }
+
+    /**
+     * 集中を時間より前に終わらせる。
+     *
+     * 猶予のうちは無料。それ以降はポイントを払う ── 払えなければ終われない。
+     * 手間(長押しなど)は画面側で先に通してある。
+     */
+    fun endFocusEarly(): Boolean {
+        val now = nowSec()
+        val focus = activeFocus() ?: return false
+        val cost = if (focus.canCancelFreelyAt(now)) 0 else (focus.earlyExit?.points ?: 0)
+        if (cost > 0 && _balance.value < cost) return false
+
+        _lockouts.value = _lockouts.value.filterNot { it.uid == focus.uid && it.isChosen }
+        Stores.lockouts.save(_lockouts.value)
+        if (cost > 0) {
+            addPoints(-cost, PointReason.FOCUS_ABORTED, "残り${focus.remainingMinutesAt(now)}分")
+        }
+        _presentation.value = null
+        releaseHold()
+        evaluate(_foreground.value)
+        return true
+    }
+
+    /** 走り切った集中に加点する。掃除のついでに見る。 */
+    private fun awardFinishedFocus(finished: List<Lockout>) {
+        val policy = _settings.value.pointPolicy
+        if (!policy.enabled || policy.focusDonePoints == 0) return
+        finished.filter { it.isChosen }.forEach { focus ->
+            if (awardedFocusUids.add(focus.uid)) {
+                val minutes = ((focus.untilEpochSec - focus.createdAtEpochSec) / 60).toInt()
+                addPoints(policy.focusDonePoints, PointReason.FOCUS_DONE, "${minutes}分")
+            }
+        }
+    }
+
+    /** 加点済みの集中。二重に足さないための覚え書き。 */
+    private val awardedFocusUids = HashSet<String>()
+
     fun passUntil(): Long = _settings.value.passUntilSec.takeIf { nowSec() < it } ?: 0L
 
     /** 開発・確認用。罰を手で解く経路はここだけ。 */
@@ -651,6 +737,8 @@ object DesktopRuntime {
         // 期限切れの罰を落とす。時間が過ぎれば誰の手も借りずに解ける
         val live = Lockouts.prune(_lockouts.value, nowSec)
         if (live.size != _lockouts.value.size) {
+            // 走り切った集中はここで拾う。終わった瞬間を捉える場所が他に無い
+            awardFinishedFocus(_lockouts.value.filterNot { old -> live.any { it.uid == old.uid } })
             _lockouts.value = live
             Stores.lockouts.save(live)
         }
@@ -751,6 +839,9 @@ object DesktopRuntime {
             label = fg.label,
             reason = lockout.reason,
             untilEpochSec = lockout.untilEpochSec,
+            isFocus = lockout.isChosen,
+            abortCost = if (lockout.canCancelFreelyAt(nowSec())) 0 else (lockout.earlyExit?.points ?: 0),
+            balance = _balance.value,
         )
     }
 

@@ -34,6 +34,8 @@ import com.dopachiru.core.time.ResetPolicy
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.points.PointReason
+import com.dopachiru.block.FocusControls
+import com.dopachiru.core.model.Focus
 import com.dopachiru.runtime.DopaRuntime
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -323,6 +325,27 @@ class DopaAccessibilityService : AccessibilityService() {
                 onGoHome = {
                     overlay.hide()
                     performGlobalAction(GLOBAL_ACTION_HOME)
+                },
+                // 自分で始めた集中のときだけ、足す・切り上げるを出す。
+                // 罰では null のままなので「押し切る手段はありません」が残る
+                focus = lockout.earlyExit?.let { exit ->
+                    val nowSec = System.currentTimeMillis() / 1000
+                    FocusControls(
+                        extendChoices = Focus.EXTEND_CHOICES,
+                        onExtend = { minutes ->
+                            DopaRuntime.extendFocus(minutes)
+                            requestImmediateEvaluation()
+                        },
+                        abortCost = if (lockout.canCancelFreelyAt(nowSec)) 0 else exit.points,
+                        balance = DopaRuntime.pointBalance(),
+                        abortEffort = exit.effort,
+                        onEndEarly = {
+                            if (DopaRuntime.endFocusEarly()) {
+                                overlay.hide()
+                                performGlobalAction(GLOBAL_ACTION_HOME)
+                            }
+                        },
+                    )
                 },
             )
         }

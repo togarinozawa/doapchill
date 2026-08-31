@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  アプリのアイコンを長押ししたときに出る候補。
+  ホーム画面に置くのを忘れていても、ここから始められる。
+  ここに並べたものは、そのままホーム画面へドラッグして置ける。
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="focus_15"
+        android:enabled="true"
+        android:icon="@drawable/ic_notification"
+        android:shortcutShortLabel="@string/focus_15"
+        android:shortcutLongLabel="@string/focus_15_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.dopachiru"
+            android:targetClass="com.dopachiru.focus.FocusShortcutActivity">
+            <extra android:name="minutes" android:value="15" />
+        </intent>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="focus_30"
+        android:enabled="true"
+        android:icon="@drawable/ic_notification"
+        android:shortcutShortLabel="@string/focus_30"
+        android:shortcutLongLabel="@string/focus_30_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.dopachiru"
+            android:targetClass="com.dopachiru.focus.FocusShortcutActivity">
+            <extra android:name="minutes" android:value="30" />
+        </intent>
+    </shortcut>
+</shortcuts>

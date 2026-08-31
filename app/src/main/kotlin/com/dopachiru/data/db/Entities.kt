@@ -153,6 +153,15 @@ data class LockoutEntity(
     val untilEpochSec: Long,
     val reason: String,
     val createdAtEpochSec: Long,
+
+    /** 端末をまたいで一意な ID。同期の鍵。古い行は空。 */
+    @ColumnInfo(defaultValue = "") val uid: String = "",
+
+    /**
+     * 途中で終わらせる手段(core の EarlyExit)を JSON にしたもの。
+     * **空なら罰**。移行前の行はすべて罰なので、既定が空で辻褄が合う。
+     */
+    @ColumnInfo(defaultValue = "") val earlyExitJson: String = "",
 )
 
 /**

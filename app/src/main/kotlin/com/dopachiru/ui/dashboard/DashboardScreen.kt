@@ -16,6 +16,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import com.dopachiru.core.model.Focus
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -113,6 +115,19 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 走っている集中。1秒ごとに見直して残り時間を動かす。 */
+    private val _focus = MutableStateFlow<com.dopachiru.core.model.Lockout?>(null)
+    val focus: StateFlow<com.dopachiru.core.model.Lockout?> = _focus.asStateFlow()
+
+    fun refreshFocus() {
+        _focus.value = DopaRuntime.activeFocus()
+    }
+
+    fun startFocus(minutes: Int) {
+        DopaRuntime.startFocus(minutes)
+        refreshFocus()
+    }
+
     fun buyPass(onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             val bought = DopaRuntime.buyPass()
@@ -153,6 +168,8 @@ fun DashboardScreen(viewModel: DashboardViewModel = viewModel()) {
         if (lockouts.isNotEmpty()) {
             item { LockoutCard(lockouts) }
         }
+
+        item { FocusCard(viewModel) }
 
         if (pointPolicy.enabled) {
             item {
@@ -541,4 +558,85 @@ private fun CalendarCard(days: List<DayStatEntity>) {
 private fun formatTime(epochSec: Long): String {
     val dt = LocalDateTime.ofInstant(Instant.ofEpochSecond(epochSec), ZoneId.systemDefault())
     return dt.format(DateTimeFormatter.ofPattern("M/d HH:mm"))
+}
+
+/**
+ * その場かぎりの集中。
+ *
+ * ルールが「いつ・どの条件で」を先に決めておくものなのに対して、
+ * これは思い立った瞬間に始めて、時間が来たら勝手に解ける。
+ * 食事のあいだだけ手を止めたい、のような使い方のためのもの。
+ *
+ * **既定を短くしてある。** 長く始めすぎると、切り上げるのに手間とポイントが要る。
+ * 短く始めて足すほうが、余計な代金を払わずに済む。
+ */
+@Composable
+private fun FocusCard(viewModel: DashboardViewModel) {
+    val focus by viewModel.focus.collectAsState()
+    var minutes by remember { mutableStateOf(Focus.DEFAULT_MINUTES) }
+
+    // 残り時間と、時間切れで解けたことを拾うために定期的に見直す
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) {
+            viewModel.refreshFocus()
+            delay(1_000)
+        }
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text("集中する", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(4.dp))
+
+            val running = focus
+            if (running != null) {
+                val remaining = running.remainingMinutesAt(System.currentTimeMillis() / 1000)
+                Text(
+                    "あと ${remaining} 分",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "画面はこのあと閉まります。切り上げるときは封鎖の画面から。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Focus.EXTEND_CHOICES.forEach { add ->
+                        TextButton(onClick = { DopaRuntime.extendFocus(add); viewModel.refreshFocus() }) {
+                            Text("+${add}分")
+                        }
+                    }
+                }
+                return@Column
+            }
+
+            Text(
+                "選んだ時間だけ、逃がすもの以外が閉まります。電話とホームは開いたままです。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(
+                    onClick = { minutes = (minutes - Focus.STEP_MINUTES).coerceAtLeast(Focus.MIN_MINUTES) },
+                    enabled = minutes > Focus.MIN_MINUTES,
+                ) { Text("−") }
+                Text(
+                    "$minutes 分",
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                )
+                TextButton(
+                    onClick = { minutes = (minutes + Focus.STEP_MINUTES).coerceAtMost(Focus.MAX_MINUTES) },
+                    enabled = minutes < Focus.MAX_MINUTES,
+                ) { Text("+") }
+                Spacer(Modifier.weight(1f))
+                Button(onClick = { viewModel.startFocus(minutes) }) { Text("始める") }
+            }
+        }
+    }
 }

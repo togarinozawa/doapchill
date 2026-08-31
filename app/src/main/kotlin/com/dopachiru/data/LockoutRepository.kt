@@ -1,6 +1,8 @@
 package com.dopachiru.data
 
 import com.dopachiru.core.DopaCore
+import com.dopachiru.core.model.EarlyExit
+import com.dopachiru.core.model.Focus
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Lockouts
 import com.dopachiru.core.model.Target
@@ -83,13 +85,77 @@ class LockoutRepository(
     /** 科した記録。解けたあとも段階を数えるために残す。 */
     private val imposedLog = java.util.Collections.synchronizedList(ArrayList<Pair<String, Long>>())
 
-    /** 期限切れを掃除する。常駐サービスの定期処理から呼ぶ。 */
-    fun purgeExpired() {
+    /**
+     * 期限切れを掃除する。常駐サービスの定期処理から呼ぶ。
+     *
+     * @return いま落ちたもの。走り切った集中に加点するために返す ──
+     *   「終わった瞬間」を捉える場所が他に無い。
+     */
+    fun purgeExpired(): List<Lockout> {
         val now = nowSec()
         val pruned = Lockouts.prune(cache, now)
-        if (pruned.size == cache.size) return
+        if (pruned.size == cache.size) return emptyList()
+        val dropped = cache.filterNot { kept -> pruned.any { it.uid == kept.uid && it.id == kept.id } }
         cache = pruned
         scope.launch { dao.purgeBefore(now) }
+        return dropped
+    }
+
+    // ---- 自分で始める集中 ------------------------------------------------
+
+    /** いま走っている集中。罰は含まない。 */
+    fun activeFocus(nowSec: Long = nowSec()): Lockout? = Focus.activeIn(current(nowSec), nowSec)
+
+    /**
+     * 集中を始める。すでに走っていれば何もしない(二重に閉じない)。
+     *
+     * 罰と同じく DB 書き込みを待たずに効かせる。押した瞬間に閉まらないと、
+     * その隙に開けてしまう。
+     */
+    fun startFocus(
+        minutes: Int,
+        allowPackages: Set<String>,
+        allowTags: Set<String>,
+        effort: String,
+        abortPoints: Int,
+    ): Lockout? {
+        val now = nowSec()
+        if (activeFocus(now) != null) return null
+        val focus = Focus.start(
+            nowSec = now,
+            minutes = minutes,
+            allowPackages = allowPackages,
+            allowTags = allowTags,
+            effort = effort,
+            abortPoints = abortPoints,
+        )
+        cache = cache + focus
+        scope.launch { dao.insert(focus.toEntity()) }
+        return focus
+    }
+
+    /** 走っている集中に時間を足す。 */
+    fun extendFocus(addMinutes: Int): Lockout? {
+        val now = nowSec()
+        val focus = activeFocus(now) ?: return null
+        val longer = Focus.extend(focus, addMinutes, now)
+        if (longer.untilEpochSec == focus.untilEpochSec) return focus
+        cache = cache.map { if (it.uid == focus.uid) longer else it }
+        scope.launch { dao.extendByUid(focus.uid, longer.untilEpochSec) }
+        return longer
+    }
+
+    /**
+     * 集中を時間より前に終わらせる。**罰は終わらせない。**
+     *
+     * @return 終わらせた集中。走っていなければ null。
+     */
+    fun endFocus(): Lockout? {
+        val now = nowSec()
+        val focus = activeFocus(now) ?: return null
+        cache = cache.filterNot { it.uid == focus.uid && it.isChosen }
+        scope.launch { dao.deleteByUid(focus.uid) }
+        return focus
     }
 
     /** 開発ツール専用。 */
@@ -110,6 +176,12 @@ private fun LockoutEntity.toLockout(): Lockout = Lockout(
     untilEpochSec = untilEpochSec,
     reason = reason,
     createdAtEpochSec = createdAtEpochSec,
+    uid = uid,
+    // 読めない出口は「出口なし」に倒す。緩むほうではなく厳しいほうへ倒すが、
+    // 時間が来れば必ず解けるので閉じ込めにはならない
+    earlyExit = earlyExitJson.takeIf { it.isNotBlank() }?.let { json ->
+        runCatching { DopaCore.json.decodeFromString(EarlyExit.serializer(), json) }.getOrNull()
+    },
 )
 
 private fun Lockout.toEntity(): LockoutEntity = LockoutEntity(
@@ -118,4 +190,6 @@ private fun Lockout.toEntity(): LockoutEntity = LockoutEntity(
     untilEpochSec = untilEpochSec,
     reason = reason,
     createdAtEpochSec = createdAtEpochSec,
+    uid = uid,
+    earlyExitJson = earlyExit?.let { DopaCore.json.encodeToString(EarlyExit.serializer(), it) }.orEmpty(),
 )

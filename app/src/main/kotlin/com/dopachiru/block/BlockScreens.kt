@@ -21,6 +21,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -263,7 +264,7 @@ fun BlockScreen(
  * 手間で諦めさせるのが狙いではない。**System 2 を一度起こすこと**が狙い。
  */
 @Composable
-private fun ReleaseEffortGate(
+fun ReleaseEffortGate(
     effort: String,
     onCancel: () -> Unit,
     onPass: () -> Unit,
@@ -501,6 +502,14 @@ fun LockoutScreen(
     reason: String,
     untilEpochSec: Long,
     onGoHome: () -> Unit,
+    /**
+     * 自分で始めた集中のときだけ渡す。罰では null。
+     *
+     * 罰と集中は同じ封鎖の仕組みで動くが、**画面に出す約束が正反対**になる。
+     * 罰は「押し切る手段はありません」、集中は「足せる・切り上げられる」。
+     * ここを取り違えると、どちらかの画面が嘘をつく。
+     */
+    focus: FocusControls? = null,
 ) = DopaBlockTheme {
     var remainingSec by remember(untilEpochSec) {
         mutableIntStateOf((untilEpochSec - System.currentTimeMillis() / 1000).coerceAtLeast(0).toInt())
@@ -534,14 +543,22 @@ fun LockoutScreen(
             )
             Spacer(Modifier.height(24.dp))
             Text(
-                text = "お預け中",
+                text = if (focus != null) "集中中" else "お預け中",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.error,
+                color = if (focus != null) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                text = if (reason.isBlank()) "ルールを破った罰" else "「$reason」を破った罰",
+                text = when {
+                    focus != null -> reason.ifBlank { "自分で始めた集中" }
+                    reason.isBlank() -> "ルールを破った罰"
+                    else -> "「$reason」を破った罰"
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -572,14 +589,96 @@ fun LockoutScreen(
             ) {
                 Text("ホームに戻る", modifier = Modifier.padding(vertical = 6.dp))
             }
-            Spacer(Modifier.height(10.dp))
+
+            if (focus == null) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "押し切る手段はありません。時間が過ぎれば自動で開きます。",
+                    style = MaterialTheme.typography.labelSmall,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Spacer(Modifier.height(20.dp))
+                FocusPanel(focus)
+            }
+        }
+    }
+}
+
+/** 集中中の封鎖画面から使える操作。 */
+data class FocusControls(
+    val extendChoices: List<Int>,
+    val onExtend: (Int) -> Unit,
+    /** いま切り上げるのに要るポイント。0 なら無料(押し間違いの猶予のうち)。 */
+    val abortCost: Int,
+    val balance: Int,
+    val abortEffort: String,
+    val onEndEarly: () -> Unit,
+) {
+    val canAfford: Boolean get() = abortCost <= 0 || balance >= abortCost
+}
+
+/**
+ * 集中中の「足す」と「切り上げる」。
+ *
+ * 足すほうを**先に、押しやすく**置いてある。短く始めて足す前提なので、
+ * ここがいちばんよく使う操作になる。切り上げるほうは文字だけにして、
+ * 押してからさらに手間を通す。
+ */
+@Composable
+private fun FocusPanel(focus: FocusControls) {
+    var ending by remember { mutableStateOf(false) }
+
+    if (ending) {
+        Text(
+            if (focus.abortCost > 0) {
+                "切り上げると ${focus.abortCost} ポイント引かれます(残り ${focus.balance})"
+            } else {
+                "いまなら無料で取り消せます"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        if (focus.canAfford) {
+            ReleaseEffortGate(
+                effort = focus.abortEffort,
+                onCancel = { ending = false },
+                onPass = { focus.onEndEarly() },
+            )
+        } else {
             Text(
-                "押し切る手段はありません。時間が過ぎれば自動で開きます。",
+                "ポイントが足りないので切り上げられません。時間が過ぎれば開きます。",
                 style = MaterialTheme.typography.labelSmall,
                 textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.error,
             )
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = { ending = false }) { Text("戻る") }
         }
+        return
+    }
+
+    Text(
+        "まだ足りなければ足せます",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        focus.extendChoices.forEach { minutes ->
+            OutlinedButton(onClick = { focus.onExtend(minutes) }) { Text("+${minutes}分") }
+        }
+    }
+    Spacer(Modifier.height(12.dp))
+    TextButton(onClick = { ending = true }) {
+        Text(
+            if (focus.abortCost > 0) "切り上げる(${focus.abortCost}ポイント)" else "取り消す",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -55,6 +56,13 @@ import com.dopachiru.core.time.ALL_DAYS
 import com.dopachiru.core.time.formatMinuteOfDay
 import com.dopachiru.data.CalendarReader
 import com.dopachiru.data.SettingsStore
+import androidx.compose.runtime.rememberCoroutineScope
+import com.dopachiru.core.action.types.BlockAction
+import com.dopachiru.core.model.Focus
+import com.dopachiru.core.model.FocusSettings
+import com.dopachiru.focus.FocusShortcutActivity
+import com.dopachiru.ui.rules.AppPickerDialog
+import com.dopachiru.ui.rules.InstalledApps
 import com.dopachiru.runtime.DopaRuntime
 import com.dopachiru.service.DopaAccessibilityService
 import com.dopachiru.core.DopaFeatures
@@ -455,6 +463,11 @@ fun SettingsScreen(
                     )
                 }
             }
+        }
+
+        item {
+            SectionTitle("集中モード")
+            FocusCard()
         }
 
         item {
@@ -1015,5 +1028,160 @@ private fun Context.openAppDetails() {
             Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
                 .setData(Uri.parse("package:$packageName"))
         )
+    }
+}
+
+/**
+ * 集中モードの既定値。
+ *
+ * ここで決めるのは「始めるときに何も考えずに済むように」であって、
+ * 長さはダッシュボードでも毎回変えられる。
+ */
+@Composable
+private fun FocusCard() {
+    val context = LocalContext.current
+    var settings by remember { mutableStateOf(DopaRuntime.focusSettings) }
+    var showAllowPicker by remember { mutableStateOf(false) }
+    var pinned by remember { mutableStateOf<Boolean?>(null) }
+    val scope = rememberCoroutineScope()
+
+    fun update(next: FocusSettings) {
+        settings = next
+        scope.launch { DopaRuntime.settings.setFocusSettings(next) }
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                "その場かぎりで手を止めたいとき用。時間が来れば勝手に解けます。" +
+                    "電話・ホーム・設定は集中中も開いたままです。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(16.dp))
+
+            MinuteStepper(
+                label = "はじめの長さ",
+                minutes = settings.defaultMinutes,
+                onChange = { update(settings.copy(defaultMinutes = it)) },
+            )
+            Text(
+                "短めにしておくのを勧めます。足りなければ足せますが、" +
+                    "長すぎたぶんを切り上げるにはポイントが要ります。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+
+            MinuteStepper(
+                label = "ホーム画面のボタンの長さ",
+                minutes = settings.shortcutMinutes,
+                onChange = { update(settings.copy(shortcutMinutes = it)) },
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = {
+                pinned = FocusShortcutActivity.requestPin(context, settings.shortcutMinutes)
+            }) {
+                Text("ホーム画面に置く")
+            }
+            pinned?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    if (it) {
+                        "ランチャーに頼みました。確認が出たら許可してください。"
+                    } else {
+                        "このランチャーは自動で置けません。アプリのアイコンを長押しすると出る候補から、自分でドラッグしてください。"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+
+            Text("集中中も開けたままにするアプリ", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "音楽や時計など。電話とホームはここに入れなくても開きます。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            if (settings.allowPackages.isEmpty()) {
+                Text(
+                    "いまは何も逃がしていません",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                settings.allowPackages.forEach { pkg ->
+                    Text("・${InstalledApps.labelOf(context, pkg)}", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = { showAllowPicker = true }) { Text("選ぶ") }
+
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+
+            Text("切り上げるときの手間", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "ポイントを払う前に、これを通します。ふと押してやめてしまうのを防ぐためです。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(
+                    BlockAction.Effort.TAP to "そのまま",
+                    BlockAction.Effort.HOLD to "3秒長押し",
+                    BlockAction.Effort.TYPE to "言葉を打つ",
+                ).forEach { (value, label) ->
+                    FilterChip(
+                        selected = settings.abortEffort == value,
+                        onClick = { update(settings.copy(abortEffort = value)) },
+                        label = { Text(label) },
+                    )
+                }
+            }
+        }
+    }
+
+    if (showAllowPicker) {
+        AppPickerDialog(
+            title = "集中中も開けるアプリ",
+            selected = settings.allowPackages,
+            onToggle = { pkg ->
+                val next = if (pkg in settings.allowPackages) {
+                    settings.allowPackages - pkg
+                } else {
+                    settings.allowPackages + pkg
+                }
+                update(settings.copy(allowPackages = next))
+            },
+            onDismiss = { showAllowPicker = false },
+        )
+    }
+}
+
+/** 5分刻みの長さ。 */
+@Composable
+private fun MinuteStepper(label: String, minutes: Int, onChange: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        TextButton(
+            onClick = { onChange((minutes - Focus.STEP_MINUTES).coerceAtLeast(Focus.MIN_MINUTES)) },
+            enabled = minutes > Focus.MIN_MINUTES,
+        ) { Text("−") }
+        Text("$minutes 分", style = MaterialTheme.typography.titleMedium)
+        TextButton(
+            onClick = { onChange((minutes + Focus.STEP_MINUTES).coerceAtMost(Focus.MAX_MINUTES)) },
+            enabled = minutes < Focus.MAX_MINUTES,
+        ) { Text("+") }
     }
 }

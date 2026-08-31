@@ -153,6 +153,8 @@ fun main() = application {
                     locked = current,
                     escapeHoldSeconds = escSeconds,
                     onMinimize = { DesktopRuntime.dismissBlock() },
+                    onExtendFocus = { DesktopRuntime.extendFocus(it) },
+                    onEndFocus = { DesktopRuntime.endFocusEarly() },
                 )
             }
         }

@@ -11,6 +11,8 @@ import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.engine.RuleEngine
 import com.dopachiru.core.gate.Gate
 import com.dopachiru.core.model.ConditionNode
+import com.dopachiru.core.model.FocusSettings
+import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.points.PointPolicy
@@ -24,6 +26,7 @@ import com.dopachiru.data.PointsRepository
 import com.dopachiru.data.ProtectedApps
 import com.dopachiru.data.RuleRepository
 import com.dopachiru.data.SettingsStore
+import com.dopachiru.service.DopaAccessibilityService
 import com.dopachiru.data.StatsRepository
 import com.dopachiru.data.StudyWindowRepository
 import com.dopachiru.data.UsageTracker
@@ -108,6 +111,11 @@ object DopaRuntime {
     var pointPolicy: PointPolicy = PointPolicy.DEFAULT
         private set
 
+    /** 集中モードの既定値。判定から同期的に読むのでキャッシュする。 */
+    @Volatile
+    var focusSettings: FocusSettings = FocusSettings()
+        private set
+
     /** 解禁券で制限が止まっている期限(秒)。過ぎれば勝手に戻る。 */
     @Volatile
     private var passUntilSec: Long = 0L
@@ -187,6 +195,7 @@ object DopaRuntime {
         scope.launch { settings.batterySaver.collect { batterySaverMode = it } }
         scope.launch { settings.studyPrepMinutes.collect { studyWindows.prepMinutes = it } }
         scope.launch { settings.pointPolicy.collect { pointPolicy = it } }
+        scope.launch { settings.focusSettings.collect { focusSettings = it } }
         scope.launch { settings.passUntilEpochSec.collect { passUntilSec = it } }
     }
 
@@ -335,8 +344,84 @@ object DopaRuntime {
         if (delta != 0) points.record(delta, PointReason.BACKED_OFF, rule.name)
     }
 
+    // ---- 自分で始める集中 ------------------------------------------------
+
+    /** いま走っている集中。罰は含まない。 */
+    fun activeFocus(): Lockout? = if (initialized) lockouts.activeFocus() else null
+
+    /**
+     * 集中を始める。5分刻みに丸められる。
+     *
+     * @return 始められたら true。すでに走っていれば false。
+     */
+    fun startFocus(minutes: Int = focusSettings.defaultMinutes): Boolean {
+        if (!initialized) return false
+        lockouts.startFocus(
+            minutes = minutes,
+            allowPackages = focusSettings.allowPackages,
+            allowTags = focusSettings.allowTags,
+            effort = focusSettings.abortEffort,
+            abortPoints = if (pointPolicy.enabled) pointPolicy.focusAbortCost else 0,
+        ) ?: return false
+        DopaAccessibilityService.kickEvaluation()
+        return true
+    }
+
+    /** 走っている集中に時間を足す。 */
+    fun extendFocus(addMinutes: Int): Boolean {
+        if (!initialized) return false
+        lockouts.extendFocus(addMinutes) ?: return false
+        DopaAccessibilityService.kickEvaluation()
+        return true
+    }
+
+    /**
+     * 集中を時間より前に終わらせる。
+     *
+     * 猶予のうちは無料。それ以降はポイントを払う ── 払えなければ終われない。
+     * 手間(長押しや打ち込み)は画面側で先に通してある。
+     */
+    fun endFocusEarly(): Boolean {
+        if (!initialized) return false
+        val now = System.currentTimeMillis() / 1000
+        val focus = lockouts.activeFocus(now) ?: return false
+
+        val cost = if (focus.canCancelFreelyAt(now)) 0 else (focus.earlyExit?.points ?: 0)
+        if (cost > 0 && !canAfford(cost)) return false
+
+        lockouts.endFocus() ?: return false
+        if (cost > 0) {
+            points.record(-cost, PointReason.FOCUS_ABORTED, "残り${focus.remainingMinutesAt(now)}分")
+        }
+        DopaAccessibilityService.kickEvaluation()
+        return true
+    }
+
+    /**
+     * 走り切った集中に加点する。
+     *
+     * 期限が切れた瞬間を捉える場所が無いので、掃除のついでに見る。
+     * 同じ集中で二度加点しないよう uid を鍵にする。
+     */
+    fun awardFinishedFocus(finished: List<Lockout>) {
+        val policy = pointPolicy
+        if (!policy.enabled || policy.focusDonePoints == 0) return
+        finished.asSequence().filter { it.isChosen }.forEach { focus ->
+            val minutes = ((focus.untilEpochSec - focus.createdAtEpochSec) / 60).toInt()
+            points.record(
+                delta = policy.focusDonePoints,
+                reason = PointReason.FOCUS_DONE,
+                note = "${minutes}分",
+                dedupKey = "focus:${focus.uid}",
+            )
+        }
+    }
+
     /** 押し切るのにいくら要るか。0 なら代金は取らない。 */
     fun overrideCost(rule: Rule): Int = pointPolicy.overrideCost(rule.consequence.breakPoints)
+
+    /** いまの残高。画面から同期的に読む。 */
+    fun pointBalance(): Int = if (initialized) points.currentBalance() else 0
 
     /** その値段を払えるか。払えないと押し切りボタンが出ない。 */
     fun canAfford(cost: Int): Boolean = cost <= 0 || points.currentBalance() >= cost
@@ -511,7 +596,7 @@ object DopaRuntime {
         val foreground = currentForegroundPackage
         usage.tick()
         declarations.tick(foreground)
-        lockouts.purgeExpired()
+        awardFinishedFocus(lockouts.purgeExpired())
         refreshCalendarIfStale()
         awardStudyIfCompleted()
 

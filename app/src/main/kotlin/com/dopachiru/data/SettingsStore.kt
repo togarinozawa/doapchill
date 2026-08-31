@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.dopachiru.core.DopaCore
 import com.dopachiru.core.gate.Gate
+import com.dopachiru.core.model.FocusSettings
 import com.dopachiru.core.points.PointPolicy
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -45,6 +46,7 @@ class SettingsStore(private val context: Context) {
         val studyPrepMinutes = intPreferencesKey("study_prep_minutes")
         val pointPolicyJson = stringPreferencesKey("point_policy_json")
         val passUntilEpochSec = longPreferencesKey("pass_until_epoch_sec")
+        val focusSettingsJson = stringPreferencesKey("focus_settings_json")
     }
 
     val setupDone: Flow<Boolean> = context.dataStore.data.map { it[Keys.setupDone] ?: false }
@@ -129,6 +131,23 @@ class SettingsStore(private val context: Context) {
      */
     val passUntilEpochSec: Flow<Long> =
         context.dataStore.data.map { it[Keys.passUntilEpochSec] ?: 0L }
+
+    /**
+     * 集中モードの既定値。
+     *
+     * ポイントの相場と同じく JSON 1本で持つ ── 欄が増えても
+     * DataStore の鍵を足さずに済む。
+     */
+    val focusSettings: Flow<FocusSettings> = context.dataStore.data.map { prefs ->
+        val raw = prefs[Keys.focusSettingsJson] ?: return@map FocusSettings()
+        runCatching { DopaCore.json.decodeFromString(FocusSettings.serializer(), raw) }
+            .getOrDefault(FocusSettings())
+    }
+
+    suspend fun setFocusSettings(settings: FocusSettings) {
+        val encoded = DopaCore.json.encodeToString(FocusSettings.serializer(), settings)
+        context.dataStore.edit { it[Keys.focusSettingsJson] = encoded }
+    }
 
     suspend fun setPassUntil(epochSec: Long) {
         context.dataStore.edit { it[Keys.passUntilEpochSec] = epochSec }
