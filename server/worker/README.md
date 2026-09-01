@@ -25,14 +25,15 @@ D1 の実体は SQLite なので、[schema.sql](schema.sql) は Express + better
 | | |
 |---|---|
 | Worker | `dopachiru-sync` |
-| いま使えるアドレス | `https://dopachiru-sync.snnnsnn3777.workers.dev` |
-| これから使うアドレス | `https://dopa.togar.dev`(**DNS の先客を消すまで保留**) |
+| アドレス | `https://dopa.togar.dev` |
+| 予備のアドレス | `https://dopachiru-sync.snnnsnn3777.workers.dev` |
 | D1 | `dopachiru`(APAC) |
 | 合言葉 | Workers の secret `DOPA_TOKEN`。手元の控えは `.dopa-token`(gitignore 済み) |
 
-`dopa.togar.dev` には**中身の無いトンネルを指す DNS レコードが残っています。**
+もともと `dopa.togar.dev` には中身の無いトンネルを指す DNS レコードが載っていました。
 Cloudflare は外で管理されているレコードを勝手に上書きしないので、
-**そのレコードを消してから** `wrangler deploy` を打ち直すと繋がります。
+**先にそれを消してから** `wrangler deploy` を打つ必要がありました。同じことが起きたら、
+`Hostname ... already has externally managed DNS records` がその合図です。
 
 workers.dev も開けたままにしてあります。DNS をいじった直後に落ちたとき、
 切り分ける先が1つも無いと詰むためです。どちらも合言葉が要ります。
