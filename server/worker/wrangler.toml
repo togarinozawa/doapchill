@@ -2,14 +2,24 @@ name = "dopachiru-sync"
 main = "src/index.js"
 compatibility_date = "2026-08-01"
 
+# カスタムドメインとは別に workers.dev も開けておく。
+# DNS をいじった直後に落ちたとき、切り分ける先が1つも無いと詰む。
+# どちらも合言葉が要るので、口が2つあること自体は緩みではない。
+workers_dev = true
+
 # 落ちない置き場所を選んだので、常駐も pm2 も要りません。
 # 自宅の機械を1台畳んだだけで同期が止まる形には戻さない。
 
 [[d1_databases]]
 binding = "DB"
 database_name = "dopachiru"
-# `npx wrangler d1 create dopachiru` が出す id をここに貼る
-database_id = "PUT-DATABASE-ID-HERE"
+database_id = "2cb2fb9e-0a17-4e43-b6da-6fba1f44ccae"
+
+# 先に作ってあった dopa.togar.dev を、そのまま Worker の入口にする。
+# もともとは中身の無いトンネルを指していて 404 を返すだけだった。
+[[routes]]
+pattern = "dopa.togar.dev"
+custom_domain = true
 
 [observability]
 enabled = true

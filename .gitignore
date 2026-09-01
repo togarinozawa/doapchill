@@ -42,3 +42,6 @@ dopa_design_doc.md
 .wrangler/
 server/worker/node_modules/
 server/worker/package-lock.json
+
+# 同期サーバーの合言葉。端末に入れるために手元へ控えるだけのもの
+server/worker/.dopa-token

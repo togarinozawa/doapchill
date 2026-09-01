@@ -18,6 +18,25 @@ D1 の実体は SQLite なので、[schema.sql](schema.sql) は Express + better
 **逆に言えば、ここに判定を持たせてはいけません。**
 ネットが切れれば外れる制限は、機内モードにするだけで抜けられる制限です。
 
+## いまの状態(2026-09-01)
+
+**デプロイ済み・動作確認済みです。**
+
+| | |
+|---|---|
+| Worker | `dopachiru-sync` |
+| いま使えるアドレス | `https://dopachiru-sync.snnnsnn3777.workers.dev` |
+| これから使うアドレス | `https://dopa.togar.dev`(**DNS の先客を消すまで保留**) |
+| D1 | `dopachiru`(APAC) |
+| 合言葉 | Workers の secret `DOPA_TOKEN`。手元の控えは `.dopa-token`(gitignore 済み) |
+
+`dopa.togar.dev` には**中身の無いトンネルを指す DNS レコードが残っています。**
+Cloudflare は外で管理されているレコードを勝手に上書きしないので、
+**そのレコードを消してから** `wrangler deploy` を打ち直すと繋がります。
+
+workers.dev も開けたままにしてあります。DNS をいじった直後に落ちたとき、
+切り分ける先が1つも無いと詰むためです。どちらも合言葉が要ります。
+
 ## 立ち上げかた
 
 ```bash
