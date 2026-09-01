@@ -37,3 +37,8 @@ id_ed25519
 # 個人的なメモ。手元には残すが公開しない
 dopa.md
 dopa_design_doc.md
+
+# Cloudflare Workers。手元の D1 の実体と、wrangler の作業ファイル
+.wrangler/
+server/worker/node_modules/
+server/worker/package-lock.json

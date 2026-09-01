@@ -1,0 +1,15 @@
+name = "dopachiru-sync"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+# 落ちない置き場所を選んだので、常駐も pm2 も要りません。
+# 自宅の機械を1台畳んだだけで同期が止まる形には戻さない。
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dopachiru"
+# `npx wrangler d1 create dopachiru` が出す id をここに貼る
+database_id = "PUT-DATABASE-ID-HERE"
+
+[observability]
+enabled = true

@@ -1,4 +1,14 @@
-# ドパチル同期 — スキマス側への取り付け手順
+# ドパチル同期 — スキマス側への取り付け手順(**役目を終えました**)
+
+> **⚠ この手順はもう使えません。**
+> 取り付け先だった dynasched のサーバーは 2026-08-18 に畳まれ、
+> `/home/tf/projects/dynasched` は DB ごと削除されています。
+> 相乗りする先がもう無いので、**同期サーバーは [worker/](worker/) に作り直しました**
+> (Cloudflare Workers + D1)。
+>
+> こちらのファイルは、ルート・スキーマ・衝突解決の考え方の記録として残してあります。
+> 中身の設計は worker 版にそのまま引き継いでいます。
+
 
 `ANSWER-SUKIMASU.md` でもらった流儀(Express / better-sqlite3 / `CREATE TABLE IF NOT EXISTS`
 だけ / `dopachiru_` 接頭辞 / `index.js` は末尾に1行)に合わせて書いてあります。

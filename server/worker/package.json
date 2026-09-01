@@ -1,0 +1,14 @@
+{
+  "name": "dopachiru-sync",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "deploy": "wrangler deploy",
+    "schema:local": "wrangler d1 execute dopachiru --local --file=schema.sql",
+    "schema:remote": "wrangler d1 execute dopachiru --remote --file=schema.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^4.127.1"
+  }
+}
