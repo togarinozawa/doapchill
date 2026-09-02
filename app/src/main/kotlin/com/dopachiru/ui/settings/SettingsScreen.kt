@@ -527,7 +527,7 @@ fun SettingsScreen(
             // 文字が小さいので、当たり判定は padding で広げてある。
             // 隠す意図はないのに「押せなくて見つからない」のはただの不便。
             Text(
-                "ドパチル(長押しで開発ツール)",
+                "ドパチル " + versionLabel(context) + "(長押しで開発ツール)",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
@@ -589,6 +589,23 @@ fun SettingsScreen(
 }
 
 // ------------------------------------------------------------------
+
+/**
+ * 入っている版。`0.8.0 (14)` の形。
+ *
+ * gradle の値を焼き込むのではなく、**入っているパッケージから読みます** ──
+ * 焼き込むと、渡した APK と端末に入っているものが食い違ったときに
+ * 画面が嘘をつきます。「どの版を入れたつもりか」ではなく
+ * 「いま何が入っているか」が知りたいので。
+ *
+ * 括弧の中は versionCode。表向きの版が同じでも、作り直したものかは
+ * こちらで見分けられます。
+ */
+private fun versionLabel(context: android.content.Context): String = runCatching {
+    val info = context.packageManager.getPackageInfo(context.packageName, 0)
+    val code = androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(info)
+    "${info.versionName} ($code)"
+}.getOrDefault("")
 
 /**
  * 開発ツールへの入口。

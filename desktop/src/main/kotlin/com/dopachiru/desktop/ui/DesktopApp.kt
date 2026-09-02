@@ -872,8 +872,29 @@ private fun SettingsTab() {
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+
+        Spacer(Modifier.height(24.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "ドパチル " + desktopVersion(),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(16.dp))
     }
 }
+
+/**
+ * 動いている版。
+ *
+ * jpackage が起動時に渡してくる値を読みます。gradle の値を焼き込むより、
+ * **いま動いているものから読む**ほうが嘘になりません。
+ * `gradlew :desktop:run` で直接動かしたときは渡ってこないので、そのときは
+ * 「開発中」と出ます ── 版を名乗れないことと、間違った版を名乗ることは違います。
+ */
+private fun desktopVersion(): String =
+    System.getProperty("jpackage.app-version")?.takeIf { it.isNotBlank() } ?: "(開発中)"
 
 /**
  * ポイントの使い道と相場。
