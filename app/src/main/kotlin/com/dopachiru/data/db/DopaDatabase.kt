@@ -19,8 +19,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DayStatEntity::class,
         LockoutEntity::class,
         PointEventEntity::class,
+        SyncStateEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 abstract class DopaDatabase : RoomDatabase() {
@@ -34,6 +35,7 @@ abstract class DopaDatabase : RoomDatabase() {
     abstract fun dayStatDao(): DayStatDao
     abstract fun lockoutDao(): LockoutDao
     abstract fun pointEventDao(): PointEventDao
+    abstract fun syncStateDao(): SyncStateDao
 
     companion object {
         /**
@@ -140,6 +142,28 @@ abstract class DopaDatabase : RoomDatabase() {
             "ALTER TABLE `lockouts` ADD COLUMN `earlyExitJson` TEXT NOT NULL DEFAULT ''",
         )
 
+        /**
+         * 5→6。同期の覚え書きを1つ足すだけ。
+         *
+         * 既存の行には触れません。**この表が空でも同期は動きます** ──
+         * 墓標が無い = 消したものがまだ無い、として辻褄が合うので。
+         */
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_5_6_SQL.forEach { db.execSQL(it) }
+            }
+        }
+
+        /** 5→6 で流す SQL。生成物との突き合わせはテストが見ています。 */
+        internal val MIGRATION_5_6_SQL: List<String> = listOf(
+            "CREATE TABLE IF NOT EXISTS `sync_state` (" +
+                "`kind` TEXT NOT NULL, " +
+                "`uid` TEXT NOT NULL, " +
+                "`updatedAt` INTEGER NOT NULL, " +
+                "`deleted` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`kind`, `uid`))",
+        )
+
         @Volatile
         private var instance: DopaDatabase? = null
 
@@ -150,7 +174,13 @@ abstract class DopaDatabase : RoomDatabase() {
                     DopaDatabase::class.java,
                     "dopachiru.db",
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(
+                        MIGRATION_1_2,
+                        MIGRATION_2_3,
+                        MIGRATION_3_4,
+                        MIGRATION_4_5,
+                        MIGRATION_5_6,
+                    )
                     .build()
                     .also { instance = it }
             }

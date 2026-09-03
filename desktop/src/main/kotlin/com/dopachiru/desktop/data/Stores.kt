@@ -2,6 +2,7 @@ package com.dopachiru.desktop.data
 
 import com.dopachiru.core.model.FocusSettings
 import com.dopachiru.core.model.Lockout
+import com.dopachiru.core.sync.SyncSettings
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.points.PointEvent
 import com.dopachiru.core.points.PointPolicy
@@ -41,6 +42,9 @@ data class DesktopSettings(
     /** 集中モードの既定値。Android と同じ形なので、いずれ同期に載せられる。 */
     val focus: FocusSettings = FocusSettings(),
 
+    /** 端末間の同期。既定では切ってある。 */
+    val sync: SyncSettings = SyncSettings(),
+
     /**
      * 拡張と分け合う合言葉。
      *
@@ -57,7 +61,24 @@ data class RuleFile(
     val nextId: Long = 1L,
     /** プロセス名 → タグ。 */
     val tags: Map<String, Set<String>> = emptyMap(),
-)
+
+    /**
+     * 同期の覚え書き。Android の `sync_state` 表にあたるもの。
+     *
+     * 鍵は `種類|uid`。**消したことを覚える場所**がここで、無いとルールを消しても
+     * 次の同期で別の端末から送り返されて生き返ります。
+     * タグと名札は行に時刻を持たないので、変えた時刻もここに置きます。
+     */
+    val syncState: Map<String, SyncStamp> = emptyMap(),
+) {
+    fun stampOf(kind: String, uid: String): SyncStamp? = syncState["$kind|$uid"]
+
+    fun withStamp(kind: String, uid: String, stamp: SyncStamp): RuleFile =
+        copy(syncState = syncState + ("$kind|$uid" to stamp))
+}
+
+@Serializable
+data class SyncStamp(val updatedAt: Long, val deleted: Boolean = false)
 
 @Serializable
 data class UsageSession(

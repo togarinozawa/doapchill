@@ -9,7 +9,7 @@ plugins {
 }
 
 /** Windows 版の版番号。持ち運び版の名前と MSI の両方で使う。 */
-val desktopVersion = "1.4.1"
+val desktopVersion = "1.5.0"
 
 kotlin {
     jvmToolchain(21)

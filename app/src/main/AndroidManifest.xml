@@ -2,6 +2,18 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!--
+      端末間の同期のためだけの通信。既定では切ってあり、サーバーの住所と
+      合言葉を入れて初めて動きます。
+
+      **制限の実行はここに依存しません。** 各端末はローカルのルールで判定するので、
+      圏外でも機内モードでもサーバーが落ちていても縛りは効いたままです。
+      逆に言えば、判定を通信の向こうに置いてはいけません ──
+      ネットを切れば外れる制限は、機内モードにするだけで抜けられる制限です。
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- 常駐サービスの通知(Android 13+ はランタイム許可が要る) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

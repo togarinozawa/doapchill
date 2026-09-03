@@ -23,10 +23,18 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Button
 import com.dopachiru.core.model.Focus
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import com.dopachiru.desktop.data.DesktopSync
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.dopachiru.core.io.ImportPlan
 import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -569,6 +577,137 @@ private fun FocusSection() {
     )
 }
 
+/**
+ * 端末間の同期。
+ *
+ * **既定で切ってあります。** 住所と合言葉を入れて初めて動きます。
+ * 何が出るかを画面に書いてあるのは、外から確かめようが無いためです。
+ */
+@Composable
+private fun SyncSection() {
+    val settings by DesktopRuntime.settings.collectAsState()
+    val sync = settings.sync
+    var url by remember(sync.baseUrl) { mutableStateOf(sync.baseUrl) }
+    var token by remember(sync.token) { mutableStateOf(sync.token) }
+    var device by remember(sync.deviceId) { mutableStateOf(sync.deviceId) }
+    var showToken by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+
+    Text("端末間の同期", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "別の端末とルールを揃えます。制限そのものはここに依存しません ── " +
+            "サーバーが落ちていても、縛りは効いたままです。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(12.dp))
+
+    OutlinedTextField(
+        value = url,
+        onValueChange = { url = it },
+        label = { Text("サーバーの住所") },
+        placeholder = { Text("https://dopa.togar.dev") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        value = token,
+        onValueChange = { token = it },
+        label = { Text("合言葉") },
+        singleLine = true,
+        visualTransformation = if (showToken) {
+            VisualTransformation.None
+        } else {
+            PasswordVisualTransformation()
+        },
+        trailingIcon = {
+            TextButton(onClick = { showToken = !showToken }) {
+                Text(if (showToken) "隠す" else "見る")
+            }
+        },
+        supportingText = { Text("英数字と記号だけ。日本語は通信の見出しに載りません。") },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        value = device,
+        onValueChange = { device = it },
+        label = { Text("この端末の名前") },
+        placeholder = { Text("pc") },
+        singleLine = true,
+        supportingText = { Text("実績を端末ごとに分けて見るときの見出しになります。") },
+        modifier = Modifier.fillMaxWidth(),
+    )
+
+    Spacer(Modifier.height(12.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedButton(onClick = {
+            DesktopRuntime.updateSettings {
+                it.copy(
+                    sync = it.sync.copy(
+                        baseUrl = url.trim(),
+                        token = token.trim(),
+                        deviceId = device.trim(),
+                    ),
+                )
+            }
+            result = "保存しました"
+        }) { Text("保存する") }
+
+        Switch(
+            checked = sync.enabled,
+            enabled = sync.isConfigured,
+            onCheckedChange = { on ->
+                DesktopRuntime.updateSettings { it.copy(sync = it.sync.copy(enabled = on)) }
+            },
+        )
+        Text(if (sync.enabled) "同期する" else "同期しない", style = MaterialTheme.typography.bodySmall)
+
+        Button(
+            onClick = {
+                busy = true
+                result = "同期しています…"
+                scope.launch {
+                    // 通信を待つあいだ画面を止めない
+                    val out = withContext(Dispatchers.IO) { DesktopRuntime.syncNow() }
+                    result = when (out) {
+                        is DesktopSync.Outcome.Done -> "受け取り ${out.pulled} 件 / 送り ${out.pushed} 件"
+                        is DesktopSync.Outcome.NotConfigured -> "まだ設定できていません"
+                        is DesktopSync.Outcome.Failed -> out.message
+                    }
+                    busy = false
+                }
+            },
+            enabled = sync.isConfigured && sync.enabled && !busy,
+        ) { Text("いま同期する") }
+    }
+
+    if (result.isNotBlank()) {
+        Spacer(Modifier.height(8.dp))
+        Text(result, style = MaterialTheme.typography.bodySmall)
+    }
+    if (sync.lastError.isNotBlank()) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "前回: " + sync.lastError,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+
+    Spacer(Modifier.height(12.dp))
+    Text(
+        "出るもの: ルール・タグ・アプリ名・今日の使用時間\n" +
+            "出ないもの: どの瞬間に何を見ていたか、ゲート、変更リクエスト",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
 /** 拡張から最後に連絡が来てから、これを過ぎたら「止まっているかも」と出す(秒)。 */
 private const val FRESH_SEC = 180L
 
@@ -826,6 +965,12 @@ private fun SettingsTab() {
                 onCheckedChange = { DesktopRuntime.updateSettings { s -> s.copy(paused = it) } },
             )
         }
+
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(20.dp))
+
+        SyncSection()
 
         Spacer(Modifier.height(20.dp))
         HorizontalDivider()

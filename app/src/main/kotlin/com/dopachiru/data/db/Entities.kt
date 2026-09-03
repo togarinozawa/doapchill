@@ -40,6 +40,31 @@ data class RuleEntity(
     val updatedAt: Long,
 )
 
+/**
+ * 同期のための覚え書き。
+ *
+ * ## なぜ要るか
+ *
+ * **消したことを覚えておく場所が無い**のがいちばんの理由です。ルールを消すと行が
+ * 消えるので、次の同期では「そんなものは無かった」ようにしか見えません。すると
+ * **別の端末がそのルールを送り返してきて、消したはずのものが生き返ります。**
+ * 墓標をここに残して、消したこと自体を配ります。
+ *
+ * もう1つは、**タグと名札に更新時刻が無い**こと。どちらが新しいかを比べられないと
+ * 衝突を解けないので、変えた時刻をここに書いておきます。
+ *
+ * ルールは行に `updatedAt` を持っているので、ここには墓標だけが入ります。
+ */
+@Entity(tableName = "sync_state", primaryKeys = ["kind", "uid"])
+data class SyncStateEntity(
+    /** core の SyncKinds の値。 */
+    val kind: String,
+    val uid: String,
+    val updatedAt: Long,
+    /** 墓標なら true。 */
+    val deleted: Boolean = false,
+)
+
 /** アプリに付けたタグ(= アプリグループ)。 */
 @Entity(tableName = "app_tags", primaryKeys = ["packageName", "tag"])
 data class AppTagEntity(

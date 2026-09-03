@@ -61,7 +61,7 @@ USB デバッグを有効にした端末を繋いで、次を実行するとイ�
 
 ```bash
 ./gradlew :app:dist
-adb install -r dist/dopachiru-0.8.0.apk
+adb install -r dist/dopachiru-0.9.0.apk
 ```
 
 ### 配布用 APK
@@ -73,7 +73,7 @@ adb install -r dist/dopachiru-0.8.0.apk
 
 ```bash
 ./gradlew :app:dist        # dist/dopachiru-<版>.apk
-./gradlew :desktop:packagePortable   # dist/dopachiru-windows-portable.zip
+./gradlew :desktop:packagePortable   # dist/dopachiru-windows-<版>.zip
 ```
 
 `dist/` に版つきで出ます。`app/build/outputs/apk/release/app-release.apk` は
@@ -132,7 +132,7 @@ adb shell appops set com.dopachiru ACCESS_RESTRICTED_SETTINGS allow
 **理由を確実に知りたいなら adb が一番早い**です。失敗の種類がそのまま出ます。
 
 ```bash
-adb install -r dist/dopachiru-0.8.1.apk
+adb install -r dist/dopachiru-0.9.0.apk
 ```
 
 `INSTALL_FAILED_VERIFICATION_FAILURE` なら Play プロテクト、
@@ -140,7 +140,7 @@ adb install -r dist/dopachiru-0.8.1.apk
 
 ### 入っている版を確かめる
 
-**設定タブの一番下**に出ています(`ドパチル 0.8.1 (15)`)。
+**設定タブの一番下**に出ています(`ドパチル 0.9.0 (16)`)。
 括弧の中は versionCode で、表向きの版が同じでも作り直したものかを見分けられます。
 
 gradle の値を焼き込むのではなく**入っているパッケージから読んでいる**ので、
@@ -202,8 +202,60 @@ gradle の値を焼き込むのではなく**入っているパッケージか�
 **完走すると加点します。** 長さに比例させていないのは、5分を12回に割って稼げてしまうと
 集中そのものではなく数を稼ぐ遊びになるためです。
 
-> 端末をまたぐ同期は**まだです**。`Lockout` に `uid` を持たせてあるので、
-> 同期が入れば「スマホで始めた集中で PC も閉まる」に広げられます。
+> 集中モードそのものはまだ端末をまたぎません(ルールと実績が先)。
+> `Lockout` に `uid` を持たせてあるので、あとから同じ仕組みに載せられます。
+
+---
+
+## 端末間の同期
+
+**既定で切ってあります。** 設定タブで住所・合言葉・端末名を入れて初めて動きます。
+サーバーは [server/worker](server/worker/README.md)(Cloudflare Workers + D1)。
+
+### 配るだけで、取り締まりには関わりません
+
+判定はすべて端末の中です。**サーバーが落ちていても、圏外でも、機内モードでも
+縛りは効いたまま**で、止まって起きるのは「別の端末で足したルールがまだ届かない」だけ。
+
+逆に言えば、**判定を通信の向こうに置いてはいけません。**
+ネットを切れば外れる制限は、機内モードにするだけで抜けられる制限です。
+
+### 何が出て、何が出ないか
+
+| 出る | 出ない |
+|---|---|
+| ルール(反省文を含む) | どの瞬間に何を見ていたか |
+| タグ | ゲート |
+| アプリ名 | 変更リクエスト |
+| 1日ごとの使用時間 | 押し切りの記録の中身 |
+
+**ゲートと変更リクエストを配らない**のは、承認待ちが別の端末に流れると
+**片方で作った申請をもう片方で承認できてしまう**からです。ゲートを置いた意味が消えます。
+
+### 仕組み
+
+**毎回まるごと送ります。** 「前回から変わったぶんだけ」を端末側でやると、
+取りこぼしたときに二度と送られないバグが出ます。数個のルールなら数キロバイトなので、
+全部送って古いものはサーバーに捨てさせます
+(`ON CONFLICT ... WHERE excluded.updated_at > ...`)。
+
+**受け取るほうはサーバーが振る `rev` をカーソルにします。**
+端末の時計に頼らないので、時計がずれていても取りこぼしません。
+
+**消したことも配ります。** ルールを消すと行が消えるので、そのままでは
+次の同期で「そんなものは無かった」ようにしか見えず、**別の端末が送り返してきて
+生き返ります。** 墓標を残して、消したこと自体を配ります(90日で掃除)。
+
+**アプリ名を別に配る**のは、実績に `com.twitter.android` や `chrome.exe` しか
+入っていないためです。名札が無いと、別の端末の実績を読める形で出せません。
+鍵を `android:` `windows:` で分けてあるのは、`chrome.exe` のように
+両方に存在しうる名前で**互いに上書きし合わない**ようにするためです。
+
+**実績は端末ごとに分けて持ちます。** 合算で上書きすると
+「スマホ30分 + PC20分」の日が 20分になります。
+
+> Windows 側が送るのは**今日ぶんだけ**です。使用の記録を48時間しか持っていないので、
+> 持っていないものを 0 として送ると**サーバー上の過去を 0 で塗り潰します**。
 
 ---
 
@@ -301,7 +353,7 @@ gradlew :desktop:run
 配布物は2種類。どちらも JRE を同梱しているので、Java を入れていない PC でも動きます。
 
 ```bash
-gradlew :desktop:packagePortable   # dist/dopachiru-windows-portable.zip
+gradlew :desktop:packagePortable   # dist/dopachiru-windows-<版>.zip
 gradlew :desktop:packageMsi        # インストーラ(WiX は Gradle が自動で落とす)
 ```
 

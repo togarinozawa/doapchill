@@ -227,3 +227,28 @@ interface DayStatDao {
     @Upsert
     suspend fun upsert(stat: DayStatEntity)
 }
+
+@Dao
+interface SyncStateDao {
+    @Query("SELECT * FROM sync_state WHERE kind = :kind")
+    suspend fun ofKind(kind: String): List<SyncStateEntity>
+
+    @Query("SELECT * FROM sync_state WHERE kind = :kind AND uid = :uid")
+    suspend fun get(kind: String, uid: String): SyncStateEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun put(state: SyncStateEntity)
+
+    @Query("DELETE FROM sync_state WHERE kind = :kind AND uid = :uid")
+    suspend fun remove(kind: String, uid: String)
+
+    /**
+     * 古い墓標を落とす。
+     *
+     * 消し続けないのは、**永遠に残すと墓標だけが増え続ける**ため。
+     * ただし短すぎると、長く寝ていた端末が復活させてしまうので、
+     * 呼ぶ側が十分長い期間を渡します。
+     */
+    @Query("DELETE FROM sync_state WHERE deleted = 1 AND updatedAt < :beforeEpochSec")
+    suspend fun purgeTombstones(beforeEpochSec: Long)
+}

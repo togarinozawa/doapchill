@@ -26,6 +26,7 @@ import com.dopachiru.data.PointsRepository
 import com.dopachiru.data.ProtectedApps
 import com.dopachiru.data.RuleRepository
 import com.dopachiru.data.SettingsStore
+import com.dopachiru.data.SyncManager
 import com.dopachiru.service.DopaAccessibilityService
 import com.dopachiru.data.StatsRepository
 import com.dopachiru.data.StudyWindowRepository
@@ -151,7 +152,7 @@ object DopaRuntime {
         protectedApps = ProtectedApps(app)
         db = DopaDatabase.get(app)
         settings = SettingsStore(app)
-        rules = RuleRepository(db.ruleDao(), db.appTagDao())
+        rules = RuleRepository(db.ruleDao(), db.appTagDao(), db.syncStateDao())
         usage = UsageTracker(db.usageDao(), scope)
         declarations = DeclarationManager(db.declarationDao(), scope)
         stats = StatsRepository(db.dayStatDao(), db.blockLogDao())
@@ -159,6 +160,7 @@ object DopaRuntime {
         studyWindows = StudyWindowRepository(db.studyWindowDao(), scope)
         lockouts = LockoutRepository(db.lockoutDao(), scope)
         points = PointsRepository(db.pointEventDao(), scope)
+        sync = SyncManager(app, rules, stats, db.syncStateDao(), settings)
         changes = ChangeRequestRepository(
             dao = db.changeRequestDao(),
             ruleRepository = rules,
@@ -419,6 +421,13 @@ object DopaRuntime {
 
     /** 押し切るのにいくら要るか。0 なら代金は取らない。 */
     fun overrideCost(rule: Rule): Int = pointPolicy.overrideCost(rule.consequence.breakPoints)
+
+    /**
+     * 端末間の同期。**制限の実行はこれに依存しません。**
+     * 落ちていても圏外でも、判定はローカルのルールで続きます。
+     */
+    lateinit var sync: SyncManager
+        private set
 
     /** いまの残高。画面から同期的に読む。 */
     fun pointBalance(): Int = if (initialized) points.currentBalance() else 0

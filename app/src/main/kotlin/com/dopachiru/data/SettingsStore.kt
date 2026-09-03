@@ -13,6 +13,7 @@ import com.dopachiru.core.DopaCore
 import com.dopachiru.core.gate.Gate
 import com.dopachiru.core.model.FocusSettings
 import com.dopachiru.core.points.PointPolicy
+import com.dopachiru.core.sync.SyncSettings
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -47,6 +48,7 @@ class SettingsStore(private val context: Context) {
         val pointPolicyJson = stringPreferencesKey("point_policy_json")
         val passUntilEpochSec = longPreferencesKey("pass_until_epoch_sec")
         val focusSettingsJson = stringPreferencesKey("focus_settings_json")
+        val syncSettingsJson = stringPreferencesKey("sync_settings_json")
     }
 
     val setupDone: Flow<Boolean> = context.dataStore.data.map { it[Keys.setupDone] ?: false }
@@ -147,6 +149,23 @@ class SettingsStore(private val context: Context) {
     suspend fun setFocusSettings(settings: FocusSettings) {
         val encoded = DopaCore.json.encodeToString(FocusSettings.serializer(), settings)
         context.dataStore.edit { it[Keys.focusSettingsJson] = encoded }
+    }
+
+    /**
+     * 同期の設定。
+     *
+     * 合言葉をここに持つので、**画面に出すときは伏せます。**
+     * JSON 1本なのは、欄が増えても DataStore の鍵を足さずに済むため。
+     */
+    val syncSettings: Flow<SyncSettings> = context.dataStore.data.map { prefs ->
+        val raw = prefs[Keys.syncSettingsJson] ?: return@map SyncSettings()
+        runCatching { DopaCore.json.decodeFromString(SyncSettings.serializer(), raw) }
+            .getOrDefault(SyncSettings())
+    }
+
+    suspend fun setSyncSettings(settings: SyncSettings) {
+        val encoded = DopaCore.json.encodeToString(SyncSettings.serializer(), settings)
+        context.dataStore.edit { it[Keys.syncSettingsJson] = encoded }
     }
 
     suspend fun setPassUntil(epochSec: Long) {

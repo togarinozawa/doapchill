@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -63,6 +64,9 @@ import com.dopachiru.core.model.FocusSettings
 import com.dopachiru.focus.FocusShortcutActivity
 import com.dopachiru.ui.rules.AppPickerDialog
 import com.dopachiru.ui.rules.InstalledApps
+import androidx.compose.ui.text.input.VisualTransformation
+import com.dopachiru.core.sync.SyncSettings
+import com.dopachiru.data.SyncManager
 import com.dopachiru.runtime.DopaRuntime
 import com.dopachiru.service.DopaAccessibilityService
 import com.dopachiru.core.DopaFeatures
@@ -466,6 +470,11 @@ fun SettingsScreen(
         }
 
         item {
+            SectionTitle("端末間の同期")
+            SyncCard()
+        }
+
+        item {
             SectionTitle("集中モード")
             FocusCard()
         }
@@ -516,7 +525,14 @@ fun SettingsScreen(
         item {
             SectionTitle("このアプリについて")
             Text(
-                "使用状況もカレンダーの予定も端末の中だけで処理され、外部には一切送信されません。",
+                "判定はすべて端末の中で行われます。同期を切っていれば、何も外に出ません。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "同期を入れたときに出るのは、ルール・タグ・アプリ名・1日ごとの使用時間だけです。" +
+                    "どの瞬間に何を見ていたかは出ません。ゲートと変更リクエストも出ません。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1200,5 +1216,166 @@ private fun MinuteStepper(label: String, minutes: Int, onChange: (Int) -> Unit) 
             onClick = { onChange((minutes + Focus.STEP_MINUTES).coerceAtMost(Focus.MAX_MINUTES)) },
             enabled = minutes < Focus.MAX_MINUTES,
         ) { Text("+") }
+    }
+}
+
+/**
+ * 端末間の同期。
+ *
+ * **既定で切ってあります。** 住所と合言葉を入れて初めて動きます。
+ *
+ * 何が出るかを画面に書いてあるのは、**権限の一覧を見ても分からない**ためです。
+ * INTERNET を持っているアプリが「何を送っているか」は、外からは確かめられません。
+ */
+@Composable
+private fun SyncCard() {
+    val scope = rememberCoroutineScope()
+    val settings by DopaRuntime.settings.syncSettings.collectAsState(initial = SyncSettings())
+    var url by remember(settings.baseUrl) { mutableStateOf(settings.baseUrl) }
+    var token by remember(settings.token) { mutableStateOf(settings.token) }
+    var device by remember(settings.deviceId) { mutableStateOf(settings.deviceId) }
+    var showToken by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf("") }
+
+    fun save(transform: (SyncSettings) -> SyncSettings) {
+        scope.launch { DopaRuntime.settings.setSyncSettings(transform(settings)) }
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                "別の端末とルールを揃えます。制限そのものはここに依存しません ── " +
+                    "圏外でもサーバーが落ちていても、縛りは効いたままです。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(16.dp))
+
+            OutlinedTextField(
+                value = url,
+                onValueChange = { url = it },
+                label = { Text("サーバーの住所") },
+                placeholder = { Text("https://dopa.togar.dev") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = token,
+                onValueChange = { token = it },
+                label = { Text("合言葉") },
+                singleLine = true,
+                visualTransformation = if (showToken) {
+                    VisualTransformation.None
+                } else {
+                    PasswordVisualTransformation()
+                },
+                trailingIcon = {
+                    TextButton(onClick = { showToken = !showToken }) {
+                        Text(if (showToken) "隠す" else "見る")
+                    }
+                },
+                supportingText = {
+                    Text(
+                        "英数字と記号だけ。日本語は通信の見出しに載らないので使えません。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = device,
+                onValueChange = { device = it },
+                label = { Text("この端末の名前") },
+                placeholder = { Text("pixel") },
+                singleLine = true,
+                supportingText = {
+                    Text(
+                        "実績を端末ごとに分けて見るときの見出しになります。端末ごとに違う名前を。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = {
+                    save { it.copy(baseUrl = url.trim(), token = token.trim(), deviceId = device.trim()) }
+                    result = "保存しました"
+                },
+            ) { Text("保存する") }
+
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("同期する", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        if (settings.isConfigured) {
+                            "オンにすると、開いたときと保存したときに揃えます。"
+                        } else {
+                            "住所・合言葉・端末名を入れて保存すると使えます。"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = settings.enabled,
+                    enabled = settings.isConfigured,
+                    onCheckedChange = { on -> save { it.copy(enabled = on) } },
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Button(
+                onClick = {
+                    busy = true
+                    result = "同期しています…"
+                    scope.launch {
+                        result = when (val out = DopaRuntime.sync.syncNow()) {
+                            is SyncManager.Outcome.Done ->
+                                "受け取り ${out.pulled} 件 / 送り ${out.pushed} 件"
+                            is SyncManager.Outcome.NotConfigured -> "まだ設定できていません"
+                            is SyncManager.Outcome.Failed -> out.message
+                        }
+                        busy = false
+                    }
+                },
+                enabled = settings.isConfigured && settings.enabled && !busy,
+            ) { Text("いま同期する") }
+
+            if (result.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(result, style = MaterialTheme.typography.bodySmall)
+            }
+            if (settings.lastError.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "前回: ${settings.lastError}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "出るもの: ルール・タグ・アプリ名・1日ごとの使用時間\n" +
+                    "出ないもの: 反省文以外の記録、どの瞬間に何を見ていたか、ゲート、変更リクエスト",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }

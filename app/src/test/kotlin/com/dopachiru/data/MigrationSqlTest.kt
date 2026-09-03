@@ -29,7 +29,7 @@ class MigrationSqlTest {
     private val schema: JsonObject by lazy { schemaOf(4) }
 
     /** いまの版。移行を足したらここを上げる。 */
-    private val latest: JsonObject by lazy { schemaOf(5) }
+    private val latest: JsonObject by lazy { schemaOf(6) }
 
     private fun createSqlOf(tableName: String): String = entity(tableName)["createSql"]!!
         .jsonPrimitive.content
@@ -48,7 +48,7 @@ class MigrationSqlTest {
     @Test
     fun `スキーマの版と database の版がそろっている`() {
         assertEquals(4, schema["version"]!!.jsonPrimitive.content.toInt())
-        assertEquals(5, latest["version"]!!.jsonPrimitive.content.toInt())
+        assertEquals(6, latest["version"]!!.jsonPrimitive.content.toInt())
     }
 
     @Test
@@ -130,6 +130,41 @@ class MigrationSqlTest {
         fun tables(version: Int) = schemaOf(version)["entities"]!!.jsonArray
             .map { it.jsonObject["tableName"]!!.jsonPrimitive.content }.toSet()
         assertEquals(tables(4), tables(5))
+    }
+
+    // ---- 5 から 6 ---------------------------------------------------------
+
+    @Test
+    fun `同期の覚え書きの SQL が生成物と一致する`() {
+        val generated = schemaOf(6)["entities"]!!.jsonArray
+            .map { it.jsonObject }
+            .first { it["tableName"]!!.jsonPrimitive.content == "sync_state" }["createSql"]!!
+            .jsonPrimitive.content
+            .replace("\${TABLE_NAME}", "sync_state")
+
+        assertTrue(
+            generated in DopaDatabase.MIGRATION_5_6_SQL,
+            "ずれている\n生成: $generated\n移行: ${DopaDatabase.MIGRATION_5_6_SQL}",
+        )
+        assertEquals(1, DopaDatabase.MIGRATION_5_6_SQL.size)
+    }
+
+    @Test
+    fun `5から6で増えたのはこの表だけ`() {
+        fun tables(v: Int) = schemaOf(v)["entities"]!!.jsonArray
+            .map { it.jsonObject["tableName"]!!.jsonPrimitive.content }.toSet()
+        assertEquals(setOf("sync_state"), tables(6) - tables(5))
+
+        // 既存の表に列を足していないこと。足したのに移行を書き忘れると
+        // 更新した端末でだけ落ちる
+        fun columns(v: Int) = schemaOf(v)["entities"]!!.jsonArray
+            .map { it.jsonObject }
+            .filterNot { it["tableName"]!!.jsonPrimitive.content == "sync_state" }
+            .flatMap { e ->
+                val t = e["tableName"]!!.jsonPrimitive.content
+                e["fields"]!!.jsonArray.map { t + "." + it.jsonObject["columnName"]!!.jsonPrimitive.content }
+            }.toSet()
+        assertEquals(columns(5), columns(6))
     }
 
     @Test

@@ -24,6 +24,10 @@ import com.dopachiru.desktop.bridge.LocalBridge
 import com.dopachiru.desktop.data.DeclarationTracker
 import com.dopachiru.desktop.data.DesktopSettings
 import com.dopachiru.desktop.data.RuleFile
+import com.dopachiru.desktop.data.DesktopSync
+import com.dopachiru.core.sync.UsageDay
+import com.dopachiru.desktop.data.SyncStamp
+import com.dopachiru.core.sync.SyncKinds
 import com.dopachiru.desktop.data.Stores
 import com.dopachiru.desktop.data.UsageLedger
 import com.dopachiru.desktop.platform.BlockStrength
@@ -41,6 +45,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.time.LocalDate
 import java.time.LocalDateTime
 
 /** いま画面に出すべきもの。 */
@@ -344,18 +349,71 @@ object DesktopRuntime {
         Stores.rules.save(updated)
     }
 
+    /**
+     * ルールを触ったことを覚えておく。
+     *
+     * Android は行に updatedAt があるが、こちらは JSON なので自分で押す。
+     * 押し忘れると、変えたのに古いままの時刻で送られて**相手に負ける**。
+     */
+    private fun RuleFile.stamped(uid: String, deleted: Boolean = false): RuleFile =
+        if (uid.isBlank()) this else withStamp(SyncKinds.RULES, uid, SyncStamp(nowSec(), deleted))
+
     fun addRule(rule: Rule) = updateRules { file ->
+        // uid は端末をまたいで一意。id と違って、作った端末が変わっても付いて回る
+        val uid = rule.uid.ifBlank { java.util.UUID.randomUUID().toString() }
         file.copy(
-            // uid は端末をまたいで一意。id と違って、作った端末が変わっても付いて回る
-            rules = file.rules + rule.copy(
-                id = file.nextId,
-                uid = rule.uid.ifBlank { java.util.UUID.randomUUID().toString() },
-            ),
+            rules = file.rules + rule.copy(id = file.nextId, uid = uid),
             nextId = file.nextId + 1,
-        )
+        ).stamped(uid)
     }
 
-    fun removeRule(id: Long) = updateRules { it.copy(rules = it.rules.filter { r -> r.id != id }) }
+    /**
+     * ルールを消す。
+     *
+     * 消したことを墓標に残します。残さないと、次の同期で別の端末が
+     * 送り返してきて生き返ります。
+     */
+    fun removeRule(id: Long) = updateRules { file ->
+        val uid = file.rules.firstOrNull { it.id == id }?.uid.orEmpty()
+        file.copy(rules = file.rules.filter { r -> r.id != id }).stamped(uid, deleted = true)
+    }
+
+    // ---- 端末間の同期 --------------------------------------------------
+
+    /**
+     * 1往復。**別スレッドで呼ぶこと** ── 通信を待つあいだ画面が固まります。
+     *
+     * 実績は日ごとの記録から組み立てます。Windows 側は1日の合計だけ持っているので、
+     * アプリごとの内訳は載せません(Android 側が載せます)。
+     */
+    fun syncNow(): DesktopSync.Outcome {
+        // Windows 側は今日ぶんだけ送ります。使用の記録を48時間しか持っていないので、
+        // 何日ぶんも送りようがない ── **持っていないものを 0 として送ると、
+        // サーバー上の過去の記録を 0 で塗り潰します。**
+        val today = LocalDate.now()
+        val minutes = ledger.totalMinutesIn(ResetPolicy())
+        val usage = if (minutes <= 0) {
+            emptyList()
+        } else {
+            listOf(
+                UsageDay(
+                    date = today.toString(),
+                    totalMinutes = minutes,
+                    perApp = ledger.breakdownIn(ResetPolicy()).toMap(),
+                ),
+            )
+        }
+        return DesktopSync.run(
+            file = _ruleFile.value,
+            settings = _settings.value.sync,
+            usage = usage,
+            onApply = { updated ->
+                _ruleFile.value = updated
+                Stores.rules.save(updated)
+            },
+            onSettings = { next -> updateSettings { it.copy(sync = next) } },
+        )
+    }
 
     // ---- 持ち出しと取り込み --------------------------------------------
 
@@ -391,11 +449,13 @@ object DesktopRuntime {
 
     /** ルールを1つ差し替える。条件・罰の編集から使う。 */
     fun updateRule(rule: Rule) = updateRules { file ->
-        file.copy(rules = file.rules.map { if (it.id == rule.id) rule else it })
+        file.copy(rules = file.rules.map { if (it.id == rule.id) rule else it }).stamped(rule.uid)
     }
 
     fun setRuleEnabled(id: Long, enabled: Boolean) = updateRules { file ->
+        val uid = file.rules.firstOrNull { it.id == id }?.uid.orEmpty()
         file.copy(rules = file.rules.map { if (it.id == id) it.copy(enabled = enabled) else it })
+            .stamped(uid)
     }
 
     fun todayBreakdown(): List<Pair<String, Int>> = ledger.breakdownIn(ResetPolicy())
