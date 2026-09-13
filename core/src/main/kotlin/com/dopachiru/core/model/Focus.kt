@@ -48,6 +48,18 @@ object Focus {
     /** 一度に足せる長さ。 */
     val EXTEND_CHOICES = listOf(5, 10, 15, 30)
 
+    /**
+     * 「選んで始める」で並べる長さ。5分刻みで30通り(5分〜150分)。
+     *
+     * 5列×6行の格子にちょうど収まる数にしてある。刻みを細かくすると
+     * **選ぶこと自体が手間**になって、思い立った瞬間に始められなくなる。
+     * 150分より長く止めたいなら、それはその場の思いつきではなくルールの仕事。
+     */
+    val PICK_CHOICES: List<Int> = (1..30).map { it * STEP_MINUTES }
+
+    /** 格子の列数。 */
+    const val PICK_COLUMNS = 5
+
     fun clampMinutes(minutes: Int): Int =
         minutes.coerceIn(MIN_MINUTES, MAX_MINUTES) / STEP_MINUTES * STEP_MINUTES
 
@@ -65,15 +77,37 @@ object Focus {
         effort: String = "hold",
         abortPoints: Int = 0,
         label: String = "",
+    ): Lockout = startWithTarget(
+        nowSec = nowSec,
+        minutes = minutes,
+        target = Target(
+            matchAll = true,
+            exceptPackages = allowPackages,
+            exceptTags = allowTags,
+        ),
+        effort = effort,
+        abortPoints = abortPoints,
+        label = label,
+    )
+
+    /**
+     * 範囲を指定して集中を始める。範囲以外は [start] と同じ。
+     *
+     * 「逃がすもの以外ぜんぶ」だけでなく、「このグループだけ」「このグループ以外」も
+     * 選べるようにするための入口。範囲は [FocusTemplate.target] が組む。
+     */
+    fun startWithTarget(
+        nowSec: Long,
+        minutes: Int,
+        target: Target,
+        effort: String = "hold",
+        abortPoints: Int = 0,
+        label: String = "",
     ): Lockout {
         val length = clampMinutes(minutes)
         return Lockout(
             uid = UUID.randomUUID().toString(),
-            target = Target(
-                matchAll = true,
-                exceptPackages = allowPackages,
-                exceptTags = allowTags,
-            ),
+            target = target,
             untilEpochSec = nowSec + length * 60L,
             reason = label.ifBlank { "自分で始めた集中" },
             createdAtEpochSec = nowSec,
@@ -110,4 +144,13 @@ data class FocusSettings(
     val allowTags: Set<String> = emptySet(),
     /** 途中でやめるときの手間。BlockAction.Effort の値。 */
     val abortEffort: String = "hold",
+
+    /**
+     * タイマーロックの型。ホーム画面に置くショートカットや1タップの止め方。
+     *
+     * 空のままなら、これまでどおり「逃がすもの以外ぜんぶ」の集中だけが使える。
+     * 既定を空にしてあるのは、型がタグを指すのに、どのタグを使うかは端末ごとに
+     * 違うため ── 中身は使う人が [FocusScope] とタグを選んで作る。
+     */
+    val templates: List<FocusTemplate> = emptyList(),
 )

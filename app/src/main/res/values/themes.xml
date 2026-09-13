@@ -5,4 +5,17 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowBackground">@android:color/black</item>
     </style>
+
+    <!--
+      ホーム画面の上に浮かべる小さな画面。集中の長さを選ぶときだけ使う。
+      後ろが透けるので、いまどの画面から呼んだのかが分かる。
+    -->
+    <style name="Theme.Dopachiru.Picker" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
 </resources>

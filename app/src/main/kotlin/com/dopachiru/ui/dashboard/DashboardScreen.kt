@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import com.dopachiru.core.model.Focus
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -142,7 +143,10 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
 }
 
 @Composable
-fun DashboardScreen(viewModel: DashboardViewModel = viewModel()) {
+fun DashboardScreen(
+    onOpenReservations: () -> Unit = {},
+    viewModel: DashboardViewModel = viewModel(),
+) {
     val streak by viewModel.streak.collectAsState()
     val days by viewModel.days.collectAsState()
     val logs by viewModel.logs.collectAsState()
@@ -170,6 +174,8 @@ fun DashboardScreen(viewModel: DashboardViewModel = viewModel()) {
         }
 
         item { FocusCard(viewModel) }
+
+        item { ReservationCard(onOpen = onOpenReservations) }
 
         if (pointPolicy.enabled) {
             item {
@@ -570,6 +576,32 @@ private fun formatTime(epochSec: Long): String {
  * **既定を短くしてある。** 長く始めすぎると、切り上げるのに手間とポイントが要る。
  * 短く始めて足すほうが、余計な代金を払わずに済む。
  */
+@Composable
+private fun ReservationCard(onOpen: () -> Unit) {
+    val reservations by DopaRuntime.reservations.reservations.collectAsState()
+    val now = System.currentTimeMillis() / 1000
+    val active = reservations.count { it.coversAt(now) }
+    val upcoming = reservations.count { it.isUpcomingAt(now) }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text("予約", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                when {
+                    active > 0 -> "いま使える予約が ${active} 件あります。"
+                    upcoming > 0 -> "これからの予約が ${upcoming} 件。"
+                    else -> "使う時間を先に決めておけます。「予約した時間だけ開ける」ルールと組みます。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(onClick = onOpen) { Text("予約を管理する") }
+        }
+    }
+}
+
 @Composable
 private fun FocusCard(viewModel: DashboardViewModel) {
     val focus by viewModel.focus.collectAsState()

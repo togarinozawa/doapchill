@@ -5,6 +5,7 @@ import android.os.PowerManager
 import com.dopachiru.core.DopaCore
 import com.dopachiru.core.DopaFeatures
 import com.dopachiru.core.action.Rotation
+import com.dopachiru.core.action.types.LockoutAction
 import com.dopachiru.core.condition.types.CalendarBusyCondition
 import com.dopachiru.core.engine.Decision
 import com.dopachiru.core.engine.EvalContext
@@ -13,8 +14,10 @@ import com.dopachiru.core.gate.Gate
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.FocusSettings
 import com.dopachiru.core.model.Lockout
+import com.dopachiru.core.model.Lockouts
 import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.Rule
+import com.dopachiru.core.param.Params
 import com.dopachiru.core.points.PointPolicy
 import com.dopachiru.core.points.PointReason
 import com.dopachiru.core.time.ResetPolicy
@@ -24,6 +27,7 @@ import com.dopachiru.data.DeclarationManager
 import com.dopachiru.data.LockoutRepository
 import com.dopachiru.data.PointsRepository
 import com.dopachiru.data.ProtectedApps
+import com.dopachiru.data.ReservationRepository
 import com.dopachiru.data.RuleRepository
 import com.dopachiru.data.SettingsStore
 import com.dopachiru.data.SyncManager
@@ -76,6 +80,8 @@ object DopaRuntime {
     lateinit var studyWindows: StudyWindowRepository
         private set
     lateinit var lockouts: LockoutRepository
+
+    lateinit var reservations: ReservationRepository
         private set
     lateinit var points: PointsRepository
         private set
@@ -159,6 +165,7 @@ object DopaRuntime {
         calendarReader = CalendarReader(app)
         studyWindows = StudyWindowRepository(db.studyWindowDao(), scope)
         lockouts = LockoutRepository(db.lockoutDao(), scope)
+        reservations = ReservationRepository(settings, scope)
         points = PointsRepository(db.pointEventDao(), scope)
         sync = SyncManager(app, rules, stats, db.syncStateDao(), settings)
         changes = ChangeRequestRepository(
@@ -176,6 +183,7 @@ object DopaRuntime {
             studyWindows.warmUp()
             // 罰と残高も同じ。再起動で罰が消えるなら罰にならない
             lockouts.warmUp()
+            reservations.warmUp()
             points.warmUp()
             overrideCounts = stats.overrideCountsByRule()
             usage.purgeOld()
@@ -267,6 +275,16 @@ object DopaRuntime {
     @Volatile
     private var overrideCounts: Map<Long, Int> = emptyMap()
 
+    /**
+     * いま前面に出ている画面の目印。サービスが判定の直前に入れる。
+     *
+     * ノードツリーを読むのは Android 側の仕事なので、ここは受け皿だけ持つ。
+     * 前面が変わったら空に戻す ── 前の画面の目印を持ち越すと、別のアプリを
+     * ショート扱いして塞ぐ事故になる。
+     */
+    @Volatile
+    var currentScreenSignals: Set<String> = emptySet()
+
     private fun buildContext(packageName: String, now: LocalDateTime) = EvalContext(
         now = now,
         packageName = packageName,
@@ -277,8 +295,33 @@ object DopaRuntime {
         declaredRemainingMinutes = declarations.remainingMinutes(packageName),
         previousPackage = usage.previousPackage(),
         sessionSeed = usage.currentSessionSeed(),
+        minutesSinceBreakOf = { ruleId, breakMinutes -> minutesSinceBreak(ruleId, breakMinutes) },
+        minutesSinceLastUseOf = { ruleId -> minutesSinceLastUse(ruleId) },
+        withinReservation = reservations.covers(packageName, tagCache[packageName] ?: emptySet()),
+        screenSignals = currentScreenSignals,
         overrideCountOf = { ruleId -> overrideCounts[ruleId] ?: 0 },
     )
+
+    /**
+     * そのルールの対象アプリをまとめて数えた、休憩をはさむまでの使用時間(分)。
+     *
+     * 対象の解決をここでやるのは、タグからアプリを引けるのが端末側だけだから。
+     * 判定から同期的に呼ばれるので、キャッシュしてある一覧だけを見る。
+     */
+    private fun minutesSinceBreak(ruleId: Long, breakMinutes: Int): Int {
+        val rule = ruleCache.firstOrNull { it.id == ruleId } ?: return 0
+        return usage.minutesSinceBreak(breakMinutes) { pkg ->
+            rule.target.matches(pkg, tagCache[pkg] ?: emptySet())
+        }
+    }
+
+    /** そのルールの対象を前回いつまで使っていたか(分前)。一度も無ければ null。 */
+    private fun minutesSinceLastUse(ruleId: Long): Int? {
+        val rule = ruleCache.firstOrNull { it.id == ruleId } ?: return null
+        return usage.minutesSinceLastUse { pkg ->
+            rule.target.matches(pkg, tagCache[pkg] ?: emptySet())
+        }
+    }
 
     /**
      * 何があってもブロックしないアプリか。
@@ -339,6 +382,59 @@ object DopaRuntime {
         }
     }
 
+    /**
+     * 時間切れで閉め出す。破ったからではなく、取り決めどおりに閉まる。
+     *
+     * 罰([punish])と同じ道を通す ── 範囲の解決も、繰り返しで長くする計算も
+     * [Consequence] が持っているので、閉め方を2通り持たずに済む。
+     * 違うのは筋道だけで、ポイントは動かさない(違反ではないため)。
+     *
+     * 使用時間のセッションはここで閉じる。閉め出しているあいだも数え続けると、
+     * 明けた瞬間にまた閾値を超えていて、二度と開かなくなる。
+     *
+     * @return 科した閉め出し。すぐ画面に出すために返す。
+     */
+    fun lockByRule(packageName: String, rule: Rule, params: Params): Lockout? {
+        if (!initialized) return null
+        val consequence = LockoutAction.consequenceOf(params)
+        val target = consequence.resolveTarget(packageName, rule.target) ?: return null
+        val repeats = if (consequence.lockEscalates) lockouts.recentCountFor(rule.name) else 0
+        val notice = params.string(LockoutAction.KEY_NOTICE).ifBlank { rule.name }
+        usage.onForegroundChanged(null)
+        return lockouts.impose(
+            target = target,
+            minutes = consequence.lockMinutesFor(repeats),
+            reason = notice,
+        )
+    }
+
+    /** そのアプリにいま効いている封鎖。無ければ null。 */
+    fun lockedNow(packageName: String): Lockout? {
+        if (!initialized) return null
+        val nowSec = System.currentTimeMillis() / 1000
+        return Lockouts.activeFor(
+            all = lockouts.current(nowSec),
+            packageName = packageName,
+            tagsOfApp = tagCache[packageName] ?: emptySet(),
+            nowSec = nowSec,
+        )
+    }
+
+    /** 閉め出しているあいだは使用時間を数えない。 */
+    fun pauseUsageTracking() {
+        if (initialized) usage.onForegroundChanged(null)
+    }
+
+    /**
+     * 閉め出しが明けたので、また数え始める。
+     *
+     * 同じアプリで呼び直しても区間は増えない(伸びるだけ)。
+     * ここが無いと、明けたあとの使用がどこにも残らず、次の閉め出しが来ない。
+     */
+    fun resumeUsageTracking(packageName: String) {
+        if (initialized) usage.onForegroundChanged(packageName)
+    }
+
     /** ブロック画面から引き返した。 */
     fun reward(rule: Rule) {
         if (!initialized || !pointPolicy.enabled) return
@@ -364,6 +460,28 @@ object DopaRuntime {
             allowTags = focusSettings.allowTags,
             effort = focusSettings.abortEffort,
             abortPoints = if (pointPolicy.enabled) pointPolicy.focusAbortCost else 0,
+        ) ?: return false
+        DopaAccessibilityService.kickEvaluation()
+        return true
+    }
+
+    /** 型を id で引く。ショートカットは id だけ持って呼んでくる。 */
+    fun focusTemplate(id: String): com.dopachiru.core.model.FocusTemplate? =
+        focusSettings.templates.firstOrNull { it.id == id }
+
+    /**
+     * 型を指定して集中を始める。範囲は型が決める(グループだけ・グループ以外・全部)。
+     *
+     * @return 始められたら true。すでに走っている / 型が壊れているなら false。
+     */
+    fun startFocus(template: com.dopachiru.core.model.FocusTemplate, minutes: Int): Boolean {
+        if (!initialized || !template.isUsable) return false
+        lockouts.startFocusWithTarget(
+            target = template.target(),
+            minutes = minutes,
+            effort = focusSettings.abortEffort,
+            abortPoints = if (pointPolicy.enabled) pointPolicy.focusAbortCost else 0,
+            label = template.displayLabel(),
         ) ?: return false
         DopaAccessibilityService.kickEvaluation()
         return true

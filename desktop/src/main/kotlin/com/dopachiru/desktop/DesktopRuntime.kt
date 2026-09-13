@@ -12,10 +12,15 @@ import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.engine.RuleEngine
 import com.dopachiru.core.io.ImportPlan
 import com.dopachiru.core.io.RuleBundleIo
+import com.dopachiru.core.action.types.IntentionAction
+import com.dopachiru.core.action.types.LockoutAction
+import com.dopachiru.core.action.types.RadioAction
 import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.Focus
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Lockouts
+import com.dopachiru.core.model.Reservation
+import com.dopachiru.core.model.Reservations
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.points.PointEvent
 import com.dopachiru.core.points.PointReason
@@ -35,6 +40,7 @@ import com.dopachiru.desktop.platform.Browsers
 import com.dopachiru.desktop.platform.ForegroundApp
 import com.dopachiru.desktop.platform.ForegroundWatcher
 import com.dopachiru.desktop.platform.ProtectedProcesses
+import com.dopachiru.desktop.platform.WindowsAutoStart
 import com.dopachiru.desktop.platform.WindowControl
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -121,6 +127,34 @@ sealed interface Presentation {
         val defaultMinutes: Int,
         val requireReason: Boolean,
     ) : Presentation
+
+    /**
+     * 映像を覆って音だけ残す。完全封印と違って**最小化も一時停止もしない** ──
+     * 覆うだけなので、下のアプリは音を鳴らし続ける。
+     */
+    data class Radio(
+        override val key: String,
+        val label: String,
+        val message: String,
+        val peekEffort: String,
+        val peekSeconds: Int,
+    ) : Presentation
+
+    /** 目的を書かせる入力。書いたら [Intention] の札に替わる。 */
+    data class IntentionInput(
+        override val key: String,
+        val processName: String,
+        val label: String,
+        val prompt: String,
+        val suggestions: List<String>,
+    ) : Presentation
+
+    /** 書いた目的を隅に出し続ける札。操作は止めない。 */
+    data class Intention(
+        override val key: String,
+        val text: String,
+        val minutes: Int?,
+    ) : Presentation
 }
 
 /**
@@ -166,6 +200,12 @@ object DesktopRuntime {
      */
     private val dismissedUntil = HashMap<String, Long>()
 
+    /** ラジオを覗いているあいだ、覆い直さないための期限。プロセスごと。 */
+    private val radioPeekUntil = HashMap<String, Long>()
+
+    /** その回に書いた「何をしに開いた」。キーは プロセス|セッション種。 */
+    private val intentions = HashMap<String, String>()
+
     /** 同じブロックを出した回数。暴走を検知して自動で止めるため。 */
     private val blockShownTimes = ArrayDeque<Long>()
 
@@ -210,6 +250,10 @@ object DesktopRuntime {
 
     private val _lockouts = MutableStateFlow<List<Lockout>>(emptyList())
     val lockouts: StateFlow<List<Lockout>> = _lockouts.asStateFlow()
+
+    private val _reservations = MutableStateFlow<List<Reservation>>(emptyList())
+    /** 予約。冷静なうちに取った「この時間だけ使う」枠。 */
+    val reservations: StateFlow<List<Reservation>> = _reservations.asStateFlow()
 
     private val _points = MutableStateFlow<List<PointEvent>>(emptyList())
     val points: StateFlow<List<PointEvent>> = _points.asStateFlow()
@@ -322,11 +366,16 @@ object DesktopRuntime {
         declarations.restore(Stores.declarations.load())
         // 罰と残高も戻す。再起動で罰が消えるなら罰にならない
         _lockouts.value = Lockouts.prune(Stores.lockouts.load(), nowSec())
+        _reservations.value = Reservations.prune(Stores.reservations.load(), nowSec())
         _points.value = Stores.points.load()
         _balance.value = _points.value.sumOf { it.delta }
 
         if (_settings.value.bridgeEnabled) bridge.start()
         refreshBridgeStatus()
+
+        // 入れ直して置き場所が変わっていても、ここで登録し直される。
+        // 「入れたはずなのに立ち上がらない」の大半がこれ
+        WindowsAutoStart.reconcile(_settings.value.launchAtLogin)
 
         scope.launch { watchLoop() }
         scope.launch { persistLoop() }
@@ -335,6 +384,20 @@ object DesktopRuntime {
     private fun nowSec(): Long = System.currentTimeMillis() / 1000
 
     // ------------------------------------------------------------------
+
+    /**
+     * Windows と一緒に立ち上げるかを切り替える。
+     *
+     * 設定にも書くが、効いているのはレジストリのほう。設定に残すのは
+     * 入れ直しでパスが変わったときに書き直すため([WindowsAutoStart.reconcile])。
+     *
+     * @return いま実際に登録されているか。インストール版でなければ常に false。
+     */
+    fun setLaunchAtLogin(enabled: Boolean): Boolean {
+        val actual = WindowsAutoStart.reconcile(enabled)
+        updateSettings { it.copy(launchAtLogin = actual) }
+        return actual
+    }
 
     fun updateSettings(transform: (DesktopSettings) -> DesktopSettings) {
         val updated = transform(_settings.value)
@@ -530,29 +593,64 @@ object DesktopRuntime {
         val policy = _settings.value.pointPolicy
 
         consequence.resolveTarget(processName, rule.target)?.let { target ->
-            val now = nowSec()
-            // 段階を切ってあれば、直近24時間に同じルールで科した回数だけ長くなる
-            imposedLog.removeAll { (_, at) -> at < now - ESCALATION_WINDOW_SEC }
-            val repeats = if (consequence.lockEscalates) {
-                imposedLog.count { (name, _) -> name == rule.name }
-            } else {
-                0
-            }
-            val minutes = consequence.lockMinutesFor(repeats)
-            imposedLog.add(rule.name to now)
-
-            _lockouts.value = _lockouts.value + Lockout(
-                target = target,
-                untilEpochSec = now + minutes * 60L,
-                reason = rule.name,
-                createdAtEpochSec = now,
-            )
-            Stores.lockouts.save(_lockouts.value)
+            impose(consequence, target, rule.name, rule.name)
         }
 
         if (policy.enabled) {
             addPoints(policy.breakDelta(consequence.breakPoints), reason, rule.name)
         }
+    }
+
+    /**
+     * 封鎖を科す。破った罰にも、時間切れの閉め出しにも使う。
+     *
+     * 範囲は科した時点で固定する。あとからルールを書き換えても重さが変わらない。
+     *
+     * @param ruleName 段階を数える鍵。同じルールで繰り返したときだけ伸びる。
+     * @param notice 封鎖画面に出す言葉。
+     */
+    private fun impose(
+        consequence: Consequence,
+        target: com.dopachiru.core.model.Target,
+        ruleName: String,
+        notice: String,
+    ): Lockout? {
+        val now = nowSec()
+        // 段階を切ってあれば、直近24時間に同じルールで科した回数だけ長くなる
+        imposedLog.removeAll { (_, at) -> at < now - ESCALATION_WINDOW_SEC }
+        val repeats = if (consequence.lockEscalates) {
+            imposedLog.count { (name, _) -> name == ruleName }
+        } else {
+            0
+        }
+        val minutes = consequence.lockMinutesFor(repeats)
+        if (minutes <= 0) return null
+        imposedLog.add(ruleName to now)
+
+        val lockout = Lockout(
+            // uid が無いと、同時に複数走っているとき互いを見分けられない
+            uid = java.util.UUID.randomUUID().toString(),
+            target = target,
+            untilEpochSec = now + minutes * 60L,
+            reason = notice,
+            createdAtEpochSec = now,
+        )
+        _lockouts.value = _lockouts.value + lockout
+        Stores.lockouts.save(_lockouts.value)
+        return lockout
+    }
+
+    /**
+     * 時間切れで閉め出す。破ったからではなく、取り決めどおりに閉まる。
+     *
+     * ポイントは動かさない ── 違反ではないため。
+     */
+    private fun lockOut(fg: ForegroundApp, act: Decision.Act) {
+        val consequence = LockoutAction.consequenceOf(act.params)
+        val target = consequence.resolveTarget(fg.processName, act.rule.target) ?: return
+        val notice = act.params.string(LockoutAction.KEY_NOTICE).ifBlank { act.rule.name }
+        val lockout = impose(consequence, target, act.rule.name, notice) ?: return
+        showLocked(fg, lockout)
     }
 
     /** ブロック画面から引き返した。 */
@@ -636,6 +734,29 @@ object DesktopRuntime {
         return true
     }
 
+    /**
+     * 範囲を指定して集中を始める。範囲以外は [startFocus] と同じ。
+     *
+     * 「このグループだけ」「このグループ以外」「全部」を選んで止められる。
+     * ホーム画面のショートカットは Windows には無いので、始めるのは設定画面から。
+     */
+    fun startFocus(template: com.dopachiru.core.model.FocusTemplate, minutes: Int): Boolean {
+        if (activeFocus() != null || !template.isUsable) return false
+        val policy = _settings.value.pointPolicy
+        val focus = Focus.startWithTarget(
+            nowSec = nowSec(),
+            minutes = minutes,
+            target = template.target(),
+            effort = _settings.value.focus.abortEffort,
+            abortPoints = if (policy.enabled) policy.focusAbortCost else 0,
+            label = template.displayLabel(),
+        )
+        _lockouts.value = _lockouts.value + focus
+        Stores.lockouts.save(_lockouts.value)
+        evaluate(_foreground.value)
+        return true
+    }
+
     fun extendFocus(addMinutes: Int): Boolean {
         val now = nowSec()
         val focus = activeFocus() ?: return false
@@ -667,6 +788,61 @@ object DesktopRuntime {
         releaseHold()
         evaluate(_foreground.value)
         return true
+    }
+
+    // ---- 予約 ----------------------------------------------------------
+
+    /**
+     * 予約を1つ取る。開始が [minLeadMinutes] より手前なら弾く(直前予約は封じる)。
+     * @return 取れたら予約。弾いたら null。
+     */
+    fun book(
+        target: com.dopachiru.core.model.Target,
+        startEpochSec: Long,
+        endEpochSec: Long,
+        minLeadMinutes: Int,
+        note: String = "",
+    ): Reservation? {
+        val now = nowSec()
+        if (startEpochSec < now + minLeadMinutes * 60L) return null
+        if (endEpochSec <= startEpochSec) return null
+        val reservation = Reservation(
+            uid = java.util.UUID.randomUUID().toString(),
+            target = target,
+            startEpochSec = startEpochSec,
+            endEpochSec = endEpochSec,
+            note = note,
+        )
+        val next = Reservations.prune(_reservations.value, now) + reservation
+        _reservations.value = next
+        Stores.reservations.save(next)
+        return reservation
+    }
+
+    /** 予約を取り消す。 */
+    fun cancelReservation(uid: String) {
+        val next = _reservations.value.filterNot { it.uid == uid }
+        _reservations.value = next
+        Stores.reservations.save(next)
+    }
+
+    // ---- ラジオ・目的(画面から呼ばれる) --------------------------------
+
+    /** ラジオを覗く。覆いをどけ、[seconds] 秒たったら覆い直す。 */
+    fun peekRadio(seconds: Int) {
+        val fg = _foreground.value ?: return
+        radioPeekUntil[fg.processName] = System.currentTimeMillis() + seconds * 1000L
+        _presentation.value = null
+        releaseHold()
+    }
+
+    /** 「何をしに開いた」を書いた。その回のあいだ覚えておき、札に替える。 */
+    fun setIntention(text: String) {
+        val fg = _foreground.value ?: return
+        if (text.isNotBlank()) intentions["${fg.processName}|${ledger.currentSessionSeed()}"] = text
+        _presentation.value = null
+        releaseHold()
+        evaluate(fg)
     }
 
     /** 走り切った集中に加点する。掃除のついでに見る。 */
@@ -803,6 +979,13 @@ object DesktopRuntime {
             Stores.lockouts.save(live)
         }
 
+        // 終わった予約も落とす。放っておいても誤爆はしないが、溜まるので掃除する
+        val liveReservations = Reservations.prune(_reservations.value, nowSec)
+        if (liveReservations.size != _reservations.value.size) {
+            _reservations.value = liveReservations
+            Stores.reservations.save(liveReservations)
+        }
+
         val file = _ruleFile.value
 
         // 拡張から来た URL。ブラウザが前面のときだけ、しかも報せが新しいときだけ使う。
@@ -825,6 +1008,10 @@ object DesktopRuntime {
             return
         }
 
+        // 閉め出しで閉じた区間を開き直す。同じアプリなら伸びるだけ。
+        // ここが無いと、明けたあとの使用がどこにも残らず、次の閉め出しが来ない
+        ledger.onForegroundChanged(fg.processName, nowSec)
+
         // 解禁券を使っているあいだはルールが全部止まる。ただし罰は上で先に見ている
         // ── ポイントで買えるのはルールの免除であって、科された罰の時間ではない
         if (nowSec < _settings.value.passUntilSec) {
@@ -846,6 +1033,36 @@ object DesktopRuntime {
             declaredRemainingMinutes = declarations.remainingMinutes(fg.processName),
             previousPackage = ledger.previousProcess(),
             sessionSeed = ledger.currentSessionSeed(),
+            minutesSinceBreakOf = { ruleId, breakMinutes ->
+                val rule = file.rules.firstOrNull { it.id == ruleId }
+                if (rule == null) {
+                    0
+                } else {
+                    ledger.minutesSinceBreak(breakMinutes) { name ->
+                        rule.target.matches(name, file.tags[name] ?: emptySet())
+                    }
+                }
+            },
+            minutesSinceLastUseOf = { ruleId ->
+                val rule = file.rules.firstOrNull { it.id == ruleId }
+                if (rule == null) {
+                    null
+                } else {
+                    ledger.minutesSinceLastUse { name ->
+                        rule.target.matches(name, file.tags[name] ?: emptySet())
+                    }
+                }
+            },
+            withinReservation = Reservations.covers(
+                _reservations.value,
+                fg.processName,
+                file.tags[fg.processName] ?: emptySet(),
+                nowSec,
+                url,
+            ),
+            // Windows にはアプリ内の画面を見分ける手立てが無い。ブラウザのショートは
+            // sites(URL)側で当たるので、ここは空でよい
+            screenSignals = emptySet(),
             overrideCountOf = { ruleId -> overrideCounts[ruleId] ?: 0 },
         )
 
@@ -886,6 +1103,10 @@ object DesktopRuntime {
     }
 
     private fun showLocked(fg: ForegroundApp, lockout: Lockout) {
+        // 閉め出しているあいだは使用時間を数えない。ここで止めないと、
+        // 閉まっている時間まで「使った時間」に化けて、明けた瞬間にまた閉まる
+        ledger.onForegroundChanged(null)
+
         val key = "${fg.processName}|locked|${lockout.untilEpochSec}"
         if (_presentation.value?.key == key) {
             heldApp = fg
@@ -915,6 +1136,8 @@ object DesktopRuntime {
                 allowOverride = act.params.bool(BlockAction.KEY_ALLOW_OVERRIDE, true),
                 params = act.params,
             )
+
+            LockoutAction.id -> lockOut(fg, act)
 
             WarnAction.id -> {
                 val repeatMs = act.params.int(WarnAction.KEY_REPEAT_MINUTES, 5) * 60_000L
@@ -959,6 +1182,69 @@ object DesktopRuntime {
                     seconds = act.params.int(DelayAction.KEY_SECONDS, 5),
                     rotationNote = if (Rotation.rotates(text)) Rotation.EXPLANATION else "",
                 )
+            }
+
+            RadioAction.id -> {
+                // 覗いているあいだは覆い直さない
+                if (System.currentTimeMillis() < (radioPeekUntil[fg.processName] ?: 0L)) {
+                    if (_presentation.value is Presentation.Radio) {
+                        _presentation.value = null
+                        releaseHold()
+                    }
+                    return
+                }
+                val key = "${fg.processName}|radio|${act.rule.id}"
+                if (_presentation.value?.key == key) return
+                // 覆うだけ。最小化も一時停止もしないので heldApp は取らない(音は流れ続ける)
+                _presentation.value = Presentation.Radio(
+                    key = key,
+                    label = fg.label,
+                    message = Rotation.pick(
+                        act.params.string(RadioAction.KEY_MESSAGE),
+                        EvalContext(
+                            now = LocalDateTime.now(),
+                            packageName = fg.processName,
+                            usage = ledger.snapshotFor(fg.processName),
+                            sessionSeed = ledger.currentSessionSeed(),
+                            currentRuleId = act.rule.id,
+                        ),
+                        "耳で聞く。目は要らない。",
+                    ),
+                    peekEffort = act.params.string(RadioAction.KEY_PEEK_EFFORT, BlockAction.Effort.HOLD),
+                    peekSeconds = act.params.int(RadioAction.KEY_PEEK_SECONDS, 10),
+                )
+            }
+
+            IntentionAction.id -> {
+                val seed = ledger.currentSessionSeed()
+                val sessionKey = "${fg.processName}|$seed"
+                val existing = intentions[sessionKey]
+                if (existing == null) {
+                    val key = "${fg.processName}|intention-input|$seed"
+                    if (_presentation.value?.key == key) return
+                    _presentation.value = Presentation.IntentionInput(
+                        key = key,
+                        processName = fg.processName,
+                        label = fg.label,
+                        prompt = act.params.string(IntentionAction.KEY_PROMPT).ifBlank { "何をしに開いた?" },
+                        suggestions = act.params.string(IntentionAction.KEY_SUGGESTIONS)
+                            .split("\n").map { it.trim() }.filter { it.isNotBlank() },
+                    )
+                    // 入力は押さえる(書くまで下を触らせない)
+                    heldApp = fg
+                } else {
+                    val minutes = if (act.params.bool(IntentionAction.KEY_SHOW_TIMER, true)) {
+                        ledger.snapshotFor(fg.processName).currentSessionMinutes
+                    } else {
+                        null
+                    }
+                    val key = "${fg.processName}|intention|$seed|$minutes"
+                    if (_presentation.value?.key == key) return
+                    // 札は押さえない。操作は下に届く
+                    if (heldApp != null) releaseHold()
+                    heldApp = null
+                    _presentation.value = Presentation.Intention(key, existing, minutes)
+                }
             }
 
             TimerAction.id -> {

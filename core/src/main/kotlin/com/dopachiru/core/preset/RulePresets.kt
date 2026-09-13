@@ -4,12 +4,16 @@ import com.dopachiru.core.DopaFeatures
 import com.dopachiru.core.action.types.BlockAction
 import com.dopachiru.core.action.types.DeclareAction
 import com.dopachiru.core.action.types.DelayAction
+import com.dopachiru.core.action.types.IntentionAction
+import com.dopachiru.core.action.types.LockoutAction
+import com.dopachiru.core.action.types.RadioAction
 import com.dopachiru.core.action.types.TimerAction
 import com.dopachiru.core.action.types.WarnAction
 import com.dopachiru.core.condition.types.AppChainCondition
 import com.dopachiru.core.condition.types.CalendarBusyCondition
 import com.dopachiru.core.condition.types.ChanceCondition
 import com.dopachiru.core.condition.types.ContinuousUsageCondition
+import com.dopachiru.core.condition.types.CooldownCondition
 import com.dopachiru.core.condition.types.DayOfWeekCondition
 import com.dopachiru.core.condition.types.HabituationCondition
 import com.dopachiru.core.condition.types.QuickReopenCondition
@@ -18,10 +22,14 @@ import com.dopachiru.core.condition.types.StudyPrepCondition
 import com.dopachiru.core.condition.types.StudySessionCondition
 import com.dopachiru.core.condition.types.TimeRangeCondition
 import com.dopachiru.core.condition.types.TotalUsageCondition
+import com.dopachiru.core.condition.types.OnScreenCondition
+import com.dopachiru.core.condition.types.ReservationCondition
+import com.dopachiru.core.condition.types.UsageSinceBreakCondition
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.LockScope
 import com.dopachiru.core.model.Rule
+import com.dopachiru.core.model.ScreenSignals
 import com.dopachiru.core.model.SiteCatalog
 import com.dopachiru.core.model.Target
 import com.dopachiru.core.param.Params
@@ -600,6 +608,34 @@ object RulePresets {
         },
 
         RulePreset(
+            id = "forced_break",
+            name = "20分使ったら10分休む",
+            description = "選んだアプリをまとめて20分使ったら、10分のあいだ取り上げる。" +
+                "離れているあいだに数え直すので、休憩を取ればまた20分使える。",
+            group = PresetGroup.LIMIT,
+            evidence = "約30分で「時間を無駄にした」という嫌悪感が自然に生じる(Tran ら, CHI 2019)。" +
+                "その手前で切ると、後悔の残らない使い方に収まる。",
+        ) { packages ->
+            rule(
+                name = "20分使ったら10分休む",
+                packages = packages,
+                conditions = listOf(
+                    leaf(
+                        UsageSinceBreakCondition.id,
+                        UsageSinceBreakCondition.KEY_MINUTES to 20,
+                        UsageSinceBreakCondition.KEY_BREAK_MINUTES to 10,
+                    ),
+                ),
+                actionId = LockoutAction.id,
+                actionParams = Params.of(
+                    LockoutAction.KEY_MINUTES to 10,
+                    LockoutAction.KEY_SCOPE to LockoutAction.Scope.TARGET,
+                    LockoutAction.KEY_NOTICE to "20分使った。10分休んでから。",
+                ),
+            )
+        },
+
+        RulePreset(
             id = "site_social_night",
             name = "夜はSNSを開かない",
             description = "23時から6時まで、SNS のページを塞ぐ。" +
@@ -624,6 +660,124 @@ object RulePresets {
                     BlockAction.KEY_REFLECTION to "明日の自分から借りている時間。",
                     BlockAction.KEY_MIN_SECONDS to 20,
                     BlockAction.KEY_COVER_SYSTEM_BARS to true,
+                ),
+            )
+        },
+        // ---- 画面・脱線を狙う(A/B/C) --------------------------------
+
+        RulePreset(
+            id = "shorts_in_app",
+            name = "アプリの中のショートだけ止める",
+            description = "YouTube・Instagram をアプリで開いても、ショートやリールの画面になったときだけ塞ぐ。" +
+                "通常の動画や検索・DM は通ります。",
+            group = PresetGroup.TRIGGER,
+            evidence = "短尺×推薦フィードが最もラビットホール化する(Cho ら, CSCW 2021)。" +
+                "始まってから止めるのはほぼ効かないので、その画面に入った瞬間に塞ぐ。",
+        ) { packages ->
+            rule(
+                name = "ショート・リールだけ止める",
+                packages = packages,
+                conditions = listOf(
+                    // どちらか一方の画面なら成立。木は AllOf で包むので anyOf を1つ入れる
+                    leaf(OnScreenCondition.id, OnScreenCondition.KEY_SIGNALS to ScreenSignals.SHORT_VIDEO),
+                ),
+                actionId = BlockAction.id,
+                actionParams = Params.of(
+                    BlockAction.KEY_REFLECTION to
+                        "短いのを1本、で終わったことがない。\n" +
+                        "スクロールを止めたくて、ここに来たはず。",
+                    BlockAction.KEY_MIN_SECONDS to 10,
+                ),
+            )
+        },
+
+        RulePreset(
+            id = "youtube_radio",
+            name = "YouTube を音だけにする",
+            description = "YouTube を開いても映像を覆い、音だけ流します。ラジオとして使いたいとき用。" +
+                "覗くには手間がかかります。",
+            group = PresetGroup.TRIGGER,
+            evidence = "「無関係な推薦」は100%が制御感を下げる(Lukoff ら, CHI 2021)。" +
+                "推薦は意志で無視するものではなく、視界から外すもの。",
+        ) { packages ->
+            rule(
+                name = "YouTube は音だけ",
+                packages = packages,
+                conditions = emptyList(),
+                actionId = RadioAction.id,
+                actionParams = Params.of(
+                    RadioAction.KEY_MESSAGE to "耳で聞く。目は要らない。",
+                    RadioAction.KEY_PEEK_EFFORT to BlockAction.Effort.HOLD,
+                    RadioAction.KEY_PEEK_SECONDS to 10,
+                ),
+            )
+        },
+
+        RulePreset(
+            id = "state_intention",
+            name = "開くとき目的を書かせる",
+            description = "開いた瞬間に「何をしに開いたか」を1行書かせ、そのあいだ画面の隅に出し続けます。" +
+                "止めはしません。",
+            group = PresetGroup.GENTLE,
+            evidence = "実行意図は作業からの脱線防止で最も効く(d=0.77, Gollwitzer & Sheeran 2006)。" +
+                "目的を視界に留めると、脱線に自分で気づける。",
+        ) { packages ->
+            rule(
+                name = "目的を書いて出す",
+                packages = packages,
+                conditions = emptyList(),
+                actionId = IntentionAction.id,
+                actionParams = Params.of(
+                    IntentionAction.KEY_PROMPT to "何をしに開いた?",
+                    IntentionAction.KEY_SUGGESTIONS to "調べ物\n連絡\nなんとなく(閉じる)",
+                    IntentionAction.KEY_SHOW_TIMER to true,
+                ),
+            )
+        },
+
+        // ---- 間隔をあける・予約する(D + クールダウン) ----------------
+
+        RulePreset(
+            id = "cooldown_between",
+            name = "前回から時間をあける",
+            description = "一度使ったら、次に開けるまで時間をあけます。使う回数そのものを減らすため。",
+            group = PresetGroup.LIMIT,
+            evidence = "反射的な開き直し(Nothing Specific)を、間隔を空けることで断つ。",
+        ) { packages ->
+            rule(
+                name = "前回から3時間あける",
+                packages = packages,
+                conditions = listOf(
+                    leaf(CooldownCondition.id, CooldownCondition.KEY_HOURS to 3),
+                ),
+                actionId = BlockAction.id,
+                actionParams = Params.of(
+                    BlockAction.KEY_REFLECTION to "さっき見たばかり。次はもう少しあとで。",
+                    BlockAction.KEY_MIN_SECONDS to 10,
+                ),
+            )
+        },
+
+        RulePreset(
+            id = "reservation_only",
+            name = "予約した時間だけ開ける",
+            description = "先に取った予約の時間帯だけ開けるようにします。予約は少し先にしか取れないので、" +
+                "冷静なうちに「この時間で済ませる」と決められます。",
+            group = PresetGroup.STRICT,
+            evidence = "事前コミットメントは冷静なうちに決める(Sticky Goals, Lee ら 2021)。" +
+                "開く瞬間に決めるより、少し先に枠を取るほうが守れる。",
+        ) { packages ->
+            rule(
+                name = "予約した時間だけ",
+                packages = packages,
+                conditions = listOf(
+                    leaf(ReservationCondition.id),
+                ),
+                actionId = BlockAction.id,
+                actionParams = Params.of(
+                    BlockAction.KEY_REFLECTION to "いまは予約の外。使う時間は先に決めてある。",
+                    BlockAction.KEY_MIN_SECONDS to 15,
+                    BlockAction.KEY_RELEASE_EFFORT to BlockAction.Effort.TYPE,
                 ),
             )
         },

@@ -45,15 +45,20 @@ class LockoutRepository(
     }
 
     /**
-     * 罰を科す。
+     * 封鎖を科す。破った罰にも、時間切れの閉め出しにも使う。
      *
      * DB 書き込みを待たずに効かせる。押し切った直後に効かないと、
      * そのまま使い続けられて罰の意味が無い。
+     *
+     * @return 科した封鎖。すぐ画面に出すために返す。分数が0以下なら null。
      */
-    fun impose(target: Target, minutes: Int, reason: String) {
-        if (minutes <= 0) return
+    fun impose(target: Target, minutes: Int, reason: String): Lockout? {
+        if (minutes <= 0) return null
         val now = nowSec()
         val lockout = Lockout(
+            // uid が無いと、同時に複数走っているとき互いを見分けられない
+            // ([purgeExpired] が「どれが落ちたか」を uid と id で照合している)
+            uid = java.util.UUID.randomUUID().toString(),
             target = target,
             untilEpochSec = now + minutes * 60L,
             reason = reason,
@@ -62,6 +67,7 @@ class LockoutRepository(
         cache = cache + lockout
         imposedLog.add(reason to now)
         scope.launch { dao.insert(lockout.toEntity()) }
+        return lockout
     }
 
     private companion object {
@@ -118,16 +124,35 @@ class LockoutRepository(
         allowTags: Set<String>,
         effort: String,
         abortPoints: Int,
+    ): Lockout? = startFocusWithTarget(
+        target = Target(matchAll = true, exceptPackages = allowPackages, exceptTags = allowTags),
+        minutes = minutes,
+        effort = effort,
+        abortPoints = abortPoints,
+    )
+
+    /**
+     * 範囲を指定して集中を始める。範囲以外は [startFocus] と同じ。
+     *
+     * 型([com.dopachiru.core.model.FocusTemplate])から呼ぶ入口。
+     * 走っている集中は1つだけ ── すでに走っていれば何もしない。
+     */
+    fun startFocusWithTarget(
+        target: Target,
+        minutes: Int,
+        effort: String,
+        abortPoints: Int,
+        label: String = "",
     ): Lockout? {
         val now = nowSec()
         if (activeFocus(now) != null) return null
-        val focus = Focus.start(
+        val focus = Focus.startWithTarget(
             nowSec = now,
             minutes = minutes,
-            allowPackages = allowPackages,
-            allowTags = allowTags,
+            target = target,
             effort = effort,
             abortPoints = abortPoints,
+            label = label,
         )
         cache = cache + focus
         scope.launch { dao.insert(focus.toEntity()) }

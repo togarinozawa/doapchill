@@ -20,6 +20,9 @@ import com.dopachiru.block.LockoutScreen
 import com.dopachiru.block.OverlayHost
 import com.dopachiru.block.OverlayMode
 import com.dopachiru.block.SelfDefenseScreen
+import com.dopachiru.block.IntentionChip
+import com.dopachiru.block.IntentionInputScreen
+import com.dopachiru.block.RadioScreen
 import com.dopachiru.block.SessionTimerScreen
 import com.dopachiru.block.UnlockPromptScreen
 import com.dopachiru.block.WarnScreen
@@ -27,12 +30,16 @@ import com.dopachiru.core.action.Rotation
 import com.dopachiru.core.action.types.BlockAction
 import com.dopachiru.core.action.types.DeclareAction
 import com.dopachiru.core.action.types.DelayAction
+import com.dopachiru.core.action.types.IntentionAction
+import com.dopachiru.core.action.types.LockoutAction
+import com.dopachiru.core.action.types.RadioAction
 import com.dopachiru.core.action.types.TimerAction
 import com.dopachiru.core.action.types.WarnAction
 import com.dopachiru.core.engine.Decision
 import com.dopachiru.core.time.ResetPolicy
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Rule
+import com.dopachiru.core.model.ScreenSignals
 import com.dopachiru.core.points.PointReason
 import com.dopachiru.block.FocusControls
 import com.dopachiru.core.model.Focus
@@ -65,6 +72,12 @@ class DopaAccessibilityService : AccessibilityService() {
 
     /** 押し切られたアプリを、しばらく再ブロックしないための猶予。 */
     private val overrideUntil = HashMap<String, Long>()
+
+    /** ラジオ画面を覗いているあいだ、覆い直さないための期限。パッケージごと。 */
+    private val radioPeekUntil = HashMap<String, Long>()
+
+    /** その回に書いた「何をしに開いたか」。キーは パッケージ|セッション種。 */
+    private val intentions = HashMap<String, String>()
 
     /** 警告を最後に出した時刻。ルールIDごと。 */
     private val warnShownAt = HashMap<Long, Long>()
@@ -219,6 +232,8 @@ class DopaAccessibilityService : AccessibilityService() {
         // アプリを離れた = 一続きの終わり。無視の印を落として数え直す
         punishedWarnIgnores.removeAll { it.endsWith("|$foregroundPackage") }
         foregroundPackage = pkg
+        // 前の画面の目印・覗き猶予を持ち越さない。別アプリをショート扱いして塞ぐ事故を防ぐ
+        DopaRuntime.currentScreenSignals = emptySet()
         DopaRuntime.onForegroundChanged(pkg)
 
         if (pkg in settingsPackages) {
@@ -284,6 +299,10 @@ class DopaAccessibilityService : AccessibilityService() {
     private fun evaluate(pkg: String) {
         if (pkg in launcherPackages) return
 
+        // いまの画面の目印を、判定の直前に見ておく。「ショートだけ」のような
+        // 画面ルールが読む。ノードツリーは軽く舐めるだけ(下の detectScreenSignals)
+        DopaRuntime.currentScreenSignals = detectScreenSignals(pkg)
+
         val decision = DopaRuntime.decide(pkg)
 
         // 罰で閉まっているかは、押し切りの猶予より先に見る。
@@ -292,6 +311,10 @@ class DopaAccessibilityService : AccessibilityService() {
             showLockout(pkg, decision.lockout)
             return
         }
+
+        // 閉め出しや画面消灯で閉じたセッションを開き直す。同じアプリなら伸びるだけ。
+        // ここが無いと、明けたあとの使用がどこにも残らず、次の閉め出しが来ない
+        DopaRuntime.resumeUsageTracking(pkg)
 
         // 学習予定の最中は押し切りの猶予を効かせない。
         // 予定が始まる前に押し切っておいて、そのまま持ち込むのを防ぐ。
@@ -313,6 +336,10 @@ class DopaAccessibilityService : AccessibilityService() {
      * 罰が科されるので、猶予を尊重すると罰そのものが素通りしてしまう。
      */
     private fun showLockout(pkg: String, lockout: Lockout) {
+        // 閉め出しているあいだは使用時間を数えない。ここで止めないと、
+        // 閉まっている時間まで「使った時間」に化けて、明けた瞬間にまた閉まる
+        DopaRuntime.pauseUsageTracking()
+
         val key = "$pkg|locked|${lockout.untilEpochSec}"
         if (overlay.currentKey == key) return
 
@@ -351,6 +378,114 @@ class DopaAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * 映像を覆って音だけ残す。
+     *
+     * 覗いているあいだ([radioPeekUntil])は覆い直さない ── そうしないと、
+     * 覗いた次の判定でまた覆って、見るたびに覆いが割り込む。
+     * BLOCKING でナビゲーションバーごと覆うが、音は下のアプリが鳴らし続ける。
+     */
+    private fun showRadio(pkg: String, act: Decision.Act) {
+        if (System.currentTimeMillis() < (radioPeekUntil[pkg] ?: 0L)) {
+            if (overlay.currentKey?.startsWith("$pkg|radio") == true) overlay.hide()
+            return
+        }
+
+        val text = act.params.string(RadioAction.KEY_MESSAGE)
+        val message = DopaRuntime.rotate(pkg, act.rule.id, text, "耳で聞く。目は要らない。")
+        val effort = act.params.string(RadioAction.KEY_PEEK_EFFORT, BlockAction.Effort.HOLD)
+        val peekSeconds = act.params.int(RadioAction.KEY_PEEK_SECONDS, 10)
+        val label = appLabel(pkg)
+
+        val key = "$pkg|radio|${act.rule.id}"
+        if (overlay.currentKey == key) return
+
+        DopaRuntime.scope.launch {
+            DopaRuntime.stats.recordBlockShown(pkg, act.rule.id, act.rule.name, act.action.id)
+        }
+
+        // ナビゲーションバーは覆わない。ラジオは「別のことをしながら聞く」ためのもので、
+        // 他のアプリへ移った瞬間に覆いは引っ込み、音だけが残る ── その導線を塞がない
+        overlay.show(key, OverlayMode.BLOCKING, coverSystemBars = false) {
+            RadioScreen(
+                appLabel = label,
+                message = message,
+                peekEffort = effort,
+                onPeek = {
+                    radioPeekUntil[pkg] = System.currentTimeMillis() + peekSeconds * 1000L
+                    overlay.hide()
+                    // 覗ける時間が終わったら覆い直す
+                    handler.postDelayed({ requestImmediateEvaluation() }, peekSeconds * 1000L)
+                },
+            )
+        }
+    }
+
+    /**
+     * 開くとき目的を書かせ、そのあいだ隅に出し続ける。止めはしない。
+     *
+     * その回に一度書けば、同じセッションのあいだは書かせ直さない
+     * ([intentions] にセッション種で覚える)。書いた文は札にして出す。
+     */
+    private fun showIntention(pkg: String, act: Decision.Act) {
+        val seed = DopaRuntime.sessionSeed()
+        val sessionKey = "$pkg|$seed"
+        val existing = intentions[sessionKey]
+
+        if (existing == null) {
+            val prompt = act.params.string(IntentionAction.KEY_PROMPT).ifBlank { "何をしに開いた?" }
+            val suggestions = act.params.string(IntentionAction.KEY_SUGGESTIONS)
+                .split("\n").map { it.trim() }.filter { it.isNotBlank() }
+            val label = appLabel(pkg)
+            val key = "$pkg|intention-input|$seed"
+            if (overlay.currentKey == key) return
+            overlay.show(key, OverlayMode.BLOCKING) {
+                IntentionInputScreen(
+                    appLabel = label,
+                    prompt = prompt,
+                    suggestions = suggestions,
+                    onSet = { text ->
+                        intentions[sessionKey] = text
+                        overlay.hide()
+                        requestImmediateEvaluation()
+                    },
+                )
+            }
+            return
+        }
+
+        val showTimer = act.params.bool(IntentionAction.KEY_SHOW_TIMER, true)
+        val minutes = if (showTimer) {
+            DopaRuntime.usage.snapshotFor(pkg, DopaRuntime.now()).currentSessionMinutes
+        } else {
+            null
+        }
+        // 分が変わるたびにキーが変わる = 表示が更新される
+        val key = "$pkg|intention|$seed|$minutes"
+        if (overlay.currentKey == key) return
+        overlay.show(key, OverlayMode.PASS_THROUGH) { IntentionChip(existing, minutes) }
+    }
+
+    /**
+     * いま出ている画面の目印を、ノードツリーから拾う。
+     *
+     * アプリの更新で resource-id は変わりうる。**取れなくても空を返す**だけで、
+     * その場合は画面ルールが素通しになる(塞ぎ続けない)。
+     * 軽く舐めるだけに留める ── 判定のたびに深く走査すると電池を食う。
+     */
+    private fun detectScreenSignals(pkg: String): Set<String> {
+        val markers = SCREEN_MARKERS[pkg] ?: return emptySet()
+        val root = runCatching { rootInActiveWindow }.getOrNull() ?: return emptySet()
+        val signals = HashSet<String>()
+        for ((viewIdSubstring, signal) in markers) {
+            val hit = runCatching {
+                root.findAccessibilityNodeInfosByViewId("$pkg:id/$viewIdSubstring").isNotEmpty()
+            }.getOrDefault(false)
+            if (hit) signals.add(signal)
+        }
+        return signals
+    }
+
     private fun present(pkg: String, act: Decision.Act) {
         when (act.action.id) {
             BlockAction.id -> showBlock(
@@ -364,12 +499,32 @@ class DopaAccessibilityService : AccessibilityService() {
                 violation = PointReason.OVERRIDE,
             )
 
+            LockoutAction.id -> lockOut(pkg, act)
+            RadioAction.id -> showRadio(pkg, act)
+            IntentionAction.id -> showIntention(pkg, act)
             WarnAction.id -> showWarn(pkg, act)
             DeclareAction.id -> showDeclareOrPass(pkg, act)
             DelayAction.id -> showDelay(pkg, act)
             TimerAction.id -> showTimer(pkg, act)
             else -> Unit
         }
+    }
+
+    /**
+     * 時間切れで閉め出す。
+     *
+     * 閉めた瞬間に画面を出す。次の判定を待つと数十秒そのまま使えてしまい、
+     * 「n分で取り上げる」の n がぶれる。
+     *
+     * 二重に閉めない見張りは要らない ── 閉めた直後から [Decision.Locked] が
+     * 先に立つので、この道はもう通らない。
+     */
+    private fun lockOut(pkg: String, act: Decision.Act) {
+        val lockout = DopaRuntime.lockByRule(pkg, act.rule, act.params) ?: return
+        DopaRuntime.scope.launch {
+            DopaRuntime.stats.recordBlockShown(pkg, act.rule.id, act.rule.name, act.action.id)
+        }
+        showLockout(pkg, lockout)
     }
 
     /**
@@ -707,6 +862,30 @@ class DopaAccessibilityService : AccessibilityService() {
         private val IGNORED_PACKAGES = setOf(
             "com.android.systemui",
             "android",
+        )
+
+        /**
+         * 「どのアプリの、どの resource-id が見えたら、どの画面か」の対応表。
+         *
+         * `パッケージ → (view-id の末尾 → 目印)`。view-id は
+         * `<パッケージ>:id/<末尾>` の形で探す。アプリの更新で末尾が変わると
+         * 取れなくなる ── そのときは空を返して素通しに倒れる([detectScreenSignals])。
+         *
+         * ここは**推測を含む**。手元で android の uiautomator などで確かめて
+         * 直すのが前提の初期値。ブラウザのショートは URL 側([SitePattern])で
+         * 既に取れているので、ここはアプリ本体だけを相手にする。
+         */
+        private val SCREEN_MARKERS: Map<String, List<Pair<String, String>>> = mapOf(
+            // YouTube: ショートは専用の縦スワイプ Pager を持つ
+            "com.google.android.youtube" to listOf(
+                "reel_recycler" to ScreenSignals.SHORT_VIDEO,
+                "reel_player_page_container" to ScreenSignals.SHORT_VIDEO,
+            ),
+            // Instagram: リールのタブ / クリップ表示
+            "com.instagram.android" to listOf(
+                "clips_viewer_view_pager" to ScreenSignals.REELS,
+                "clips_tab" to ScreenSignals.REELS,
+            ),
         )
     }
 }

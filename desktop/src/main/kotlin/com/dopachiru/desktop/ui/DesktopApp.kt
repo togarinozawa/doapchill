@@ -1,5 +1,11 @@
 package com.dopachiru.desktop.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.material3.VerticalDivider
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +28,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Button
 import com.dopachiru.core.model.Focus
+import com.dopachiru.core.model.FocusScope
+import com.dopachiru.core.model.FocusTemplate
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -63,10 +71,12 @@ import com.dopachiru.core.points.PointEvent
 import com.dopachiru.core.points.PointPolicy
 import com.dopachiru.core.preset.RulePreset
 import com.dopachiru.core.preset.RulePresets
+import com.dopachiru.core.model.Target
 import com.dopachiru.desktop.DesktopRuntime
 import com.dopachiru.desktop.platform.BlockStrength
 import com.dopachiru.desktop.platform.ForegroundApp
 import com.dopachiru.desktop.platform.ProtectedProcesses
+import com.dopachiru.desktop.platform.WindowsAutoStart
 import com.dopachiru.desktop.platform.RunningApps
 
 @Composable
@@ -526,14 +536,18 @@ private fun PointCard(
 private fun FocusSection() {
     val settings by DesktopRuntime.settings.collectAsState()
     val lockouts by DesktopRuntime.lockouts.collectAsState()
+    val ruleFile by DesktopRuntime.ruleFile.collectAsState()
     var minutes by remember { mutableStateOf(settings.focus.defaultMinutes) }
+    var scope by remember { mutableStateOf(FocusScope.EVERYTHING) }
+    var tag by remember { mutableStateOf("") }
 
+    val tags = remember(ruleFile) { ruleFile.tags.values.flatten().distinct().sorted() }
     val running = Focus.activeIn(lockouts, System.currentTimeMillis() / 1000)
 
     Text("集中モード", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
     Spacer(Modifier.height(4.dp))
     Text(
-        "選んだ時間だけ、逃がすもの以外が閉まります。時間が来れば勝手に解けます。" +
+        "選んだ時間だけ閉まります。時間が来れば勝手に解けます。" +
             "エクスプローラやタスクマネージャは集中中も開いたままです。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -555,6 +569,45 @@ private fun FocusSection() {
         return
     }
 
+    Text("止める範囲", style = MaterialTheme.typography.labelLarge)
+    Spacer(Modifier.height(4.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FocusScope.entries.forEach { option ->
+            val label = when (option) {
+                FocusScope.EVERYTHING -> "全部"
+                FocusScope.GROUP -> "グループだけ"
+                FocusScope.EXCEPT_GROUP -> "グループ以外"
+            }
+            if (scope == option) {
+                Button(onClick = { scope = option }) { Text(label) }
+            } else {
+                OutlinedButton(onClick = { scope = option }) { Text(label) }
+            }
+        }
+    }
+
+    if (scope != FocusScope.EVERYTHING) {
+        Spacer(Modifier.height(8.dp))
+        if (tags.isEmpty()) {
+            Text(
+                "タグがありません。先にアプリにタグを付けてください。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                tags.forEach { t ->
+                    if (tag == t) {
+                        Button(onClick = { tag = t }) { Text(t) }
+                    } else {
+                        OutlinedButton(onClick = { tag = t }) { Text(t) }
+                    }
+                }
+            }
+        }
+    }
+
+    Spacer(Modifier.height(12.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
         TextButton(
             onClick = { minutes = (minutes - Focus.STEP_MINUTES).coerceAtLeast(Focus.MIN_MINUTES) },
@@ -566,7 +619,20 @@ private fun FocusSection() {
             enabled = minutes < Focus.MAX_MINUTES,
         ) { Text("+") }
         Spacer(Modifier.width(12.dp))
-        Button(onClick = { DesktopRuntime.startFocus(minutes) }) { Text("始める") }
+        val ready = scope == FocusScope.EVERYTHING || tag.isNotBlank()
+        Button(
+            enabled = ready,
+            onClick = {
+                if (scope == FocusScope.EVERYTHING) {
+                    DesktopRuntime.startFocus(minutes)
+                } else {
+                    DesktopRuntime.startFocus(
+                        FocusTemplate(id = "", scope = scope, tag = tag),
+                        minutes,
+                    )
+                }
+            },
+        ) { Text("始める") }
     }
     Spacer(Modifier.height(8.dp))
     Text(
@@ -909,125 +975,259 @@ private fun chooseFile(save: Boolean): String? {
     return dir + name
 }
 
+/**
+ * Windows と一緒に立ち上げる。
+ *
+ * レジストリを正として読む ── 設定ファイルに覚えた値だけを見せると、
+ * タスクマネージャから切られたあとも「入っています」と嘘をつく。
+ */
 @Composable
-private fun SettingsTab() {
+private fun LaunchAtLoginSection() {
     val settings by DesktopRuntime.settings.collectAsState()
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Text("ブロックのやり方", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "Windows には Android のような統一された止め方がありません。どこまでやるか選べます。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(12.dp))
+    // 画面を開くたびに実際の状態を読み直す。トグルを押したときも読み直す
+    var registered by remember { mutableStateOf(WindowsAutoStart.isEnabled()) }
+    var blocked by remember { mutableStateOf(WindowsAutoStart.blockedByWindows()) }
+    val supported = remember { WindowsAutoStart.supported }
 
-        BlockStrength.entries.forEach { strength ->
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                verticalAlignment = Alignment.Top,
-            ) {
-                RadioButton(
-                    selected = settings.blockStrength == strength,
-                    onClick = { DesktopRuntime.updateSettings { it.copy(blockStrength = strength) } },
+    Text(
+        "Windows と一緒に立ち上げる",
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold,
+    )
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "ログインしたらトレイに常駐します。窓は開きません。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(12.dp))
+
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("ログイン時に起動する", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                when {
+                    !supported ->
+                        "配布した版でだけ使えます(いまは Gradle から動かしています)。"
+                    blocked ->
+                        "登録してありますが、Windows 側で切られています。" +
+                            "タスクマネージャの「スタートアップ アプリ」から戻してください。"
+                    registered ->
+                        "登録済み。いまの置き場所を指しています ── フォルダを動かしたら、" +
+                            "動かした先で一度起動すれば直ります。" +
+                            "タスクマネージャの「スタートアップ アプリ」からも切れます。"
+                    else -> "まだ登録していません。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = if (blocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = registered || settings.launchAtLogin,
+            enabled = supported,
+            onCheckedChange = { wanted ->
+                registered = DesktopRuntime.setLaunchAtLogin(wanted)
+                blocked = WindowsAutoStart.blockedByWindows()
+            },
+        )
+    }
+}
+
+/**
+ * 設定の中のページ。
+ *
+ * 1枚に全部並べていたものを割った。縦に長い設定画面は、
+ * **どこに何があるかを覚えている人にしか使えない**。
+ *
+ * Android 版は1枚ずつ潜る形だが、こちらは窓が横に広いので左右に割る ──
+ * 潜らせると、いま何を見ているのかが分かりにくくなる。
+ */
+private enum class DesktopSettingsPage(val title: String, val summary: String) {
+    Behaviour("動かしかた", "ブロックの強さと一時停止"),
+    Startup("起動", "Windows と一緒に立ち上げる"),
+    Focus("集中モード", "その場で手を止める"),
+    Sync("端末間の同期", "スマホと同じルールを使う"),
+    Reservation("予約", "使う時間を先に決めておく"),
+    Bridge("ブラウザ拡張", "URL でも止めるための受け口"),
+    Transfer("ルールの持ち出し", "書き出しと取り込み"),
+    Points("ポイント", "押し切りの相場と使い道"),
+    About("このアプリについて", "必ず止めないもの・版"),
+}
+
+@Composable
+private fun SettingsTab() {
+    var page by remember { mutableStateOf(DesktopSettingsPage.Behaviour) }
+
+    Row(Modifier.fillMaxSize()) {
+        Column(
+            Modifier
+                .width(190.dp)
+                .fillMaxHeight()
+                .verticalScroll(rememberScrollState())
+                .padding(vertical = 8.dp),
+        ) {
+            DesktopSettingsPage.entries.forEach { entry ->
+                SettingsNavRow(
+                    title = entry.title,
+                    selected = page == entry,
+                    onClick = { page = entry },
                 )
-                Column(Modifier.padding(start = 4.dp)) {
-                    Text(strength.displayName, style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        strength.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
             }
         }
 
-        Spacer(Modifier.height(20.dp))
-        HorizontalDivider()
-        Spacer(Modifier.height(20.dp))
+        VerticalDivider()
 
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+        Column(
+            Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
         ) {
-            Column(Modifier.weight(1f)) {
-                Text("一時停止", style = MaterialTheme.typography.bodyLarge)
+            Text(page.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(2.dp))
+            Text(
+                page.summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(16.dp))
+
+            when (page) {
+                DesktopSettingsPage.Behaviour -> BehaviourSection()
+                DesktopSettingsPage.Startup -> LaunchAtLoginSection()
+                DesktopSettingsPage.Focus -> FocusSection()
+                DesktopSettingsPage.Sync -> SyncSection()
+                DesktopSettingsPage.Reservation -> ReservationSection()
+                DesktopSettingsPage.Bridge -> BrowserBridgeSection()
+                DesktopSettingsPage.Transfer -> RuleTransferSection()
+                DesktopSettingsPage.Points -> PointsSection()
+                DesktopSettingsPage.About -> AboutSection()
+            }
+
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+@Composable
+private fun SettingsNavRow(title: String, selected: Boolean, onClick: () -> Unit) {
+    val background = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 2.dp)
+            .clip(MaterialTheme.shapes.small)
+            .background(background)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Text(
+            title,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (selected) {
+                MaterialTheme.colorScheme.onSecondaryContainer
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+        )
+    }
+}
+
+@Composable
+private fun BehaviourSection() {
+    val settings by DesktopRuntime.settings.collectAsState()
+
+    Text(
+        "Windows には Android のような統一された止め方がありません。どこまでやるか選べます。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(12.dp))
+
+    BlockStrength.entries.forEach { strength ->
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 6.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            RadioButton(
+                selected = settings.blockStrength == strength,
+                onClick = { DesktopRuntime.updateSettings { it.copy(blockStrength = strength) } },
+            )
+            Column(Modifier.padding(start = 4.dp)) {
+                Text(strength.displayName, style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    "何も止めなくなります。トレイからも切り替えられます。",
+                    strength.description,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Switch(
-                checked = settings.paused,
-                onCheckedChange = { DesktopRuntime.updateSettings { s -> s.copy(paused = it) } },
+        }
+    }
+
+    Spacer(Modifier.height(20.dp))
+    HorizontalDivider()
+    Spacer(Modifier.height(20.dp))
+
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("一時停止", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "何も止めなくなります。トレイからも切り替えられます。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-
-        Spacer(Modifier.height(20.dp))
-        HorizontalDivider()
-        Spacer(Modifier.height(20.dp))
-
-        SyncSection()
-
-        Spacer(Modifier.height(20.dp))
-        HorizontalDivider()
-        Spacer(Modifier.height(20.dp))
-
-        FocusSection()
-
-        Spacer(Modifier.height(20.dp))
-        HorizontalDivider()
-        Spacer(Modifier.height(20.dp))
-
-        BrowserBridgeSection()
-
-        Spacer(Modifier.height(20.dp))
-        HorizontalDivider()
-        Spacer(Modifier.height(20.dp))
-
-        RuleTransferSection()
-
-        Spacer(Modifier.height(20.dp))
-        HorizontalDivider()
-        Spacer(Modifier.height(20.dp))
-
-        PointPolicySection(
-            policy = settings.pointPolicy,
-            onChange = { policy -> DesktopRuntime.updateSettings { it.copy(pointPolicy = policy) } },
+        Switch(
+            checked = settings.paused,
+            onCheckedChange = { DesktopRuntime.updateSettings { s -> s.copy(paused = it) } },
         )
-
-        Spacer(Modifier.height(20.dp))
-        HorizontalDivider()
-        Spacer(Modifier.height(20.dp))
-
-        Text("必ず止めないもの", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "ルールより強く、ここからも外せません。タスクマネージャを入れてあるのは、" +
-                "ドパチル自身を必ず止められるようにしておくためです。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            ProtectedProcesses.all().sorted().joinToString("、"),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        Spacer(Modifier.height(24.dp))
-        HorizontalDivider()
-        Spacer(Modifier.height(12.dp))
-        Text(
-            "ドパチル " + desktopVersion(),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(16.dp))
     }
+}
+
+@Composable
+private fun PointsSection() {
+    val settings by DesktopRuntime.settings.collectAsState()
+    PointPolicySection(
+        policy = settings.pointPolicy,
+        onChange = { policy -> DesktopRuntime.updateSettings { it.copy(pointPolicy = policy) } },
+    )
+}
+
+@Composable
+private fun AboutSection() {
+    Text("必ず止めないもの", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "ルールより強く、ここからも外せません。タスクマネージャを入れてあるのは、" +
+            "ドパチル自身を必ず止められるようにしておくためです。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
+    Text(
+        ProtectedProcesses.all().sorted().joinToString("、"),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    Spacer(Modifier.height(20.dp))
+    HorizontalDivider()
+    Spacer(Modifier.height(12.dp))
+    Text(
+        "ドパチル " + desktopVersion(),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 /**
@@ -1237,4 +1437,165 @@ private fun formatMinutes(minutes: Int): String {
     val h = minutes / 60
     val m = minutes % 60
     return if (m == 0) "${h}時間" else "${h}時間${m}分"
+}
+
+@Composable
+private fun ReservationSection() {
+    val reservations by DesktopRuntime.reservations.collectAsState()
+    val settings by DesktopRuntime.settings.collectAsState()
+    val leadMinutes = settings.reservationLeadMinutes
+
+    var picked by remember { mutableStateOf(setOf<String>()) }
+    var showPicker by remember { mutableStateOf(false) }
+    var startSec by remember { mutableStateOf(0L) }
+    var durationMinutes by remember { mutableStateOf(30) }
+    var refused by remember { mutableStateOf(false) }
+
+    val now = System.currentTimeMillis() / 1000
+    val earliest = ((now + leadMinutes * 60L + 1799L) / 1800L) * 1800L
+    if (startSec < earliest) startSec = earliest
+
+    Text(
+        "先に「この時間だけ使う」と決めておく枠です。いまから" +
+            describeLead(leadMinutes) + "より手前には取れません ── 少し先にしか置けないから、冷静に決められます。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    Spacer(Modifier.height(16.dp))
+    Text("いつから取れるようにするか", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(
+            onClick = {
+                DesktopRuntime.updateSettings { it.copy(reservationLeadMinutes = (leadMinutes - 30).coerceAtLeast(0)) }
+            },
+            enabled = leadMinutes > 0,
+        ) { Text("−30分") }
+        Text(describeLead(leadMinutes) + "から", style = MaterialTheme.typography.bodyLarge)
+        TextButton(
+            onClick = {
+                DesktopRuntime.updateSettings { it.copy(reservationLeadMinutes = leadMinutes + 30) }
+            },
+        ) { Text("+30分") }
+    }
+
+    Spacer(Modifier.height(16.dp))
+    HorizontalDivider()
+    Spacer(Modifier.height(16.dp))
+
+    Text("新しく予約する", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(8.dp))
+    Text("対象アプリ", style = MaterialTheme.typography.labelLarge)
+    if (picked.isEmpty()) {
+        Text("まだ選んでいません", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    } else {
+        picked.forEach { Text("・" + it, style = MaterialTheme.typography.bodySmall) }
+    }
+    OutlinedButton(onClick = { showPicker = true }) { Text("選ぶ") }
+
+    Spacer(Modifier.height(12.dp))
+    Text("いつから", style = MaterialTheme.typography.labelLarge)
+    Text(formatStart(startSec), style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(
+            onClick = { startSec = (startSec - 1800L).coerceAtLeast(earliest) },
+            enabled = startSec - 1800L >= earliest,
+        ) { Text("−30分") }
+        OutlinedButton(onClick = { startSec += 1800L }) { Text("+30分") }
+        OutlinedButton(onClick = { startSec += 86400L }) { Text("+1日") }
+    }
+
+    Spacer(Modifier.height(12.dp))
+    Text("どれくらい", style = MaterialTheme.typography.labelLarge)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(
+            onClick = { durationMinutes = (durationMinutes - 5).coerceAtLeast(5) },
+            enabled = durationMinutes > 5,
+        ) { Text("−") }
+        Text(durationMinutes.toString() + " 分", style = MaterialTheme.typography.titleMedium)
+        TextButton(
+            onClick = { durationMinutes = (durationMinutes + 5).coerceAtMost(8 * 60) },
+            enabled = durationMinutes < 8 * 60,
+        ) { Text("+") }
+    }
+
+    Spacer(Modifier.height(12.dp))
+    Button(
+        onClick = {
+            val booked = DesktopRuntime.book(
+                target = Target(packages = picked),
+                startEpochSec = startSec,
+                endEpochSec = startSec + durationMinutes * 60L,
+                minLeadMinutes = leadMinutes,
+            )
+            refused = booked == null
+            if (booked != null) picked = emptySet()
+        },
+        enabled = picked.isNotEmpty(),
+    ) { Text("予約する") }
+    if (refused) {
+        Text(
+            "その時刻には取れません。もう少し先にしてください。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+
+    Spacer(Modifier.height(20.dp))
+    HorizontalDivider()
+    Spacer(Modifier.height(16.dp))
+    Text("これからの予約", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(8.dp))
+    if (reservations.isEmpty()) {
+        Text("まだありません。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    } else {
+        reservations.sortedBy { it.startEpochSec }.forEach { reservation ->
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        reservation.target.packages.joinToString("、").ifBlank { "対象なし" },
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        formatReservationRange(reservation.startEpochSec, reservation.endEpochSec) +
+                            if (reservation.coversAt(System.currentTimeMillis() / 1000)) "  ・いま使えます" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(onClick = { DesktopRuntime.cancelReservation(reservation.uid) }) { Text("取り消す") }
+            }
+        }
+    }
+
+    if (showPicker) {
+        AppPickerDialog(
+            selected = picked,
+            onToggle = { pkg -> picked = if (pkg in picked) picked - pkg else picked + pkg },
+            onDismiss = { showPicker = false },
+        )
+    }
+}
+
+private val reservationDayFormat: java.time.format.DateTimeFormatter =
+    java.time.format.DateTimeFormatter.ofPattern("M/d(E) HH:mm")
+private val reservationTimeFormat: java.time.format.DateTimeFormatter =
+    java.time.format.DateTimeFormatter.ofPattern("HH:mm")
+
+private fun formatStart(sec: Long): String =
+    java.time.Instant.ofEpochSecond(sec).atZone(java.time.ZoneId.systemDefault()).format(reservationDayFormat)
+
+private fun formatReservationRange(startSec: Long, endSec: Long): String {
+    val start = java.time.Instant.ofEpochSecond(startSec).atZone(java.time.ZoneId.systemDefault())
+    val end = java.time.Instant.ofEpochSecond(endSec).atZone(java.time.ZoneId.systemDefault())
+    return start.format(reservationDayFormat) + "〜" + end.format(reservationTimeFormat)
+}
+
+private fun describeLead(minutes: Int): String = when {
+    minutes % 60 == 0 && minutes >= 60 -> (minutes / 60).toString() + "時間後"
+    minutes == 0 -> "すぐ"
+    else -> minutes.toString() + "分後"
 }

@@ -931,3 +931,178 @@ fun UnlockPromptScreen(message: String, onDismiss: () -> Unit) = DopaBlockTheme 
         }
     }
 }
+
+/**
+ * 画面を覆って音だけ残す「ラジオ」画面。
+ *
+ * 完全封印と違って音は止めない ── 覆うのは映像だけ。下のアプリはそのまま
+ * 再生を続ける。どうしても見たいときは、手間を払えば [onPeek] で一時的にどく。
+ */
+@Composable
+fun RadioScreen(
+    appLabel: String,
+    message: String,
+    peekEffort: String,
+    onPeek: () -> Unit,
+) = DopaBlockTheme {
+    var revealing by remember { mutableStateOf(false) }
+
+    Box(
+        modifier = Modifier.fillMaxSize().background(Color(0xFF0B0B12)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier.safeDrawingPadding().padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                appLabel,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "🎧 音は流れています",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.height(40.dp))
+            Text(
+                message,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(48.dp))
+
+            if (revealing) {
+                ReleaseEffortGate(
+                    effort = peekEffort,
+                    onCancel = { revealing = false },
+                    onPass = onPeek,
+                )
+            } else {
+                TextButton(onClick = { revealing = true }) {
+                    Text(
+                        "どうしても見たい",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 開くとき「何をしに開いた」を書かせる入力。
+ *
+ * 候補([suggestions])があれば1タップで選べる。無ければ自由入力だけ。
+ * 決めた文は、このあと隅に出し続けられる([IntentionChip])。
+ */
+@Composable
+fun IntentionInputScreen(
+    appLabel: String,
+    prompt: String,
+    suggestions: List<String>,
+    onSet: (String) -> Unit,
+) = DopaBlockTheme {
+    var typed by remember { mutableStateOf("") }
+
+    Box(
+        modifier = Modifier.fillMaxSize().background(Color(0xFF0B0B12)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier.safeDrawingPadding().padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                appLabel,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(24.dp))
+            Text(
+                prompt,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(32.dp))
+
+            suggestions.forEach { suggestion ->
+                OutlinedButton(
+                    onClick = { onSet(suggestion) },
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                ) {
+                    Text(suggestion)
+                }
+            }
+
+            if (suggestions.isNotEmpty()) {
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "または自分で書く",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+
+            OutlinedTextField(
+                value = typed,
+                onValueChange = { typed = it },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(16.dp))
+            Button(
+                onClick = { onSet(typed.trim()) },
+                enabled = typed.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("決めた")
+            }
+        }
+    }
+}
+
+/**
+ * 書いた目的を隅に出し続ける小さな札。下のアプリは操作できる。
+ *
+ * 目的を視界に留めることで、脱線したときに自分で気づけるようにする
+ * (実行意図, d=0.77)。経過時間も添えると Time Fog(#10)への対抗にもなる。
+ */
+@Composable
+fun IntentionChip(intention: String, minutes: Int?) = DopaBlockTheme {
+    Box(modifier = Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.TopCenter) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xE00B0B12)),
+            shape = RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    intention,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                if (minutes != null) {
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        "${minutes}分",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        }
+    }
+}

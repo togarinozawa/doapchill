@@ -31,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.dopachiru.core.action.ActionRegistry
 import com.dopachiru.core.condition.ConditionRegistry
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.ConditionTree
@@ -38,6 +39,7 @@ import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.LockScope
 import com.dopachiru.core.model.NodePath
 import com.dopachiru.core.model.Rule
+import com.dopachiru.core.model.RuleCheck
 import com.dopachiru.core.param.Params
 import com.dopachiru.core.points.PointPolicy
 
@@ -78,6 +80,57 @@ fun RuleEditorDialog(
                     root = draft.condition,
                     onChange = { draft = draft.copy(condition = it) },
                 )
+
+                Spacer(Modifier.height(20.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(20.dp))
+
+                Text("どうする", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+                // 弱い順に並んでいる。強いものを先頭に出すと、そこから選んでしまう
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ActionRegistry.all().forEach { action ->
+                        FilterChip(
+                            selected = draft.actionId == action.id,
+                            onClick = {
+                                draft = draft.copy(
+                                    actionId = action.id,
+                                    actionParams = Params.defaultsOf(action.params),
+                                )
+                            },
+                            label = { Text(action.displayName) },
+                        )
+                    }
+                }
+                ActionRegistry[draft.actionId]?.let { action ->
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        action.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    ParamEditor(
+                        specs = action.params,
+                        params = draft.actionParams,
+                        onChange = { draft = draft.copy(actionParams = it) },
+                    )
+                }
+
+                // 保存はできるが書いたとおりには効かない組み合わせを知らせる
+                RuleCheck.warnings(
+                    condition = draft.condition,
+                    target = draft.target,
+                    actionId = draft.actionId,
+                    actionParams = draft.actionParams,
+                ).forEach { warning ->
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        warning,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
 
                 Spacer(Modifier.height(20.dp))
                 HorizontalDivider()

@@ -1,6 +1,7 @@
 package com.dopachiru.data
 
 import com.dopachiru.core.engine.UsageSnapshot
+import com.dopachiru.core.engine.UsageSpans
 import com.dopachiru.core.time.ResetPolicy
 import com.dopachiru.data.db.UsageDao
 import com.dopachiru.data.db.UsageSessionEntity
@@ -135,6 +136,54 @@ class UsageTracker(
                         ?: return null
                     return ((start - previousEnd) / 60).toInt().coerceAtLeast(0)
                 }
+        }
+    }
+
+    /**
+     * 休憩をはさむまでの使用時間(分)。
+     *
+     * [matches] に当たるアプリをまとめて数えるので、ルールがタグで括ってあれば
+     * グループ合計になる。アプリを渡り歩いても切れない。
+     *
+     * @param breakMinutes これだけ対象を触っていない時間があれば、そこから数え直す。
+     */
+    fun minutesSinceBreak(
+        breakMinutes: Int,
+        nowSec: Long = nowSeconds(),
+        matches: (String) -> Boolean,
+    ): Int {
+        val spans = synchronized(lock) {
+            val openStart = current?.takeIf { matches(it.packageName) }?.startSec
+            sessions.filter { matches(it.packageName) }.map { session ->
+                // 開いている最中のセッションは現在時刻まで伸ばして数える
+                val end = if (openStart != null && session.startSec == openStart) nowSec else session.endSec
+                session.startSec to end
+            }
+        }
+        return UsageSpans.minutesSinceBreak(spans, breakMinutes, nowSec)
+    }
+
+    /**
+     * 対象アプリを前回いつまで使っていたか ── いまから何分前に終わったか。
+     * 一度も使っていなければ null。
+     *
+     * 「前回からN時間あける」の判定用。[matches] に当たるものをまとめて見るので、
+     * タグで括ってあればグループ全体で最後に触った時刻になる。
+     *
+     * いま開いている一続きは「前回」に数えない。しかも[minutesSinceLastSession]と同じく
+     * **開いた時刻を基準に**測る ── 現在時刻から測ると、開きっぱなしで間隔が育って、
+     * 使っている途中で条件が外れてしまう。
+     */
+    fun minutesSinceLastUse(nowSec: Long = nowSeconds(), matches: (String) -> Boolean): Int? {
+        synchronized(lock) {
+            val open = current?.takeIf { matches(it.packageName) }
+            // 基準時刻: いま対象を開いていればその開始、開いていなければ現在時刻
+            val reference = open?.startSec ?: nowSec
+            val previousEnd = sessions
+                .filter { matches(it.packageName) && it !== open && it.startSec < reference }
+                .maxOfOrNull { it.endSec }
+                ?: return null
+            return ((reference - previousEnd) / 60).toInt().coerceAtLeast(0)
         }
     }
 

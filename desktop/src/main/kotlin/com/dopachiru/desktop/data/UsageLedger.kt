@@ -1,6 +1,7 @@
 package com.dopachiru.desktop.data
 
 import com.dopachiru.core.engine.UsageSnapshot
+import com.dopachiru.core.engine.UsageSpans
 import com.dopachiru.core.time.ResetPolicy
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -104,6 +105,46 @@ class UsageLedger(private val zone: ZoneId = ZoneId.systemDefault()) {
                 }
         }
     }
+
+    /**
+     * 休憩をはさむまでの使用時間(分)。
+     *
+     * [matches] に当たるものをまとめて数えるので、ルールがタグで括ってあれば
+     * グループ合計になる。アプリを渡り歩いても切れない。
+     */
+    fun minutesSinceBreak(
+        breakMinutes: Int,
+        nowSeconds: Long = nowSec(),
+        matches: (String) -> Boolean,
+    ): Int {
+        val spans = synchronized(lock) {
+            val openStart = open?.takeIf { matches(it.processName) }?.startSec
+            entries.filter { matches(it.processName) }.map { entry ->
+                // 開いている最中の区間は現在時刻まで伸ばして数える
+                val end = if (openStart != null && entry.startSec == openStart) nowSeconds else entry.endSec
+                entry.startSec to end
+            }
+        }
+        return UsageSpans.minutesSinceBreak(spans, breakMinutes, nowSeconds)
+    }
+
+    /**
+     * 対象を前回いつまで使っていたか(分前)。一度も無ければ null。
+     *
+     * 「前回からN時間あける」用。[matches] に当たるものをまとめて見るので、
+     * タグで括ってあればグループ全体の最後。いま開いている一続きは数えず、
+     * 開いた時刻を基準に測る(開きっぱなしで間隔が育たないように)。
+     */
+    fun minutesSinceLastUse(nowSeconds: Long = nowSec(), matches: (String) -> Boolean): Int? =
+        synchronized(lock) {
+            val current = open?.takeIf { matches(it.processName) }
+            val reference = current?.startSec ?: nowSeconds
+            val previousEnd = entries
+                .filter { matches(it.processName) && it !== current && it.startSec < reference }
+                .maxOfOrNull { it.endSec }
+                ?: return null
+            ((reference - previousEnd) / 60).toInt().coerceAtLeast(0)
+        }
 
     /** いま開いている区間を識別する種。開き直すと変わる。 */
     fun currentSessionSeed(): Long = synchronized(lock) { open?.startSec ?: 0L }

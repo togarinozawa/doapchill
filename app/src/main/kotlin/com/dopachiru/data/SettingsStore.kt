@@ -12,6 +12,8 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.dopachiru.core.DopaCore
 import com.dopachiru.core.gate.Gate
 import com.dopachiru.core.model.FocusSettings
+import com.dopachiru.core.model.Reservation
+import com.dopachiru.core.model.ReservationRules
 import com.dopachiru.core.points.PointPolicy
 import com.dopachiru.core.sync.SyncSettings
 import kotlinx.coroutines.flow.Flow
@@ -49,6 +51,8 @@ class SettingsStore(private val context: Context) {
         val passUntilEpochSec = longPreferencesKey("pass_until_epoch_sec")
         val focusSettingsJson = stringPreferencesKey("focus_settings_json")
         val syncSettingsJson = stringPreferencesKey("sync_settings_json")
+        val reservationsJson = stringPreferencesKey("reservations_json")
+        val reservationLeadMinutes = intPreferencesKey("reservation_lead_minutes")
     }
 
     val setupDone: Flow<Boolean> = context.dataStore.data.map { it[Keys.setupDone] ?: false }
@@ -166,6 +170,34 @@ class SettingsStore(private val context: Context) {
     suspend fun setSyncSettings(settings: SyncSettings) {
         val encoded = DopaCore.json.encodeToString(SyncSettings.serializer(), settings)
         context.dataStore.edit { it[Keys.syncSettingsJson] = encoded }
+    }
+
+    /**
+     * 予約の一覧。
+     *
+     * リストを丸ごと JSON 1本で持つ ── 数が少なく、まとめて読み書きするので
+     * Room のテーブルにするほどではない。判定からは同期的に読みたいので、
+     * 実体のキャッシュは [com.dopachiru.data.ReservationRepository] が持つ。
+     */
+    val reservations: Flow<List<Reservation>> = context.dataStore.data.map { prefs ->
+        val raw = prefs[Keys.reservationsJson] ?: return@map emptyList()
+        runCatching {
+            DopaCore.json.decodeFromString(ListSerializer(Reservation.serializer()), raw)
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun setReservations(list: List<Reservation>) {
+        val encoded = DopaCore.json.encodeToString(ListSerializer(Reservation.serializer()), list)
+        context.dataStore.edit { it[Keys.reservationsJson] = encoded }
+    }
+
+    /** 予約をいまから何分先からしか取れないか。直前予約を封じる待ち。 */
+    val reservationLeadMinutes: Flow<Int> = context.dataStore.data.map {
+        it[Keys.reservationLeadMinutes] ?: ReservationRules.MIN_LEAD_MINUTES
+    }
+
+    suspend fun setReservationLeadMinutes(minutes: Int) {
+        context.dataStore.edit { it[Keys.reservationLeadMinutes] = minutes.coerceAtLeast(0) }
     }
 
     suspend fun setPassUntil(epochSec: Long) {

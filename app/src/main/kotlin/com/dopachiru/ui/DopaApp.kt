@@ -13,6 +13,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -20,13 +21,17 @@ import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.navigation
 import com.dopachiru.ui.dev.DevToolsScreen
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.dopachiru.ui.changes.ChangeRequestScreen
 import com.dopachiru.ui.dashboard.DashboardScreen
+import com.dopachiru.ui.reservation.ReservationScreen
 import com.dopachiru.ui.rules.RuleEditScreen
 import com.dopachiru.ui.rules.RuleListScreen
+import com.dopachiru.ui.settings.SettingsPage
+import com.dopachiru.ui.settings.SettingsPageScreen
 import com.dopachiru.ui.settings.SettingsScreen
 import com.dopachiru.ui.tags.TagScreen
 
@@ -41,6 +46,9 @@ private enum class TopLevel(
     Changes("changes", "変更", Icons.Filled.History),
     Settings("settings", "設定", Icons.Filled.Settings),
 }
+
+/** 設定の一覧そのものの経路。入れ子の図の始点。 */
+private const val SETTINGS_INDEX = "settings/index"
 
 @Composable
 fun DopaApp() {
@@ -74,7 +82,11 @@ fun DopaApp() {
             startDestination = TopLevel.Dashboard.route,
             modifier = Modifier.padding(padding),
         ) {
-            composable(TopLevel.Dashboard.route) { DashboardScreen() }
+            composable(TopLevel.Dashboard.route) {
+                DashboardScreen(onOpenReservations = { navController.navigate("reservations") })
+            }
+
+            composable("reservations") { ReservationScreen() }
 
             composable(TopLevel.Rules.route) {
                 RuleListScreen(
@@ -95,8 +107,31 @@ fun DopaApp() {
 
             composable(TopLevel.Changes.route) { ChangeRequestScreen() }
 
-            composable(TopLevel.Settings.route) {
-                SettingsScreen(onOpenDevTools = { navController.navigate("dev") })
+            // 設定は入れ子の図にしてある。こうしておくと、下の段の中に居ても
+            // 下タブの「設定」が選ばれたままになり、タブを押し直せば見ていたページに戻る
+            navigation(
+                route = TopLevel.Settings.route,
+                startDestination = SETTINGS_INDEX,
+            ) {
+                composable(SETTINGS_INDEX) {
+                    SettingsScreen(
+                        onOpen = { page -> navController.navigate("settings/page/" + page.id) },
+                    )
+                }
+
+                composable("settings/page/{pageId}") { entry ->
+                    val page = SettingsPage.of(entry.arguments?.getString("pageId"))
+                    if (page == null) {
+                        // 知らないページ名。黙って白い画面を見せるより、一覧に戻す
+                        LaunchedEffect(Unit) { navController.popBackStack() }
+                    } else {
+                        SettingsPageScreen(
+                            page = page,
+                            onBack = { navController.popBackStack() },
+                            onOpenDevTools = { navController.navigate("dev") },
+                        )
+                    }
+                }
             }
 
             // 開発用。設定の一番下からコードを入れたときだけ辿り着ける

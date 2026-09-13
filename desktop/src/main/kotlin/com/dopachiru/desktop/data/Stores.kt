@@ -3,6 +3,7 @@ package com.dopachiru.desktop.data
 import com.dopachiru.core.model.FocusSettings
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.sync.SyncSettings
+import com.dopachiru.core.model.Reservation
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.points.PointEvent
 import com.dopachiru.core.points.PointPolicy
@@ -44,6 +45,9 @@ data class DesktopSettings(
 
     /** 端末間の同期。既定では切ってある。 */
     val sync: SyncSettings = SyncSettings(),
+
+    /** 予約をいまから何分先からしか取れないか。直前予約を封じる待ち。 */
+    val reservationLeadMinutes: Int = com.dopachiru.core.model.ReservationRules.MIN_LEAD_MINUTES,
 
     /**
      * 拡張と分け合う合言葉。
@@ -113,4 +117,8 @@ object Stores {
 
     /** ポイントの増減。残高はこの合計。 */
     val points = JsonStore("points.json", ListSerializer(PointEvent.serializer())) { emptyList() }
+
+    /** 予約。冷静なうちに取った「この時間だけ使う」枠。 */
+    val reservations =
+        JsonStore("reservations.json", ListSerializer(Reservation.serializer())) { emptyList() }
 }

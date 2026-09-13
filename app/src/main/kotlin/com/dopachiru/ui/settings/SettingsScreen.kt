@@ -10,6 +10,26 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Accessibility
+import androidx.compose.material.icons.filled.BatteryFull
+import androidx.compose.material.icons.filled.Event
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Stars
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.TopAppBar
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -60,7 +80,9 @@ import com.dopachiru.data.SettingsStore
 import androidx.compose.runtime.rememberCoroutineScope
 import com.dopachiru.core.action.types.BlockAction
 import com.dopachiru.core.model.Focus
+import com.dopachiru.core.model.FocusScope
 import com.dopachiru.core.model.FocusSettings
+import com.dopachiru.core.model.FocusTemplate
 import com.dopachiru.focus.FocusShortcutActivity
 import com.dopachiru.ui.rules.AppPickerDialog
 import com.dopachiru.ui.rules.InstalledApps
@@ -160,25 +182,163 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun calendarGranted(): Boolean = DopaRuntime.calendarReader.hasPermission()
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+/**
+ * 設定の中のページ。
+ *
+ * 1枚に全部並べていたものを割った。縦に長い設定画面は、
+ * **どこに何があるかを覚えている人にしか使えない** ── 探すのに
+ * 全部読む必要があるということは、目当て以外の項目を毎回読まされるということでもある。
+ *
+ * 並び順は「無いと動かないもの → 毎日触るもの → めったに触らないもの」。
+ * アルファベット順や機能の分類ではなく、**触る頻度**で並べてある。
+ */
+enum class SettingsPage(
+    val id: String,
+    val title: String,
+    val summary: String,
+    val icon: ImageVector,
+) {
+    Required("required", "動作に必要な設定", "ユーザー補助と電池の除外。ここが欠けると何も検知できない", Icons.Filled.Accessibility),
+    Focus("focus", "集中モード", "その場で手を止める。ホーム画面に置くボタン", Icons.Filled.Timer),
+    Guard("guard", "変更をしにくくする", "緩める変更にかける関門、パスワード、引き止め", Icons.Filled.Lock),
+    Screen("screen", "待ち受け・ホーム画面", "ロックを解除した直後に出す問いかけ", Icons.Filled.Home),
+    Sync("sync", "端末間の同期", "スマホと Windows で同じルールを使う", Icons.Filled.Sync),
+    Study("study", "学習予定・カレンダー", "予定の前後で強める。助走枠", Icons.Filled.Event),
+    Points("points", "ポイント", "押し切りの相場と、解禁券の値段", Icons.Filled.Stars),
+    Battery("battery", "電池", "判定を見に来る間隔", Icons.Filled.BatteryFull),
+    About("about", "このアプリについて", "版と、外に出るもの", Icons.Filled.Info),
+    ;
+
+    companion object {
+        /** 経路の文字列から引く。知らない ID は null(ルールの復元と同じ扱い)。 */
+        fun of(id: String?): SettingsPage? = entries.firstOrNull { it.id == id }
+    }
+}
+
+/**
+ * 設定の入口。ここには項目そのものを置かず、行き先だけを並べる。
+ */
 @Composable
 fun SettingsScreen(
+    onOpen: (SettingsPage) -> Unit = {},
+) {
+    val context = LocalContext.current
+    val refreshKey = rememberResumeKey()
+
+    // 「動作に必要な設定」だけは、開かなくても足りているかが分かるようにする。
+    // ここが欠けていると他の設定が全部無意味になるので、一覧の側に出す
+    val accessibilityOn = remember(refreshKey) { isAccessibilityEnabled(context) }
+    val batteryExempt = remember(refreshKey) { isIgnoringBatteryOptimizations(context) }
+    val missing = listOfNotNull(
+        "ユーザー補助".takeIf { !accessibilityOn },
+        "電池の除外".takeIf { !batteryExempt },
+    )
+
+    LazyColumn(contentPadding = PaddingValues(vertical = 8.dp)) {
+        items(SettingsPage.entries) { page ->
+            SettingsRow(
+                page = page,
+                warning = if (page == SettingsPage.Required && missing.isNotEmpty()) {
+                    missing.joinToString("と") + "がまだです"
+                } else {
+                    null
+                },
+                onClick = { onOpen(page) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsRow(page: SettingsPage, warning: String?, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            page.icon,
+            contentDescription = null,
+            tint = if (warning != null) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.primary
+            },
+        )
+        Spacer(Modifier.width(20.dp))
+        Column(Modifier.weight(1f)) {
+            Text(page.title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                warning ?: page.summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (warning != null) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        }
+    }
+}
+
+/**
+ * 設定の1ページ。
+ *
+ * 上の見出しで「いまどこにいるか」が分かるようにしてある。
+ * 割ったぶん、戻る道が要る。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsPageScreen(
+    page: SettingsPage,
+    onBack: () -> Unit,
     onOpenDevTools: () -> Unit = {},
     viewModel: SettingsViewModel = viewModel(),
 ) {
-    val context = LocalContext.current
-    val gates by viewModel.gates.collectAsState()
-    val hasPassword by viewModel.hasPassword.collectAsState()
-    val blockHome by viewModel.blockHomeScreen.collectAsState()
-    val showOnUnlock by viewModel.showOnUnlock.collectAsState()
-    val unlockMessage by viewModel.unlockMessage.collectAsState()
-    val selfDefense by viewModel.selfDefense.collectAsState()
-    val batterySaver by viewModel.batterySaver.collectAsState()
-    val prepMinutes by viewModel.studyPrepMinutes.collectAsState()
-    val pointPolicy by viewModel.pointPolicy.collectAsState()
-    var showDevDialog by remember { mutableStateOf(false) }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(page.title) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.padding(padding),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            item {
+                when (page) {
+                    SettingsPage.Required -> RequiredSection()
+                    SettingsPage.Focus -> FocusCard()
+                    SettingsPage.Guard -> GuardSection(viewModel)
+                    SettingsPage.Screen -> ScreenSection(viewModel)
+                    SettingsPage.Sync -> SyncCard()
+                    SettingsPage.Study -> StudySection(viewModel)
+                    SettingsPage.Points -> PointsSection(viewModel)
+                    SettingsPage.Battery -> BatterySection(viewModel)
+                    SettingsPage.About -> AboutSection(onOpenDevTools)
+                }
+            }
+        }
+    }
+}
 
-    // 設定アプリから戻ってきたら権限の状態を見直す
+/**
+ * 設定アプリから戻ってきたことを知るための印。
+ *
+ * 権限は外で変えられるので、戻ってきた時点で必ず見直す。
+ * 見直さないと「許可したのに、まだ許可されていません」と出続ける。
+ */
+@Composable
+private fun rememberResumeKey(): Int {
     var refreshKey by remember { mutableIntStateOf(0) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -188,396 +348,167 @@ fun SettingsScreen(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+    return refreshKey
+}
 
+// ---- 各ページの中身 ----------------------------------------------------
+
+@Composable
+private fun RequiredSection() {
+    val context = LocalContext.current
+    val refreshKey = rememberResumeKey()
     val accessibilityOn = remember(refreshKey) { isAccessibilityEnabled(context) }
     val batteryExempt = remember(refreshKey) { isIgnoringBatteryOptimizations(context) }
-    var calendarGranted by remember(refreshKey) { mutableStateOf(viewModel.calendarGranted()) }
 
-    val calendarPermission = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        calendarGranted = granted
-        if (granted) viewModel.refreshCalendar()
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            CheckRow(
+                label = "ユーザー補助を有効にする",
+                done = accessibilityOn,
+                detail = "これが入っていないと何も検知できません",
+                onAction = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+            )
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            CheckRow(
+                label = "電池の最適化から除外する",
+                done = batteryExempt,
+                detail = "常駐が落とされにくくなります",
+                onAction = { context.requestBatteryExemption() },
+            )
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            Text(
+                "ユーザー補助のスイッチが灰色で押せない場合",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Android 13 以降、ストア以外から入れたアプリはユーザー補助を有効にできません。" +
+                    "一度スイッチを押してブロックされたあと、アプリ情報の右上「⋮」から" +
+                    "「制限された設定を許可」を選ぶと解除できます。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = { context.openAppDetails() }) {
+                Text("アプリ情報を開く")
+            }
+        }
     }
+}
+
+@Composable
+private fun GuardSection(viewModel: SettingsViewModel) {
+    val gates by viewModel.gates.collectAsState()
+    val hasPassword by viewModel.hasPassword.collectAsState()
+    val selfDefense by viewModel.selfDefense.collectAsState()
+    val refreshKey = rememberResumeKey()
+    val calendarGranted = remember(refreshKey) { viewModel.calendarGranted() }
 
     var showPasswordDialog by remember { mutableStateOf(false) }
-    var showMessageDialog by remember { mutableStateOf(false) }
     var editingTimeWindow by remember { mutableStateOf<Gate.TimeWindow?>(null) }
     var editingCalendarWindow by remember { mutableStateOf<Gate.CalendarWindow?>(null) }
 
-    LazyColumn(
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        item {
-            SectionTitle("動作に必要な設定")
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    CheckRow(
-                        label = "ユーザー補助を有効にする",
-                        done = accessibilityOn,
-                        detail = "これが入っていないと何も検知できません",
-                        onAction = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
-                    )
-                    HorizontalDivider(Modifier.padding(vertical = 10.dp))
-                    CheckRow(
-                        label = "電池の最適化から除外する",
-                        done = batteryExempt,
-                        detail = "常駐が落とされにくくなります",
-                        onAction = { context.requestBatteryExemption() },
-                    )
-                    HorizontalDivider(Modifier.padding(vertical = 10.dp))
-                    Text(
-                        "ユーザー補助のスイッチが灰色で押せない場合",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "Android 13 以降、ストア以外から入れたアプリはユーザー補助を有効にできません。" +
-                            "一度スイッチを押してブロックされたあと、アプリ情報の右上「⋮」から" +
-                            "「制限された設定を許可」を選ぶと解除できます。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(onClick = { context.openAppDetails() }) {
-                        Text("アプリ情報を開く")
-                    }
-                }
-            }
-        }
-
-        item {
-            SectionTitle("カレンダー連携")
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    if (DopaFeatures.CALENDAR_ENABLED) {
-                        Text(
-                            "端末に同期済みのカレンダーを読みます。Google カレンダーを端末で同期していれば、" +
-                                "そのまま使えます。ログインも API キーも要りません。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        CheckRow(
-                            label = "カレンダーの読み取りを許可",
-                            done = calendarGranted,
-                            detail = "予定を条件やゲートに使えるようになります",
-                            onAction = {
-                                calendarPermission.launch(Manifest.permission.READ_CALENDAR)
-                            },
-                        )
-
-                        if (calendarGranted) {
-                            val events =
-                                remember(refreshKey, calendarGranted) { viewModel.upcomingEvents() }
-                            Spacer(Modifier.height(12.dp))
-                            Text("これからの予定", style = MaterialTheme.typography.labelMedium)
-                            Spacer(Modifier.height(4.dp))
-                            if (events.isEmpty()) {
-                                Text(
-                                    "直近に予定はありません。",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            } else {
-                                events.forEach { event ->
-                                    Text(
-                                        "${formatTime(event.startMs)}  ${event.title}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        modifier = Modifier.padding(vertical = 1.dp),
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        Text("凍結中", style = MaterialTheme.typography.titleSmall)
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "学習予定はスキマスから直接届くようになったので、カレンダーは読んでいません。" +
-                                "読み取り権限そのものを外してあります。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "カレンダーを使っていたルールは残っていますが、凍結中は成立しません。" +
-                                "「予定が入っているあいだだけ変更できる」の関門は、開いたままになります。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-        }
-
-        item {
-            SectionTitle("変更をしにくくする")
-            Text(
-                "ルールを緩める変更にだけ、ここで選んだ関門がかかります。厳しくする変更は素通しです。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(12.dp))
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    GateRow(
-                        label = "考える時間を置く(30分)",
-                        gate = Gate.Cooldown(30),
-                        gates = gates,
-                        onToggle = viewModel::putGate,
-                    )
-                    GateRow(
-                        label = "理由を書かせる(30文字)",
-                        gate = Gate.WriteReason(30),
-                        gates = gates,
-                        onToggle = viewModel::putGate,
-                    )
-                    GateRow(
-                        label = "ミニゲームを解かせる(5問)",
-                        gate = Gate.MiniGame("arithmetic", 5),
-                        gates = gates,
-                        onToggle = viewModel::putGate,
-                    )
-                    GateRow(
-                        label = "パスワードを求める",
-                        gate = Gate.Password,
-                        gates = gates,
-                        enabled = hasPassword,
-                        disabledHint = "先にパスワードを設定してください",
-                        onToggle = viewModel::putGate,
-                    )
-
-                    val timeWindow = gates.filterIsInstance<Gate.TimeWindow>().firstOrNull()
-                    GateRow(
-                        label = "変更できる曜日と時刻を絞る",
-                        gate = timeWindow ?: Gate.TimeWindow(),
-                        gates = gates,
-                        currentDescription = timeWindow?.describe(),
-                        onConfigure = { editingTimeWindow = timeWindow ?: Gate.TimeWindow() },
-                        onToggle = viewModel::putGate,
-                    )
-
-                    val calendarWindow = gates.filterIsInstance<Gate.CalendarWindow>().firstOrNull()
-                    // 凍結中は新しく掛けさせない。すでに掛けてあるものは、
-                    // 外せるように行だけ残す(凍結中は開いたままなので実害は無いが、
-                    // 「掛けたはずの関門が効いていない」ことは見えていたほうがよい)
-                    if (DopaFeatures.CALENDAR_ENABLED || calendarWindow != null) {
-                        GateRow(
-                            label = "カレンダーの予定中だけ変更できる",
-                            gate = calendarWindow ?: Gate.CalendarWindow(),
-                            gates = gates,
-                            enabled = DopaFeatures.CALENDAR_ENABLED && calendarGranted,
-                            disabledHint = if (DopaFeatures.CALENDAR_ENABLED) {
-                                "先にカレンダーの読み取りを許可してください"
-                            } else {
-                                "カレンダー連携は凍結中。この関門はいま開いたままです"
-                            },
-                            currentDescription = calendarWindow?.describe(),
-                            onConfigure = {
-                                editingCalendarWindow = calendarWindow ?: Gate.CalendarWindow()
-                            },
-                            onToggle = viewModel::putGate,
-                        )
-                    }
-
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(onClick = { showPasswordDialog = true }) {
-                        Text(if (hasPassword) "パスワードを変更する" else "パスワードを設定する")
-                    }
-                }
-            }
-        }
-
-        item {
-            SectionTitle("自分から守る")
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    SwitchRow(
-                        "設定を触ろうとしたら引き止める",
-                        selfDefense,
-                        viewModel::setSelfDefense,
-                    )
-                    Text(
-                        "設定アプリでドパチルのページを開いたとき、連続日数を見せて10秒だけ引き止めます。" +
-                            "無効化そのものは必ずできます。自分で入れたアプリを自分で止められなくなるのは、" +
-                            "抑止ではなく事故なので。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-
-        item {
-            SectionTitle("待ち受け・ホーム画面")
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    Text(
-                        "ロック画面そのものには重ねられないため(OSが最上位で保護しているため)、" +
-                            "ロックを解除した直後に問いかけを出します。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    SwitchRow("ロック解除の直後に問いかける", showOnUnlock, viewModel::setShowOnUnlock)
-                    SwitchRow("ホーム画面に戻ったときにも出す", blockHome, viewModel::setBlockHomeScreen)
-                    Spacer(Modifier.height(8.dp))
-                    Text("問いかけの文", style = MaterialTheme.typography.labelMedium)
-                    Text(
-                        unlockMessage,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(vertical = 4.dp),
-                    )
-                    OutlinedButton(onClick = { showMessageDialog = true }) { Text("変える") }
-                }
-            }
-        }
-
-        item {
-            SectionTitle("学習予定")
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("助走枠", style = MaterialTheme.typography.titleSmall)
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "予定が始まる何分前から「直前」とみなすか。" +
-                            "予定の時間帯だけ塞いでも、始まる前に沈んで予定ごと潰れることは防げません。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        if (prepMinutes == 0) "使わない" else "${prepMinutes} 分前から",
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Slider(
-                        value = prepMinutes.toFloat(),
-                        onValueChange = { viewModel.setStudyPrepMinutes(it.toInt()) },
-                        valueRange = 0f..120f,
-                        steps = 23,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Text(
-                        "雛形の「予定の前に沈まない」と組み合わせて使います。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-
-        item {
-            SectionTitle("端末間の同期")
-            SyncCard()
-        }
-
-        item {
-            SectionTitle("集中モード")
-            FocusCard()
-        }
-
-        item {
-            SectionTitle("ポイント")
-            PointPolicyCard(
-                policy = pointPolicy,
-                onChange = viewModel::setPointPolicy,
-            )
-        }
-
-        item {
-            SectionTitle("電池")
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    SwitchRow("電池を優先する", batterySaver, viewModel::setBatterySaver)
-                    Text(
-                        "判定を見に来る間隔とカレンダーの読み直しを伸ばします。" +
-                            "ブロックが最大で2分ほど遅れることがある代わりに、常駐の消費が減ります。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        "オフのままでも、次のときは自動的に止まります。",
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "・画面が消えているあいだ\n" +
-                            "・前面のアプリを狙っているルールが1つも無いとき\n" +
-                            "・条件が「この時刻までは変わらない」と答えられるあいだ",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        "端末側の省電力モードに合わせて制限を強めたい場合は、" +
-                            "ルールの条件に「省電力モード」を足してください。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-
-        item {
-            SectionTitle("このアプリについて")
-            Text(
-                "判定はすべて端末の中で行われます。同期を切っていれば、何も外に出ません。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "同期を入れたときに出るのは、ルール・タグ・アプリ名・1日ごとの使用時間だけです。" +
-                    "どの瞬間に何を見ていたかは出ません。ゲートと変更リクエストも出ません。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(16.dp))
-            // ここを長押しすると開発ツールへの入口が出る。
-            // ふだん目に入らないところに置いてあるだけで、隠しているわけではない。
-            //
-            // 文字が小さいので、当たり判定は padding で広げてある。
-            // 隠す意図はないのに「押せなくて見つからない」のはただの不便。
-            Text(
-                "ドパチル " + versionLabel(context) + "(長押しで開発ツール)",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .combinedClickable(
-                        onClick = {},
-                        onLongClick = { showDevDialog = true },
-                    )
-                    .padding(vertical = 12.dp, horizontal = 8.dp),
-            )
-            Spacer(Modifier.height(32.dp))
-        }
-    }
-
-    if (showDevDialog) {
-        DevCodeDialog(
-            onUnlock = { showDevDialog = false; onOpenDevTools() },
-            onDismiss = { showDevDialog = false },
+    Column {
+        Text(
+            "ルールを緩める変更にだけ、ここで選んだ関門がかかります。厳しくする変更は素通しです。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Spacer(Modifier.height(12.dp))
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                GateRow(
+                    label = "考える時間を置く(30分)",
+                    gate = Gate.Cooldown(30),
+                    gates = gates,
+                    onToggle = viewModel::putGate,
+                )
+                GateRow(
+                    label = "理由を書かせる(30文字)",
+                    gate = Gate.WriteReason(30),
+                    gates = gates,
+                    onToggle = viewModel::putGate,
+                )
+                GateRow(
+                    label = "ミニゲームを解かせる(5問)",
+                    gate = Gate.MiniGame("arithmetic", 5),
+                    gates = gates,
+                    onToggle = viewModel::putGate,
+                )
+                GateRow(
+                    label = "パスワードを求める",
+                    gate = Gate.Password,
+                    gates = gates,
+                    enabled = hasPassword,
+                    disabledHint = "先にパスワードを設定してください",
+                    onToggle = viewModel::putGate,
+                )
+
+                val timeWindow = gates.filterIsInstance<Gate.TimeWindow>().firstOrNull()
+                GateRow(
+                    label = "変更できる曜日と時刻を絞る",
+                    gate = timeWindow ?: Gate.TimeWindow(),
+                    gates = gates,
+                    currentDescription = timeWindow?.describe(),
+                    onConfigure = { editingTimeWindow = timeWindow ?: Gate.TimeWindow() },
+                    onToggle = viewModel::putGate,
+                )
+
+                val calendarWindow = gates.filterIsInstance<Gate.CalendarWindow>().firstOrNull()
+                // 凍結中は新しく掛けさせない。すでに掛けてあるものは、
+                // 外せるように行だけ残す(凍結中は開いたままなので実害は無いが、
+                // 「掛けたはずの関門が効いていない」ことは見えていたほうがよい)
+                if (DopaFeatures.CALENDAR_ENABLED || calendarWindow != null) {
+                    GateRow(
+                        label = "カレンダーの予定中だけ変更できる",
+                        gate = calendarWindow ?: Gate.CalendarWindow(),
+                        gates = gates,
+                        enabled = DopaFeatures.CALENDAR_ENABLED && calendarGranted,
+                        disabledHint = if (DopaFeatures.CALENDAR_ENABLED) {
+                            "先にカレンダーの読み取りを許可してください"
+                        } else {
+                            "カレンダー連携は凍結中。この関門はいま開いたままです"
+                        },
+                        currentDescription = calendarWindow?.describe(),
+                        onConfigure = {
+                            editingCalendarWindow = calendarWindow ?: Gate.CalendarWindow()
+                        },
+                        onToggle = viewModel::putGate,
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = { showPasswordDialog = true }) {
+                    Text(if (hasPassword) "パスワードを変更する" else "パスワードを設定する")
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        SectionTitle("自分から守る")
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                SwitchRow(
+                    "設定を触ろうとしたら引き止める",
+                    selfDefense,
+                    viewModel::setSelfDefense,
+                )
+                Text(
+                    "設定アプリでドパチルのページを開いたとき、連続日数を見せて10秒だけ引き止めます。" +
+                        "無効化そのものは必ずできます。自分で入れたアプリを自分で止められなくなるのは、" +
+                        "抑止ではなく事故なので。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 
     if (showPasswordDialog) {
         PasswordDialog(
             onSet = { viewModel.setPassword(it); showPasswordDialog = false },
             onDismiss = { showPasswordDialog = false },
-        )
-    }
-
-    if (showMessageDialog) {
-        TextDialog(
-            title = "問いかけの文",
-            initial = unlockMessage,
-            multiline = true,
-            onConfirm = { viewModel.setUnlockMessage(it); showMessageDialog = false },
-            onDismiss = { showMessageDialog = false },
         )
     }
 
@@ -600,6 +531,261 @@ fun SettingsScreen(
                 editingCalendarWindow = null
             },
             onDismiss = { editingCalendarWindow = null },
+        )
+    }
+}
+
+@Composable
+private fun ScreenSection(viewModel: SettingsViewModel) {
+    val blockHome by viewModel.blockHomeScreen.collectAsState()
+    val showOnUnlock by viewModel.showOnUnlock.collectAsState()
+    val unlockMessage by viewModel.unlockMessage.collectAsState()
+    var showMessageDialog by remember { mutableStateOf(false) }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                "ロック画面そのものには重ねられないため(OSが最上位で保護しているため)、" +
+                    "ロックを解除した直後に問いかけを出します。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            SwitchRow("ロック解除の直後に問いかける", showOnUnlock, viewModel::setShowOnUnlock)
+            SwitchRow("ホーム画面に戻ったときにも出す", blockHome, viewModel::setBlockHomeScreen)
+            Spacer(Modifier.height(8.dp))
+            Text("問いかけの文", style = MaterialTheme.typography.labelMedium)
+            Text(
+                unlockMessage,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+            OutlinedButton(onClick = { showMessageDialog = true }) { Text("変える") }
+        }
+    }
+
+    if (showMessageDialog) {
+        TextDialog(
+            title = "問いかけの文",
+            initial = unlockMessage,
+            multiline = true,
+            onConfirm = { viewModel.setUnlockMessage(it); showMessageDialog = false },
+            onDismiss = { showMessageDialog = false },
+        )
+    }
+}
+
+@Composable
+private fun StudySection(viewModel: SettingsViewModel) {
+    val prepMinutes by viewModel.studyPrepMinutes.collectAsState()
+    val refreshKey = rememberResumeKey()
+    var calendarGranted by remember(refreshKey) { mutableStateOf(viewModel.calendarGranted()) }
+
+    val calendarPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        calendarGranted = granted
+        if (granted) viewModel.refreshCalendar()
+    }
+
+    Column {
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text("助走枠", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "予定が始まる何分前から「直前」とみなすか。" +
+                        "予定の時間帯だけ塞いでも、始まる前に沈んで予定ごと潰れることは防げません。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    if (prepMinutes == 0) "使わない" else "${prepMinutes} 分前から",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Slider(
+                    value = prepMinutes.toFloat(),
+                    onValueChange = { viewModel.setStudyPrepMinutes(it.toInt()) },
+                    valueRange = 0f..120f,
+                    steps = 23,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "雛形の「予定の前に沈まない」と組み合わせて使います。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        SectionTitle("カレンダー連携")
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                if (DopaFeatures.CALENDAR_ENABLED) {
+                    CalendarBody(
+                        granted = calendarGranted,
+                        refreshKey = refreshKey,
+                        viewModel = viewModel,
+                        onRequest = { calendarPermission.launch(Manifest.permission.READ_CALENDAR) },
+                    )
+                } else {
+                    CalendarFrozenBody()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CalendarBody(
+    granted: Boolean,
+    refreshKey: Int,
+    viewModel: SettingsViewModel,
+    onRequest: () -> Unit,
+) {
+    Text(
+        "端末に同期済みのカレンダーを読みます。Google カレンダーを端末で同期していれば、" +
+            "そのまま使えます。ログインも API キーも要りません。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(12.dp))
+    CheckRow(
+        label = "カレンダーの読み取りを許可",
+        done = granted,
+        detail = "予定を条件やゲートに使えるようになります",
+        onAction = onRequest,
+    )
+    if (!granted) return
+
+    val events = remember(refreshKey, granted) { viewModel.upcomingEvents() }
+    Spacer(Modifier.height(12.dp))
+    Text("これからの予定", style = MaterialTheme.typography.labelMedium)
+    Spacer(Modifier.height(4.dp))
+    if (events.isEmpty()) {
+        Text(
+            "直近に予定はありません。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    } else {
+        events.forEach { event ->
+            Text(
+                "${formatTime(event.startMs)}  ${event.title}",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(vertical = 1.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CalendarFrozenBody() {
+    Text("凍結中", style = MaterialTheme.typography.titleSmall)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "学習予定はスキマスから直接届くようになったので、カレンダーは読んでいません。" +
+            "読み取り権限そのものを外してあります。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
+    Text(
+        "カレンダーを使っていたルールは残っていますが、凍結中は成立しません。" +
+            "「予定が入っているあいだだけ変更できる」の関門は、開いたままになります。",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun PointsSection(viewModel: SettingsViewModel) {
+    val pointPolicy by viewModel.pointPolicy.collectAsState()
+    PointPolicyCard(policy = pointPolicy, onChange = viewModel::setPointPolicy)
+}
+
+@Composable
+private fun BatterySection(viewModel: SettingsViewModel) {
+    val batterySaver by viewModel.batterySaver.collectAsState()
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            SwitchRow("電池を優先する", batterySaver, viewModel::setBatterySaver)
+            Text(
+                "判定を見に来る間隔とカレンダーの読み直しを伸ばします。" +
+                    "ブロックが最大で2分ほど遅れることがある代わりに、常駐の消費が減ります。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "オフのままでも、次のときは自動的に止まります。",
+                style = MaterialTheme.typography.labelMedium,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "・画面が消えているあいだ\n" +
+                    "・前面のアプリを狙っているルールが1つも無いとき\n" +
+                    "・条件が「この時刻までは変わらない」と答えられるあいだ",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "端末側の省電力モードに合わせて制限を強めたい場合は、" +
+                    "ルールの条件に「省電力モード」を足してください。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AboutSection(onOpenDevTools: () -> Unit) {
+    val context = LocalContext.current
+    var showDevDialog by remember { mutableStateOf(false) }
+
+    Column {
+        Text(
+            "判定はすべて端末の中で行われます。同期を切っていれば、何も外に出ません。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "同期を入れたときに出るのは、ルール・タグ・アプリ名・1日ごとの使用時間だけです。" +
+                "どの瞬間に何を見ていたかは出ません。ゲートと変更リクエストも出ません。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(16.dp))
+        // ここを長押しすると開発ツールへの入口が出る。
+        // ふだん目に入らないところに置いてあるだけで、隠しているわけではない。
+        //
+        // 文字が小さいので、当たり判定は padding で広げてある。
+        // 隠す意図はないのに「押せなくて見つからない」のはただの不便。
+        Text(
+            "ドパチル " + versionLabel(context) + "(長押しで開発ツール)",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .combinedClickable(
+                    onClick = {},
+                    onLongClick = { showDevDialog = true },
+                )
+                .padding(vertical = 12.dp, horizontal = 8.dp),
+        )
+    }
+
+    if (showDevDialog) {
+        DevCodeDialog(
+            onUnlock = { showDevDialog = false; onOpenDevTools() },
+            onDismiss = { showDevDialog = false },
         )
     }
 }
@@ -1076,6 +1262,7 @@ private fun FocusCard() {
     var settings by remember { mutableStateOf(DopaRuntime.focusSettings) }
     var showAllowPicker by remember { mutableStateOf(false) }
     var pinned by remember { mutableStateOf<Boolean?>(null) }
+    val tags by DopaRuntime.rules.tags.collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
 
     fun update(next: FocusSettings) {
@@ -1109,8 +1296,29 @@ private fun FocusCard() {
             HorizontalDivider()
             Spacer(Modifier.height(16.dp))
 
+            Text("ホーム画面に置くボタン", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "ドパチルを開いてから始めるのでは遅い、という場面のためのものです。" +
+                    "置き場所が近いことが、そのまま使う回数になります。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+
+            OutlinedButton(onClick = { pinned = FocusShortcutActivity.requestPinPicker(context) }) {
+                Text("「長さを選ぶ」を置く")
+            }
+            Text(
+                "押すと${Focus.PICK_CHOICES.first()}分から${Focus.PICK_CHOICES.last()}分まで" +
+                    "${Focus.STEP_MINUTES}分刻みで並ぶので、その場で選べます。ボタンは1つで足ります。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(16.dp))
+
             MinuteStepper(
-                label = "ホーム画面のボタンの長さ",
+                label = "1タップで始まるボタンの長さ",
                 minutes = settings.shortcutMinutes,
                 onChange = { update(settings.copy(shortcutMinutes = it)) },
             )
@@ -1118,8 +1326,14 @@ private fun FocusCard() {
             OutlinedButton(onClick = {
                 pinned = FocusShortcutActivity.requestPin(context, settings.shortcutMinutes)
             }) {
-                Text("ホーム画面に置く")
+                Text("${settings.shortcutMinutes}分のボタンを置く")
             }
+            Text(
+                "選ぶ手間すら惜しい長さが決まっているとき用。長さを変えて押せば、" +
+                    "別のボタンとして何個でも置けます。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             pinned?.let {
                 Spacer(Modifier.height(4.dp))
                 Text(
@@ -1132,6 +1346,17 @@ private fun FocusCard() {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+
+            FocusTemplatesSection(
+                settings = settings,
+                tags = tags,
+                onChange = ::update,
+                onPin = { pinned = FocusShortcutActivity.requestPinTemplate(context, it) },
+            )
 
             Spacer(Modifier.height(16.dp))
             HorizontalDivider()
@@ -1200,6 +1425,217 @@ private fun FocusCard() {
             onDismiss = { showAllowPicker = false },
         )
     }
+}
+
+/**
+ * タイマーロックの型。範囲(グループだけ / グループ以外 / 全部)と長さを決めておき、
+ * ホーム画面のショートカット1つで呼び出せるようにする。
+ */
+@Composable
+private fun FocusTemplatesSection(
+    settings: FocusSettings,
+    tags: List<String>,
+    onChange: (FocusSettings) -> Unit,
+    onPin: (FocusTemplate) -> Unit,
+) {
+    var editing by remember { mutableStateOf<FocusTemplate?>(null) }
+    var isNew by remember { mutableStateOf(false) }
+
+    Text("タイマーロックの型", style = MaterialTheme.typography.bodyLarge)
+    Text(
+        "止める範囲と長さを先に決めておくと、ホーム画面に置いた1つで呼び出せます。" +
+            "「SNSだけ」「仕事以外を止める」「全部止める」のように使い分けられます。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(12.dp))
+
+    if (settings.templates.isEmpty()) {
+        Text(
+            "まだ型がありません。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    } else {
+        settings.templates.forEach { template ->
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(template.displayLabel(), style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        template.scope.label +
+                            (if (template.isOneTap) "・${template.minutes}分" else "・長さを選ぶ") +
+                            (if (!template.isUsable) "・タグ未設定" else ""),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (template.isUsable) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                    )
+                }
+                TextButton(
+                    onClick = { onPin(template) },
+                    enabled = template.isUsable,
+                ) { Text("ホームに置く") }
+                TextButton(onClick = { editing = template; isNew = false }) { Text("直す") }
+            }
+        }
+    }
+
+    Spacer(Modifier.height(8.dp))
+    OutlinedButton(onClick = {
+        editing = FocusTemplate(id = java.util.UUID.randomUUID().toString())
+        isNew = true
+    }) { Text("型を作る") }
+
+    editing?.let { template ->
+        FocusTemplateEditorDialog(
+            template = template,
+            tags = tags,
+            onDismiss = { editing = null },
+            onDelete = if (isNew) null else {
+                {
+                    onChange(settings.copy(templates = settings.templates.filterNot { it.id == template.id }))
+                    editing = null
+                }
+            },
+            onSave = { saved ->
+                val next = if (settings.templates.any { it.id == saved.id }) {
+                    settings.templates.map { if (it.id == saved.id) saved else it }
+                } else {
+                    settings.templates + saved
+                }
+                onChange(settings.copy(templates = next))
+                editing = null
+            },
+        )
+    }
+}
+
+@Composable
+private fun FocusTemplateEditorDialog(
+    template: FocusTemplate,
+    tags: List<String>,
+    onDismiss: () -> Unit,
+    onDelete: (() -> Unit)?,
+    onSave: (FocusTemplate) -> Unit,
+) {
+    var label by remember { mutableStateOf(template.label) }
+    var scope by remember { mutableStateOf(template.scope) }
+    var tag by remember { mutableStateOf(template.tag) }
+    var pickMinutes by remember { mutableStateOf(template.minutes > 0) }
+    var minutes by remember { mutableIntStateOf(if (template.minutes > 0) template.minutes else Focus.DEFAULT_MINUTES) }
+
+    val needsTag = scope == FocusScope.GROUP || scope == FocusScope.EXCEPT_GROUP
+    val canSave = !needsTag || tag.isNotBlank()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("タイマーロックの型") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = label,
+                    onValueChange = { label = it },
+                    label = { Text("名前(空でもよい)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(12.dp))
+
+                Text("止める範囲", style = MaterialTheme.typography.labelLarge)
+                Spacer(Modifier.height(4.dp))
+                FocusScope.entries.forEach { option ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { scope = option }.padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        androidx.compose.material3.RadioButton(
+                            selected = scope == option,
+                            onClick = { scope = option },
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(option.label, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+
+                if (needsTag) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("どのグループ(タグ)", style = MaterialTheme.typography.labelLarge)
+                    if (tags.isEmpty()) {
+                        Text(
+                            "タグがありません。先にアプリにタグを付けてください。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                            // タグは数がしれているので、そのまま並べて選ばせる
+                            Column {
+                                tags.chunked(3).forEach { rowTags ->
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        rowTags.forEach { t ->
+                                            FilterChip(
+                                                selected = tag == t,
+                                                onClick = { tag = t },
+                                                label = { Text(t) },
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+                Text("長さ", style = MaterialTheme.typography.labelLarge)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    FilterChip(
+                        selected = pickMinutes,
+                        onClick = { pickMinutes = true },
+                        label = { Text("押すとき選ぶ") },
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    FilterChip(
+                        selected = !pickMinutes,
+                        onClick = { pickMinutes = false },
+                        label = { Text("決め打ち") },
+                    )
+                }
+                if (!pickMinutes) {
+                    Spacer(Modifier.height(4.dp))
+                    MinuteStepper(label = "1タップで始まる長さ", minutes = minutes, onChange = { minutes = it })
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = canSave,
+                onClick = {
+                    onSave(
+                        template.copy(
+                            label = label.trim(),
+                            scope = scope,
+                            tag = if (needsTag) tag else "",
+                            minutes = if (pickMinutes) 0 else Focus.clampMinutes(minutes),
+                        )
+                    )
+                },
+            ) { Text("保存") }
+        },
+        dismissButton = {
+            Row {
+                if (onDelete != null) {
+                    TextButton(onClick = onDelete) { Text("削除") }
+                }
+                TextButton(onClick = onDismiss) { Text("やめる") }
+            }
+        },
+    )
 }
 
 /** 5分刻みの長さ。 */

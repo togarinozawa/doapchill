@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -626,6 +627,160 @@ private fun FocusPanel(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = { confirming = false }) { Text("やめる") }
             OutlinedButton(onClick = onEnd) { Text("切り上げる") }
+        }
+    }
+}
+
+/**
+ * 画面を覆って音だけ残す「ラジオ」画面(Windows)。
+ *
+ * 完全封印と違い最小化も一時停止もしない ── 覆うだけなので、下のアプリは
+ * 音を鳴らし続ける。どうしても見たいときは、二度押しの手間を経て [onPeek]。
+ */
+@Composable
+fun RadioScreen(radio: Presentation.Radio, onPeek: () -> Unit) = DopaTheme {
+    var confirming by remember(radio.key) { mutableStateOf(false) }
+
+    Box(
+        modifier = Modifier.fillMaxSize().background(Color(0xFF0B0B12)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier.widthIn(max = 560.dp).padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                radio.label,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "🎧 音は流れています",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.height(40.dp))
+            Text(
+                radio.message,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(48.dp))
+
+            if (confirming) {
+                Text(
+                    "${radio.peekSeconds}秒だけどきます。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    TextButton(onClick = { confirming = false }) { Text("やめる") }
+                    Button(onClick = onPeek) { Text("見る") }
+                }
+            } else {
+                TextButton(onClick = { confirming = true }) {
+                    Text("どうしても見たい", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 開くとき「何をしに開いた」を書かせる入力(Windows)。
+ * 候補があれば1クリックで選べる。無ければ自由入力だけ。
+ */
+@Composable
+fun IntentionInputScreen(input: Presentation.IntentionInput, onSet: (String) -> Unit) = DopaTheme {
+    var typed by remember(input.key) { mutableStateOf("") }
+
+    Box(
+        modifier = Modifier.fillMaxSize().background(Color(0xFF0B0B12)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier.widthIn(max = 520.dp).padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                input.label,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(24.dp))
+            Text(
+                input.prompt,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(32.dp))
+
+            input.suggestions.forEach { suggestion ->
+                OutlinedButton(
+                    onClick = { onSet(suggestion) },
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                ) { Text(suggestion) }
+            }
+            if (input.suggestions.isNotEmpty()) {
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "または自分で書く",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+            OutlinedTextField(
+                value = typed,
+                onValueChange = { typed = it },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(16.dp))
+            Button(
+                onClick = { onSet(typed.trim()) },
+                enabled = typed.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("決めた") }
+        }
+    }
+}
+
+/** 書いた目的を隅に出し続ける札(Windows)。操作は下に届く。 */
+@Composable
+fun IntentionChip(intention: Presentation.Intention) = DopaTheme {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xE00B0B12)),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    intention.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                if (intention.minutes != null) {
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        "${intention.minutes}分",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
         }
     }
 }

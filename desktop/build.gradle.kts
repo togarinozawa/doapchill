@@ -9,7 +9,7 @@ plugins {
 }
 
 /** Windows 版の版番号。持ち運び版の名前と MSI の両方で使う。 */
-val desktopVersion = "1.5.0"
+val desktopVersion = "1.8.0"
 
 kotlin {
     jvmToolchain(21)
@@ -42,8 +42,69 @@ tasks.withType<Test>().configureEach {
 }
 
 /**
+ * 配る用のインストーラを `dist/` に版つきで置く。
+ * `gradlew :desktop:distMsi`
+ *
+ * build/ の中の Dopachiru-1.6.0.msi は次のビルドで黙って上書きされるので、
+ * どれを入れたのかが後から辿れない。:app:dist と対にしてある。
+ */
+tasks.register<Copy>("distMsi") {
+    group = "distribution"
+    description = "MSI を dist/ に版つきでコピーする"
+    dependsOn("packageMsi")
+    from(layout.buildDirectory.dir("compose/binaries/main/msi"))
+    include("*.msi")
+    into(rootProject.layout.projectDirectory.dir("dist"))
+    rename { "dopachiru-windows-$desktopVersion.msi" }
+}
+
+/**
+ * WiX を使わないインストーラ。
+ * `gradlew :desktop:packageSetup`
+ *
+ * jpackage の MSI は WiX 3 を要求する(`packageMsi` / `distMsi`)。入っていない
+ * 環境でも「インストールされた状態」を作れるように、app イメージに
+ * 導入スクリプトを添えて固める。入れ先が決まるので**自動起動も使える**
+ * ── 持ち運び版との違いはそこ。
+ *
+ * 中身は desktop/packaging/ にある。UTF-8 の BOM 付きで置いてあるので、
+ * Windows PowerShell 5.1 でも日本語が化けない。フィルタを通さずそのまま
+ * 入れているのはこのため(Gradle の filter は BOM を落とす)。
+ */
+tasks.register<Zip>("packageSetup") {
+    group = "distribution"
+    description = "app イメージに導入スクリプトを添えて zip に固める(WiX 不要)"
+    dependsOn("createDistributable")
+    from(layout.buildDirectory.dir("compose/binaries/main/app"))
+    from(layout.projectDirectory.dir("packaging"))
+    // 版はスクリプトに埋め込まず、添えたファイルから読ませる
+    from(versionStamp)
+    archiveFileName.set("dopachiru-windows-$desktopVersion-setup.zip")
+    destinationDirectory.set(rootProject.layout.projectDirectory.dir("dist"))
+}
+
+/** `packageSetup` が添える version.txt。「アプリと機能」に出す版になる。 */
+val versionStamp: Provider<RegularFile> = layout.buildDirectory.file("packaging/version.txt")
+
+tasks.register("writeVersionStamp") {
+    val out = versionStamp
+    val version = desktopVersion
+    outputs.file(out)
+    doLast {
+        val file = out.get().asFile
+        file.parentFile.mkdirs()
+        file.writeText(version)
+    }
+}
+
+tasks.named("packageSetup") { dependsOn("writeVersionStamp") }
+
+/**
  * インストール不要の持ち運び版。JRE ごと固めるので、展開してそのまま動く。
  * `gradlew :desktop:packagePortable`
+ *
+ * 自動起動も入れられるが、フォルダを動かすと前のパスを指したままになる。
+ * 動かした先で一度起動すれば書き直される(WindowsAutoStart.reconcile)。
  */
 tasks.register<Zip>("packagePortable") {
     group = "compose desktop"
@@ -80,7 +141,21 @@ compose.desktop {
 
             windows {
                 menu = true
+                menuGroup = "Dopachiru"
                 shortcut = true
+                /**
+                 * 管理者権限を求めない。
+                 *
+                 * 入れるのは %LOCALAPPDATA% の下だけになる。自分用のアプリに
+                 * UAC の壁を立てる理由が無いし、権限を求めるものほど
+                 * 「怪しい」と見なされて入れるのをやめてしまう。
+                 *
+                 * **1.0.x の MSI(端末全体に入る版)を入れたままだと、
+                 * 別物として並んで入る。** 先に「アプリと機能」から消すこと。
+                 */
+                perUserInstall = true
+                // 入れ先を選べるようにする。既定のままで困らないが、聞かれないのも不安
+                dirChooser = true
                 // 更新しても設定が引き継がれるように固定する
                 upgradeUuid = "6f2e1b74-2a5d-4a0e-9d3a-1c7b5e0f8a21"
             }

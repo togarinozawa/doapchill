@@ -110,6 +110,19 @@
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <!--
+          長さを選んでから止めるほうの入口。
+          こちらは画面を出すので、後ろが透けるテーマを当てている。
+          noHistory なのは同じ理由 ── 履歴に残ると、戻るボタンで蘇る。
+        -->
+        <activity
+            android:name=".focus.FocusPickerActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Dopachiru.Picker" />
+
+        <!--
           フォアグラウンドアプリの検知とブロック画面の表示を担う本体。
           このサービスの Context から TYPE_ACCESSIBILITY_OVERLAY のウィンドウを出す。
         -->

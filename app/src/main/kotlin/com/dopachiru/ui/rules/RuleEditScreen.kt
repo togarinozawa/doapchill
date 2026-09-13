@@ -52,6 +52,7 @@ import com.dopachiru.core.gate.ChangeKind
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.ConditionTree
 import com.dopachiru.core.model.Consequence
+import com.dopachiru.core.model.RuleCheck
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.model.RulePhrase
 import com.dopachiru.core.model.SiteCatalog
@@ -708,6 +709,26 @@ private fun ActionStep(
             params = state.actionParams,
             onChange = viewModel::setActionParams,
         )
+    }
+
+    // 保存はできるが書いたとおりには効かない組み合わせを知らせる。
+    // 弾かないのは、なぜ作れないのか分からないまま手が止まるのを避けるため
+    val warnings = RuleCheck.warnings(
+        condition = state.condition,
+        target = state.target,
+        actionId = state.actionId,
+        actionParams = state.actionParams,
+    )
+    if (warnings.isNotEmpty()) {
+        Spacer(Modifier.height(12.dp))
+        warnings.forEach { warning ->
+            Text(
+                warning,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            Spacer(Modifier.height(4.dp))
+        }
     }
 
     Spacer(Modifier.height(20.dp))

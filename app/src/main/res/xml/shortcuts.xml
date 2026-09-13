@@ -5,6 +5,19 @@
   ここに並べたものは、そのままホーム画面へドラッグして置ける。
 -->
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 長さを選んでから始める。決め打ちのものより先に出す -->
+    <shortcut
+        android:shortcutId="focus_pick"
+        android:enabled="true"
+        android:icon="@drawable/ic_notification"
+        android:shortcutShortLabel="@string/focus_pick"
+        android:shortcutLongLabel="@string/focus_pick_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.dopachiru"
+            android:targetClass="com.dopachiru.focus.FocusPickerActivity" />
+    </shortcut>
+
     <shortcut
         android:shortcutId="focus_15"
         android:enabled="true"

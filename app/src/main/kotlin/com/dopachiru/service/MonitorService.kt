@@ -40,6 +40,10 @@ class MonitorService : Service() {
         startForegroundCompat()
         scope.launch {
             while (isActive) {
+                // 見張り(ユーザー補助・重ね表示)が外れていないか確かめる。
+                // ユーザー補助が切られると本体のサービスは死ぬが、この常駐は生き残るので、
+                // 「切られたこと」に気づける場所はここしかない。
+                runCatching { PermissionGuard.check(this@MonitorService) }
                 // 次にどれだけ眠ってよいかは runtime 側が決める。
                 // 画面が消えているあいだは数えるものが無いので長く眠る。
                 delay(DopaRuntime.tick())

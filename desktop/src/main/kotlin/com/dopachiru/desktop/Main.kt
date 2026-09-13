@@ -26,6 +26,7 @@ import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import com.dopachiru.desktop.platform.WindowsAutoStart
 import com.dopachiru.desktop.ui.BlockScreen
 import com.dopachiru.desktop.ui.DeclareScreen
 import com.dopachiru.desktop.ui.DelayScreen
@@ -33,6 +34,9 @@ import com.dopachiru.desktop.ui.DesktopApp
 import com.dopachiru.desktop.ui.ESCAPE_HOLD_SECONDS
 import com.dopachiru.desktop.ui.LockedScreen
 import com.dopachiru.desktop.ui.SessionTimerScreen
+import com.dopachiru.desktop.ui.IntentionChip
+import com.dopachiru.desktop.ui.IntentionInputScreen
+import com.dopachiru.desktop.ui.RadioScreen
 import com.dopachiru.desktop.ui.WarnScreen
 import kotlinx.coroutines.delay
 
@@ -40,16 +44,20 @@ import kotlinx.coroutines.delay
  * Windows 版のエントリポイント。
  *
  * 常駐はトレイ。ウィンドウを閉じても監視は続く。
+ * ログインと一緒に立ち上がったとき(`--startup` 付き)は、窓を出さずトレイだけで始まる。
  * ブロック画面は、必要になったときだけ現れる別のウィンドウとして出す
  * ── Android の TYPE_ACCESSIBILITY_OVERLAY にあたるものが Windows には無いので、
  * 「最前面・枠なし・全画面」の普通のウィンドウで代用する。
  */
-fun main() = application {
+fun main(args: Array<String>) = application {
     LaunchedEffect(Unit) { DesktopRuntime.start() }
 
     val settings by DesktopRuntime.settings.collectAsState()
     val presentation by DesktopRuntime.presentation.collectAsState()
-    var windowOpen by remember { mutableStateOf(true) }
+
+    // ログインと一緒に立ち上がったときは窓を出さない。
+    // 毎朝ウィンドウが開くと、それ自体が邪魔で自動起動を切りたくなる
+    var windowOpen by remember { mutableStateOf(!args.contains(WindowsAutoStart.STARTUP_FLAG)) }
 
     Tray(
         icon = remember(settings.paused) { TrayIcon(settings.paused) },
@@ -204,6 +212,32 @@ fun main() = application {
             ),
         ) {
             WarnScreen(current.message)
+        }
+
+        // 映像を覆うだけ。全画面で最前面に立つが、下のアプリは動き続けて音を出す
+        is Presentation.Radio -> OverlayWindow {
+            RadioScreen(radio = current, onPeek = { DesktopRuntime.peekRadio(current.peekSeconds) })
+        }
+
+        is Presentation.IntentionInput -> OverlayWindow {
+            IntentionInputScreen(input = current, onSet = { DesktopRuntime.setIntention(it) })
+        }
+
+        // 書いた目的を上端に小さく出し続ける。操作は下に届く
+        is Presentation.Intention -> Window(
+            onCloseRequest = {},
+            title = "ドパチル",
+            undecorated = true,
+            transparent = true,
+            alwaysOnTop = true,
+            focusable = false,
+            resizable = false,
+            state = rememberWindowState(
+                size = DpSize(360.dp, 64.dp),
+                position = WindowPosition(Alignment.TopCenter),
+            ),
+        ) {
+            IntentionChip(current)
         }
 
         null -> Unit
