@@ -1349,7 +1349,7 @@ private fun PolicyNumber(
 // ----------------------------------------------------------------------
 
 @Composable
-private fun AppPickerDialog(
+internal fun AppPickerDialog(
     selected: Set<String>,
     onToggle: (String) -> Unit,
     onDismiss: () -> Unit,

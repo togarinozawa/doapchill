@@ -16,6 +16,15 @@ enum class LockScope(val label: String, val description: String) {
 
     /** 逃がすものを除いた端末ぜんぶ。 */
     EVERYTHING("逃がすもの以外ぜんぶ", "選んだアプリ以外、端末全体が使えなくなる"),
+
+    /**
+     * ここで選んだアプリ・タグだけ。ルールの対象とは別に指せる。
+     *
+     * 「Twitter を押し切ったら、SNS のタグごと閉める」のように、
+     * **破ったものと閉まるものを別にしたい**ときのため。上の3つはどれも
+     * 対象から自動で決まるので、この書き方だけができなかった。
+     */
+    CUSTOM("選んだものだけ", "ルールの対象とは別に、閉めるアプリ・タグを自分で選ぶ"),
 }
 
 /**
@@ -41,6 +50,13 @@ data class Consequence(
 
     /** [LockScope.EVERYTHING] のときに逃がすタグ。 */
     val lockAllowTags: Set<String> = emptySet(),
+
+    /**
+     * [LockScope.CUSTOM] のときに閉める範囲。ほかの範囲では見ない。
+     *
+     * null を既定にしてあるので、この欄より前に作ったルールは何も変わらない。
+     */
+    val lockTarget: Target? = null,
 
     /**
      * 繰り返すたびに封鎖を長くする。
@@ -81,6 +97,9 @@ data class Consequence(
                 exceptPackages = lockAllowPackages,
                 exceptTags = lockAllowTags,
             )
+            // 何も選ばれていなければ閉めない。空の範囲を「全部」に倒すと、
+            // 選び忘れただけで端末が閉まる
+            LockScope.CUSTOM -> lockTarget?.takeIf { !it.isEmpty }
         }
     }
 

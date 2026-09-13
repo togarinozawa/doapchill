@@ -20,9 +20,11 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,8 +42,10 @@ import com.dopachiru.core.model.LockScope
 import com.dopachiru.core.model.NodePath
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.model.RuleCheck
+import com.dopachiru.core.model.Target
 import com.dopachiru.core.param.Params
 import com.dopachiru.core.points.PointPolicy
+import com.dopachiru.desktop.DesktopRuntime
 
 /**
  * ルールの条件と罰を編集する。Windows 版。
@@ -452,6 +456,76 @@ fun ConsequenceEditor(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+
+        // 破ったものと閉まるものを別にしたいとき用。選ばせる先が無いまま
+        // 選択肢だけ出すと、選んでも何も起きない行き止まりになる
+        if (consequence.lockScope == LockScope.CUSTOM) {
+            val lockTarget = consequence.lockTarget ?: Target()
+            val ruleFile by DesktopRuntime.ruleFile.collectAsState()
+            val knownTags = remember(ruleFile) {
+                ruleFile.tags.values.flatten().distinct().sorted()
+            }
+            var showPicker by remember { mutableStateOf(false) }
+
+            Spacer(Modifier.height(12.dp))
+            Text("閉めるものを選ぶ", style = MaterialTheme.typography.labelLarge)
+            Text(
+                "ルールの対象とは別です。ここが空のままだと何も閉まりません。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(6.dp))
+            if (lockTarget.packages.isEmpty()) {
+                Text(
+                    "まだ選んでいません",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                lockTarget.packages.forEach { Text("・$it", style = MaterialTheme.typography.bodySmall) }
+            }
+            Spacer(Modifier.height(6.dp))
+            OutlinedButton(onClick = { showPicker = true }) { Text("アプリを選ぶ") }
+
+            if (knownTags.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Text("タグごと閉める", style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.height(4.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    knownTags.forEach { tag ->
+                        FilterChip(
+                            selected = tag in lockTarget.tags,
+                            onClick = {
+                                val next = if (tag in lockTarget.tags) {
+                                    lockTarget.tags - tag
+                                } else {
+                                    lockTarget.tags + tag
+                                }
+                                onChange(consequence.copy(lockTarget = lockTarget.copy(tags = next)))
+                            },
+                            label = { Text("#$tag") },
+                        )
+                    }
+                }
+            }
+
+            if (showPicker) {
+                AppPickerDialog(
+                    selected = lockTarget.packages,
+                    onToggle = { process ->
+                        val current = lockTarget.packages
+                        onChange(
+                            consequence.copy(
+                                lockTarget = lockTarget.copy(
+                                    packages = if (process in current) current - process else current + process
+                                )
+                            )
+                        )
+                    },
+                    onDismiss = { showPicker = false },
+                )
+            }
         }
 
         Spacer(Modifier.height(16.dp))

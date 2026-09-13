@@ -461,6 +461,18 @@ private fun TargetStep(
             )
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = { showAppPicker = true }) { Text("アプリを選ぶ") }
+
+            // タグは「こまかい指定」ではなく、ここに出す。アプリを1つずつ選ぶのと
+            // 同じくらい普通の指し方なのに、畳んだ中に隠すと在ること自体に気づけない
+            Spacer(Modifier.height(20.dp))
+            TagSection(
+                title = "タグで指定",
+                help = "タグを付けたアプリをまとめて指せます。あとでアプリを足しても、" +
+                    "タグに入れればこのルールが自動でかかります。",
+                available = state.availableTags,
+                selected = state.tags,
+                onToggle = viewModel::toggleTag,
+            )
         }
 
         TargetMode.SITES -> SitesEditor(
@@ -487,36 +499,19 @@ private fun TargetStep(
             )
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = { showExceptPicker = true }) { Text("残すアプリを選ぶ") }
+
+            Spacer(Modifier.height(20.dp))
+            TagSection(
+                title = "タグごと残す",
+                help = "このタグを付けたアプリは、全部止めるなかでも開いたままにします。",
+                available = state.availableTags,
+                selected = state.exceptTags,
+                onToggle = viewModel::toggleExceptTag,
+            )
         }
     }
 
     Disclosure("こまかい指定") {
-        if (state.availableTags.isNotEmpty()) {
-            Text(
-                if (state.mode == TargetMode.ALL) "タグごと残す" else "タグで指定",
-                style = MaterialTheme.typography.labelMedium,
-            )
-            Spacer(Modifier.height(6.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                state.availableTags.forEach { tag ->
-                    val selected =
-                        if (state.mode == TargetMode.ALL) tag in state.exceptTags else tag in state.tags
-                    FilterChip(
-                        selected = selected,
-                        onClick = {
-                            if (state.mode == TargetMode.ALL) {
-                                viewModel.toggleExceptTag(tag)
-                            } else {
-                                viewModel.toggleTag(tag)
-                            }
-                        },
-                        label = { Text("#$tag") },
-                    )
-                }
-            }
-            Spacer(Modifier.height(16.dp))
-        }
-
         Text("止めない URL", style = MaterialTheme.typography.labelMedium)
         Text(
             "ここに書いたページは、上の指定に当たっていても通ります。",
@@ -548,6 +543,50 @@ private fun TargetStep(
             onToggle = viewModel::toggleExceptPackage,
             onDismiss = { showExceptPicker = false },
         )
+    }
+}
+
+/**
+ * タグで対象を指す欄。
+ *
+ * **タグが1つも無いときも欄ごと消さない。** 前はここを
+ * `if (availableTags.isNotEmpty())` で丸ごと隠していたので、タグを作っていない人には
+ * 「タグで指定する」という手があること自体が見えず、作った人にも畳んだ中でしか
+ * 見つからなかった。無いなら「無い」と、どこで作るかまで書く。
+ */
+@Composable
+private fun TagSection(
+    title: String,
+    help: String,
+    available: List<String>,
+    selected: Set<String>,
+    onToggle: (String) -> Unit,
+) {
+    Text(title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+    Text(
+        help,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
+
+    if (available.isEmpty()) {
+        Text(
+            "タグがまだありません。下の「タグ」タブでアプリにタグを付けると、ここに出ます。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
+    }
+
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        available.forEach { tag ->
+            FilterChip(
+                selected = tag in selected,
+                onClick = { onToggle(tag) },
+                label = { Text("#$tag") },
+            )
+        }
     }
 }
 
@@ -682,7 +721,17 @@ private fun ActionStep(
     ruleId: Long,
     labelOf: (String) -> String,
 ) {
+    val isBlock = state.actionId == BlockAction.id
+    val allowOverride = state.actionParams.bool(BlockAction.KEY_ALLOW_OVERRIDE, true)
+    val breakable = RuleCheck.isBreakable(state.actionId, state.actionParams)
+
     Text("どうしますか", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "条件を満たしたその瞬間に、何を出すか。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
     Spacer(Modifier.height(12.dp))
 
     // 弱い順に並べる。強いものを先頭に出すと、そこから選んでしまう
@@ -703,9 +752,41 @@ private fun ActionStep(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+
+        // 完全封印でいちばん効き方を変えるのは「押し切れるか」なのに、前は
+        // パラメータ欄の奥のチェックボックス1つだった。ここだけ外に出す ──
+        // 「条件を満たすあいだ開けない」という、いちばん素直な設定に辿り着けない
+        if (isBlock) {
+            Spacer(Modifier.height(16.dp))
+            Text("逃げ道", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.height(6.dp))
+            EscapeCard(
+                title = "押し切れない",
+                body = "条件を満たすあいだ、開けません。通り抜ける手段はありません。",
+                selected = !allowOverride,
+                onClick = {
+                    viewModel.setActionParams(
+                        state.actionParams.with(BlockAction.KEY_ALLOW_OVERRIDE to false)
+                    )
+                },
+            )
+            Spacer(Modifier.height(8.dp))
+            EscapeCard(
+                title = "手間をかければ押し切れる",
+                body = "逃げ道を残します。押し切って使うと「破った」ことになり、下の報いが科されます。",
+                selected = allowOverride,
+                onClick = {
+                    viewModel.setActionParams(
+                        state.actionParams.with(BlockAction.KEY_ALLOW_OVERRIDE to true)
+                    )
+                },
+            )
+        }
+
         Spacer(Modifier.height(12.dp))
         ParamEditor(
-            specs = action.params,
+            // 上に出した欄をここでもう一度出さない
+            specs = action.params.filter { !(isBlock && it.key == BlockAction.KEY_ALLOW_OVERRIDE) },
             params = state.actionParams,
             onChange = viewModel::setActionParams,
         )
@@ -733,18 +814,41 @@ private fun ActionStep(
 
     Spacer(Modifier.height(20.dp))
 
-    Disclosure("破ったら / 守ったら") {
-        Text(
-            "その場の措置とは別に、あとから効く報い。既定では封鎖なし・ポイントだけ動きます。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(12.dp))
-        ConsequenceEditor(
-            consequence = state.consequence,
-            policy = state.pointPolicy,
-            onChange = viewModel::setConsequence,
-        )
+    // 破れない措置のときは、罰の欄を開かせない。設定できてしまうと
+    // 「決めたのに何も起きない」ことになる ── いちばん信用を削る壊れ方
+    if (breakable) {
+        Disclosure("破ったら / 守ったら") {
+            Text(
+                "「破った」= " + RuleCheck.breakMeans(state.actionId, state.actionParams) + "。" +
+                    "その場の措置とは別に、そのあと効く報いです。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            ConsequenceEditor(
+                consequence = state.consequence,
+                policy = state.pointPolicy,
+                availableTags = state.availableTags,
+                onChange = viewModel::setConsequence,
+            )
+        }
+    } else {
+        Spacer(Modifier.height(16.dp))
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(12.dp)) {
+                Text("破ったら", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    RuleCheck.breakMeans(state.actionId, state.actionParams),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 
     Disclosure("名前") {
@@ -772,6 +876,35 @@ private fun ActionStep(
 }
 
 // ---- 部品 --------------------------------------------------------------
+
+/** 逃げ道を残すかの二択。どちらを選んだかが一目で分かるよう、札で出す。 */
+@Composable
+private fun EscapeCard(title: String, body: String, selected: Boolean, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) {
+                MaterialTheme.colorScheme.primaryContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant
+            },
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            )
+            Text(
+                body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
 
 /**
  * 畳んである欄。

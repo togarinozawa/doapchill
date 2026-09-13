@@ -28,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.LockScope
+import com.dopachiru.core.model.Target
 import com.dopachiru.core.points.PointPolicy
 
 /**
@@ -45,9 +46,11 @@ fun ConsequenceEditor(
     consequence: Consequence,
     policy: PointPolicy,
     onChange: (Consequence) -> Unit,
+    availableTags: List<String> = emptyList(),
 ) {
     val context = LocalContext.current
     var showAllowPicker by remember { mutableStateOf(false) }
+    var showCustomPicker by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxWidth()) {
         Text("破ったら何が閉まるか", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
@@ -136,6 +139,71 @@ fun ConsequenceEditor(
             }
         }
 
+        // 破ったものと閉まるものを別にしたいとき用。
+        // 「Twitter を押し切ったら SNS ごと閉める」がこれで書ける
+        if (consequence.lockScope == LockScope.CUSTOM) {
+            val lockTarget = consequence.lockTarget ?: Target()
+            Spacer(Modifier.height(14.dp))
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(
+                        "閉めるものを選ぶ",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        "ルールの対象とは別です。ここが空のままだと何も閉まりません。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        lockTarget.packages.forEach { pkg ->
+                            AssistChip(
+                                onClick = {
+                                    onChange(
+                                        consequence.copy(
+                                            lockTarget = lockTarget.copy(
+                                                packages = lockTarget.packages - pkg
+                                            )
+                                        )
+                                    )
+                                },
+                                label = { Text(InstalledApps.labelOf(context, pkg)) },
+                                trailingIcon = { Icon(Icons.Filled.Close, contentDescription = "外す") },
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(onClick = { showCustomPicker = true }) { Text("アプリを選ぶ") }
+
+                    if (availableTags.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        Text("タグごと閉める", style = MaterialTheme.typography.labelMedium)
+                        Spacer(Modifier.height(6.dp))
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            availableTags.forEach { tag ->
+                                FilterChip(
+                                    selected = tag in lockTarget.tags,
+                                    onClick = {
+                                        val next = if (tag in lockTarget.tags) {
+                                            lockTarget.tags - tag
+                                        } else {
+                                            lockTarget.tags + tag
+                                        }
+                                        onChange(
+                                            consequence.copy(lockTarget = lockTarget.copy(tags = next))
+                                        )
+                                    },
+                                    label = { Text("#$tag") },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Spacer(Modifier.height(18.dp))
         PointRow(
             title = "破ったときのポイント",
@@ -182,6 +250,25 @@ fun ConsequenceEditor(
                 )
             },
             onDismiss = { showAllowPicker = false },
+        )
+    }
+
+    if (showCustomPicker) {
+        val lockTarget = consequence.lockTarget ?: Target()
+        AppPickerDialog(
+            title = "閉めるアプリ",
+            selected = lockTarget.packages,
+            onToggle = { pkg ->
+                val current = lockTarget.packages
+                onChange(
+                    consequence.copy(
+                        lockTarget = lockTarget.copy(
+                            packages = if (pkg in current) current - pkg else current + pkg
+                        )
+                    )
+                )
+            },
+            onDismiss = { showCustomPicker = false },
         )
     }
 }
