@@ -33,9 +33,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.dopachiru.core.action.ActionExtras
 import com.dopachiru.core.action.ActionRegistry
 import com.dopachiru.core.action.types.BlockAction
+import com.dopachiru.core.action.types.DelayAction
+import com.dopachiru.core.action.types.LockoutAction
+import com.dopachiru.core.action.types.WarnAction
 import com.dopachiru.core.condition.ConditionRegistry
+import com.dopachiru.core.model.ActionPlan
+import com.dopachiru.core.model.MainAction
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.ConditionTree
 import com.dopachiru.core.model.Consequence
@@ -100,13 +106,38 @@ fun RuleEditorDialog(
                 HorizontalDivider()
                 Spacer(Modifier.height(20.dp))
 
-                Text("どうする", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text("条件を満たしたら", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(8.dp))
-                // 弱い順に並んでいる。強いものを先頭に出すと、そこから選んでしまう
+
+                val plan = ActionPlan.from(draft.actionId, draft.actionParams)
+                fun setPlan(p: ActionPlan) {
+                    val (id, params) = p.resolve(draft.actionId, draft.actionParams)
+                    draft = draft.copy(actionId = id, actionParams = params)
+                }
+                val advanced = ActionRegistry.all().filter {
+                    it.id !in setOf(BlockAction.id, LockoutAction.id, DelayAction.id, WarnAction.id)
+                }
+
+                // 主な動作(1つ)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ActionRegistry.all().forEach { action ->
+                    FilterChip(
+                        selected = plan.main == MainAction.CLOSE,
+                        onClick = { setPlan(plan.copy(main = MainAction.CLOSE)) },
+                        label = { Text("閉じる") },
+                    )
+                    FilterChip(
+                        selected = plan.main == MainAction.DELAY,
+                        onClick = { setPlan(plan.copy(main = MainAction.DELAY)) },
+                        label = { Text("少し待たせて通す") },
+                    )
+                    FilterChip(
+                        selected = plan.main == MainAction.WARN,
+                        onClick = { setPlan(plan.copy(main = MainAction.WARN)) },
+                        label = { Text("警告だけ") },
+                    )
+                    advanced.forEach { action ->
                         FilterChip(
-                            selected = draft.actionId == action.id,
+                            selected = plan.main == MainAction.ADVANCED && draft.actionId == action.id,
                             onClick = {
                                 draft = draft.copy(
                                     actionId = action.id,
@@ -117,66 +148,99 @@ fun RuleEditorDialog(
                         )
                     }
                 }
-                val isBlock = draft.actionId == BlockAction.id
-                val allowOverride = draft.actionParams.bool(BlockAction.KEY_ALLOW_OVERRIDE, true)
 
-                ActionRegistry[draft.actionId]?.let { action ->
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        action.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-
-                    // 完全封印でいちばん効き方を変えるのは「押し切れるか」なので、
-                    // パラメータ欄の奥ではなくここに出す
-                    if (isBlock) {
-                        Spacer(Modifier.height(12.dp))
+                // 閉じるの中身
+                if (plan.main == MainAction.CLOSE) {
+                    Spacer(Modifier.height(12.dp))
+                    if (!plan.usesTimer) {
                         Text("逃げ道", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
                         Spacer(Modifier.height(4.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             FilterChip(
-                                selected = !allowOverride,
-                                onClick = {
-                                    draft = draft.copy(
-                                        actionParams = draft.actionParams
-                                            .with(BlockAction.KEY_ALLOW_OVERRIDE to false)
-                                    )
-                                },
-                                label = { Text("押し切れない") },
+                                selected = !plan.soft,
+                                onClick = { setPlan(plan.copy(soft = false)) },
+                                label = { Text("しっかり") },
                             )
                             FilterChip(
-                                selected = allowOverride,
-                                onClick = {
-                                    draft = draft.copy(
-                                        actionParams = draft.actionParams
-                                            .with(BlockAction.KEY_ALLOW_OVERRIDE to true)
-                                    )
-                                },
-                                label = { Text("手間をかければ押し切れる") },
+                                selected = plan.soft,
+                                onClick = { setPlan(plan.copy(soft = true)) },
+                                label = { Text("やんわり") },
                             )
                         }
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            if (allowOverride) {
-                                "逃げ道を残します。押し切って使うと「破った」ことになり、下の報いが科されます。"
-                            } else {
-                                "条件を満たすあいだ、開けません。通り抜ける手段はありません。"
-                            },
+                            if (plan.soft) "手間をかければ押し切れます。押し切ると「破った」ことに。"
+                            else "条件を満たすあいだ、押し切れません。条件が外れたら開きます。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        Text(
+                            "時間で締め出すあいだは押し切れません(閉め出し)。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
 
-                    Spacer(Modifier.height(10.dp))
-                    ParamEditor(
-                        // 上に出した欄をここでもう一度出さない
-                        specs = action.params.filter {
-                            !(isBlock && it.key == BlockAction.KEY_ALLOW_OVERRIDE)
-                        },
-                        params = draft.actionParams,
-                        onChange = { draft = draft.copy(actionParams = it) },
+                    Spacer(Modifier.height(12.dp))
+                    Text("重ねる", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = plan.prewarnSeconds > 0,
+                            onClick = {
+                                setPlan(plan.copy(prewarnSeconds = if (plan.prewarnSeconds > 0) 0 else ActionExtras.DEFAULT_PREWARN_SECONDS))
+                            },
+                            label = { Text("閉じる前にそっと知らせる") },
+                        )
+                        FilterChip(
+                            selected = plan.usesTimer,
+                            onClick = { setPlan(plan.copy(lockMinutes = if (plan.usesTimer) 0 else 10)) },
+                            label = { Text("閉じたあと開けない") },
+                        )
+                    }
+                    if (plan.prewarnSeconds > 0) {
+                        Spacer(Modifier.height(6.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("知らせる長さ ", style = MaterialTheme.typography.bodySmall)
+                            NumberStepper(
+                                value = plan.prewarnSeconds, min = 1, max = ActionExtras.MAX_PREWARN_SECONDS,
+                                step = 1, suffix = "秒",
+                                onChange = { setPlan(plan.copy(prewarnSeconds = it)) },
+                            )
+                        }
+                    }
+                    if (plan.usesTimer) {
+                        Spacer(Modifier.height(6.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("開けない長さ ", style = MaterialTheme.typography.bodySmall)
+                            NumberStepper(
+                                value = plan.lockMinutes, min = 1, max = 12 * 60, step = 5, suffix = "分",
+                                onChange = { setPlan(plan.copy(lockMinutes = it)) },
+                            )
+                        }
+                    }
+                }
+
+                // 文言・こまかい調整(既定のままで困らないので下に)
+                ActionRegistry[draft.actionId]?.let { action ->
+                    val hidden = setOf(
+                        BlockAction.KEY_ALLOW_OVERRIDE,
+                        ActionExtras.KEY_PREWARN_SECONDS,
+                        LockoutAction.KEY_MINUTES,
                     )
+                    val specs = if (plan.main == MainAction.ADVANCED) action.params
+                    else action.params.filter { it.key !in hidden }
+                    if (specs.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        Text("文言・こまかい調整", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+                        Spacer(Modifier.height(6.dp))
+                        ParamEditor(
+                            specs = specs,
+                            params = draft.actionParams,
+                            onChange = { draft = draft.copy(actionParams = it) },
+                        )
+                    }
                 }
 
                 // 保存はできるが書いたとおりには効かない組み合わせを知らせる
@@ -187,30 +251,21 @@ fun RuleEditorDialog(
                     actionParams = draft.actionParams,
                 ).forEach { warning ->
                     Spacer(Modifier.height(8.dp))
-                    Text(
-                        warning,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
+                    Text(warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
 
-                Spacer(Modifier.height(20.dp))
-                HorizontalDivider()
-                Spacer(Modifier.height(20.dp))
-
-                Text(
-                    "破ったら / 守ったら",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "「破った」= " + RuleCheck.breakMeans(draft.actionId, draft.actionParams),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                // 破れない措置に罰を設定できてしまうと、「決めたのに何も起きない」ことになる
+                // 破れる動作のときだけ、あとに効く報い
                 if (RuleCheck.isBreakable(draft.actionId, draft.actionParams)) {
+                    Spacer(Modifier.height(20.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(20.dp))
+                    Text("破ったときの報い", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "「破った」= " + RuleCheck.breakMeans(draft.actionId, draft.actionParams),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     Spacer(Modifier.height(10.dp))
                     ConsequenceEditor(
                         consequence = draft.consequence,

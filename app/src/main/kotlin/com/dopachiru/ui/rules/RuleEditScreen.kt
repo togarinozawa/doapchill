@@ -23,6 +23,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -46,8 +47,15 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.dopachiru.core.action.ActionExtras
 import com.dopachiru.core.action.ActionRegistry
+import com.dopachiru.core.action.ActionType
 import com.dopachiru.core.action.types.BlockAction
+import com.dopachiru.core.action.types.DelayAction
+import com.dopachiru.core.action.types.LockoutAction
+import com.dopachiru.core.action.types.WarnAction
+import com.dopachiru.core.model.ActionPlan
+import com.dopachiru.core.model.MainAction
 import com.dopachiru.core.gate.ChangeKind
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.ConditionTree
@@ -235,6 +243,17 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setActionParams(params: Params) = _state.update { it.copy(actionParams = params) }
+
+    /**
+     * 「こうする」を、人が組んだ形([ActionPlan])から保存の形に落とす。
+     *
+     * 主な動作と重ねるを1つの計画として受け取り、actionId と params に翻訳する。
+     * 完全封印か閉め出しかは、計画側の「閉じたあと開けない」の有無で決まる。
+     */
+    fun setPlan(plan: ActionPlan) = _state.update {
+        val (id, params) = plan.resolve(it.actionId, it.actionParams)
+        it.copy(actionId = id, actionParams = params)
+    }
 
     /**
      * 保存する。
@@ -721,79 +740,177 @@ private fun ActionStep(
     ruleId: Long,
     labelOf: (String) -> String,
 ) {
-    val isBlock = state.actionId == BlockAction.id
-    val allowOverride = state.actionParams.bool(BlockAction.KEY_ALLOW_OVERRIDE, true)
+    val plan = ActionPlan.from(state.actionId, state.actionParams)
     val breakable = RuleCheck.isBreakable(state.actionId, state.actionParams)
 
-    Text("どうしますか", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-    Spacer(Modifier.height(4.dp))
-    Text(
-        "条件を満たしたその瞬間に、何を出すか。",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+    Text("条件を満たしたら", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
     Spacer(Modifier.height(12.dp))
 
-    // 弱い順に並べる。強いものを先頭に出すと、そこから選んでしまう
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        ActionRegistry.all().forEach { action ->
-            FilterChip(
-                selected = state.actionId == action.id,
-                onClick = { viewModel.setAction(action.id) },
-                label = { Text(action.displayName) },
-            )
-        }
-    }
+    // --- 主な動作(1つ選ぶ) ---
+    EscapeCard(
+        title = "閉じる",
+        body = "アプリを使えなくする。いちばん基本。",
+        selected = plan.main == MainAction.CLOSE,
+        onClick = { viewModel.setPlan(plan.copy(main = MainAction.CLOSE)) },
+    )
+    Spacer(Modifier.height(8.dp))
+    EscapeCard(
+        title = "少し待たせて通す",
+        body = "止めない。数秒の間だけ置いてから必ず通す。",
+        selected = plan.main == MainAction.DELAY,
+        onClick = { viewModel.setPlan(plan.copy(main = MainAction.DELAY)) },
+    )
+    Spacer(Modifier.height(8.dp))
+    EscapeCard(
+        title = "警告だけ",
+        body = "止めない。気づかせるだけの、いちばん弱い動作。",
+        selected = plan.main == MainAction.WARN,
+        onClick = { viewModel.setPlan(plan.copy(main = MainAction.WARN)) },
+    )
 
-    ActionRegistry[state.actionId]?.let { action ->
-        Spacer(Modifier.height(8.dp))
-        Text(
-            action.description,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        // 完全封印でいちばん効き方を変えるのは「押し切れるか」なのに、前は
-        // パラメータ欄の奥のチェックボックス1つだった。ここだけ外に出す ──
-        // 「条件を満たすあいだ開けない」という、いちばん素直な設定に辿り着けない
-        if (isBlock) {
-            Spacer(Modifier.height(16.dp))
+    // --- 閉じるの中身 ---
+    if (plan.main == MainAction.CLOSE) {
+        Spacer(Modifier.height(16.dp))
+        if (!plan.usesTimer) {
             Text("逃げ道", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(6.dp))
-            EscapeCard(
-                title = "押し切れない",
-                body = "条件を満たすあいだ、開けません。通り抜ける手段はありません。",
-                selected = !allowOverride,
-                onClick = {
-                    viewModel.setActionParams(
-                        state.actionParams.with(BlockAction.KEY_ALLOW_OVERRIDE to false)
-                    )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = !plan.soft,
+                    onClick = { viewModel.setPlan(plan.copy(soft = false)) },
+                    label = { Text("しっかり") },
+                )
+                FilterChip(
+                    selected = plan.soft,
+                    onClick = { viewModel.setPlan(plan.copy(soft = true)) },
+                    label = { Text("やんわり") },
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (plan.soft) {
+                    "手間をかければ押し切れます。押し切ると「破った」ことになります。"
+                } else {
+                    "条件を満たすあいだ、押し切れません。条件が外れたら開きます。"
                 },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(8.dp))
-            EscapeCard(
-                title = "手間をかければ押し切れる",
-                body = "逃げ道を残します。押し切って使うと「破った」ことになり、下の報いが科されます。",
-                selected = allowOverride,
-                onClick = {
-                    viewModel.setActionParams(
-                        state.actionParams.with(BlockAction.KEY_ALLOW_OVERRIDE to true)
-                    )
-                },
+        } else {
+            Text(
+                "時間で締め出すあいだは押し切れません(閉め出し)。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
-        Spacer(Modifier.height(12.dp))
-        ParamEditor(
-            // 上に出した欄をここでもう一度出さない
-            specs = action.params.filter { !(isBlock && it.key == BlockAction.KEY_ALLOW_OVERRIDE) },
-            params = state.actionParams,
-            onChange = viewModel::setActionParams,
-        )
+        // --- 重ねる ---
+        Spacer(Modifier.height(16.dp))
+        Text("重ねる", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+
+        CheckRow(
+            checked = plan.prewarnSeconds > 0,
+            title = "閉じる前に、そっと知らせる",
+            onToggle = { on ->
+                viewModel.setPlan(
+                    plan.copy(prewarnSeconds = if (on) ActionExtras.DEFAULT_PREWARN_SECONDS else 0)
+                )
+            },
+        ) {
+            AmountStepper(
+                value = plan.prewarnSeconds,
+                min = 1,
+                max = ActionExtras.MAX_PREWARN_SECONDS,
+                step = 1,
+                suffix = "秒",
+                onChange = { viewModel.setPlan(plan.copy(prewarnSeconds = it)) },
+            )
+        }
+
+        CheckRow(
+            checked = plan.usesTimer,
+            title = "閉じたあと、しばらく開けない",
+            onToggle = { on -> viewModel.setPlan(plan.copy(lockMinutes = if (on) 10 else 0)) },
+        ) {
+            AmountStepper(
+                value = plan.lockMinutes,
+                min = 1,
+                max = 12 * 60,
+                step = 5,
+                suffix = "分",
+                onChange = { viewModel.setPlan(plan.copy(lockMinutes = it)) },
+            )
+        }
     }
 
-    // 保存はできるが書いたとおりには効かない組み合わせを知らせる。
-    // 弾かないのは、なぜ作れないのか分からないまま手が止まるのを避けるため
+    // --- くわしい動作 ---
+    if (plan.main == MainAction.ADVANCED) {
+        Spacer(Modifier.height(16.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            advancedActions().forEach { action ->
+                FilterChip(
+                    selected = state.actionId == action.id,
+                    onClick = { viewModel.setAction(action.id) },
+                    label = { Text(action.displayName) },
+                )
+            }
+        }
+        ActionRegistry[state.actionId]?.let { action ->
+            Spacer(Modifier.height(8.dp))
+            Text(
+                action.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            ParamEditor(specs = action.params, params = state.actionParams, onChange = viewModel::setActionParams)
+        }
+    } else {
+        // 「くわしい動作(音だけ・目的を書く…)」への入口。ふだんは畳んでおく
+        Disclosure("ほかの動作にする") {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                advancedActions().forEach { action ->
+                    FilterChip(
+                        selected = false,
+                        onClick = { viewModel.setAction(action.id) },
+                        label = { Text(action.displayName) },
+                    )
+                }
+            }
+        }
+    }
+
+    // 文言など、こまかい調整。既定のままで困らないので畳んでおく
+    ActionRegistry[state.actionId]?.let { action ->
+        val hidden = setOf(BlockAction.KEY_ALLOW_OVERRIDE, ActionExtras.KEY_PREWARN_SECONDS, LockoutAction.KEY_MINUTES)
+        val specs = action.params.filter { it.key !in hidden }
+        if (plan.main != MainAction.ADVANCED && specs.isNotEmpty()) {
+            Disclosure("文言・こまかい調整") {
+                ParamEditor(specs = specs, params = state.actionParams, onChange = viewModel::setActionParams)
+            }
+        }
+    }
+
+    // 破れる動作のときだけ、ポイントの罰を重ねられる
+    if (breakable) {
+        CheckRow(
+            checked = (state.consequence.breakPoints ?: 0) < 0,
+            title = "破ったらポイントを引く",
+            onToggle = { on ->
+                viewModel.setConsequence(
+                    state.consequence.copy(breakPoints = if (on) -state.pointPolicy.defaultBreakPoints.let { if (it != 0) it else 5 } else null)
+                )
+            },
+        ) {
+            Text(
+                RuleCheck.breakMeans(state.actionId, state.actionParams),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+
+    // 保存はできるが書いたとおりには効かない組み合わせを知らせる
     val warnings = RuleCheck.warnings(
         condition = state.condition,
         target = state.target,
@@ -803,51 +920,20 @@ private fun ActionStep(
     if (warnings.isNotEmpty()) {
         Spacer(Modifier.height(12.dp))
         warnings.forEach { warning ->
-            Text(
-                warning,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
+            Text(warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             Spacer(Modifier.height(4.dp))
         }
     }
 
-    Spacer(Modifier.height(20.dp))
-
-    // 破れない措置のときは、罰の欄を開かせない。設定できてしまうと
-    // 「決めたのに何も起きない」ことになる ── いちばん信用を削る壊れ方
+    // 罰の細かい調整(範囲を変える・段階的に強める等)は、破れる動作のときだけ奥に置く
     if (breakable) {
-        Disclosure("破ったら / 守ったら") {
-            Text(
-                "「破った」= " + RuleCheck.breakMeans(state.actionId, state.actionParams) + "。" +
-                    "その場の措置とは別に、そのあと効く報いです。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(12.dp))
+        Disclosure("破ったときの報い(くわしく)") {
             ConsequenceEditor(
                 consequence = state.consequence,
                 policy = state.pointPolicy,
                 availableTags = state.availableTags,
                 onChange = viewModel::setConsequence,
             )
-        }
-    } else {
-        Spacer(Modifier.height(16.dp))
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            shape = MaterialTheme.shapes.medium,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(Modifier.padding(12.dp)) {
-                Text("破ったら", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    RuleCheck.breakMeans(state.actionId, state.actionParams),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
         }
     }
 
@@ -876,6 +962,62 @@ private fun ActionStep(
 }
 
 // ---- 部品 --------------------------------------------------------------
+
+/** 主な動作の下に置く「くわしい動作」。閉じる・待たせる・警告 以外。 */
+private fun advancedActions(): List<ActionType> =
+    ActionRegistry.all().filter {
+        it.id !in setOf(BlockAction.id, LockoutAction.id, DelayAction.id, WarnAction.id)
+    }
+
+/**
+ * 「重ねる」1つ。チェックを入れると中身(細かい値)が出る。
+ *
+ * 主な動作の上に足す小さな振る舞いを、同じ形で並べるためのもの。
+ */
+@Composable
+private fun CheckRow(
+    checked: Boolean,
+    title: String,
+    onToggle: (Boolean) -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = checked, onCheckedChange = onToggle)
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+        }
+        if (checked) {
+            Column(Modifier.padding(start = 40.dp, bottom = 4.dp)) { content() }
+        }
+    }
+}
+
+/** −/+ で増減する数。秒でも分でも使う。 */
+@Composable
+private fun AmountStepper(
+    value: Int,
+    min: Int,
+    max: Int,
+    step: Int,
+    suffix: String,
+    onChange: (Int) -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        OutlinedButton(
+            onClick = { onChange((value - step).coerceAtLeast(min)) },
+            enabled = value > min,
+        ) { Text("−") }
+        Text(
+            "$value $suffix",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(horizontal = 12.dp),
+        )
+        OutlinedButton(
+            onClick = { onChange((value + step).coerceAtMost(max)) },
+            enabled = value < max,
+        ) { Text("＋") }
+    }
+}
 
 /** 逃げ道を残すかの二択。どちらを選んだかが一目で分かるよう、札で出す。 */
 @Composable

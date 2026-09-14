@@ -234,6 +234,10 @@ object DesktopRuntime {
      */
     private val punishedWarnIgnores = HashSet<String>()
 
+    /** そっと知らせ(閉じる前の予告)を出し終えた / 数えている最中の一続き。 */
+    private val prewarnDone = HashSet<String>()
+    private val prewarnPending = HashSet<String>()
+
     /**
      * ルールごとの押し切り回数。慣れの判定に使う。
      * Android は記録テーブルから引くが、こちらは押し切った時点で数える。
@@ -1073,6 +1077,9 @@ object DesktopRuntime {
                 // アプリを離れた = 一続きの終わり。無視の印を落として数え直す
                 punishedWarnIgnores.removeAll { it.endsWith("|$lastProcess") }
                 ignoreDeadline.clear()
+                // 予告の途中で離れたら取りやめ。次に開いたらまた予告から
+                prewarnPending.clear()
+                prewarnDone.clear()
                 lastProcess = processName
             } else {
                 ledger.tick(nowSec)
@@ -1286,18 +1293,49 @@ object DesktopRuntime {
         )
     }
 
+    /**
+     * 「閉じる」の前に、薄い予告をそっと出す。Warn の見せ方を借りている。
+     *
+     * 一続きにつき1回だけ。数えている最中に判定が来ても本番を先に出さない。
+     * 数え終わる前にアプリを離れたら取りやめる。
+     */
+    private fun withPrewarn(fg: ForegroundApp, act: Decision.Act, proceed: () -> Unit) {
+        val seconds = com.dopachiru.core.action.ActionExtras.prewarnSeconds(act.params)
+        val key = "${fg.processName}|${act.rule.id}|${ledger.currentSessionSeed()}"
+        if (seconds <= 0 || key in prewarnDone) {
+            proceed()
+            return
+        }
+        if (key in prewarnPending) return
+        prewarnPending.add(key)
+        val pkey = "${fg.processName}|prewarn|${act.rule.id}"
+        _presentation.value = Presentation.Warn(pkey, "${fg.label} を閉じます(あと${seconds}秒)")
+        scope.launch {
+            delay(seconds * 1000L)
+            prewarnPending.remove(key)
+            prewarnDone.add(key)
+            if (_foreground.value?.processName == fg.processName) {
+                proceed()
+            } else if (_presentation.value?.key == pkey) {
+                _presentation.value = null
+            }
+        }
+    }
+
     private fun present(fg: ForegroundApp, act: Decision.Act) {
         when (act.action.id) {
-            BlockAction.id -> showBlock(
-                fg = fg,
-                rule = act.rule,
-                reflection = act.params.string(BlockAction.KEY_REFLECTION),
-                minSeconds = act.params.int(BlockAction.KEY_MIN_SECONDS, 15),
-                allowOverride = act.params.bool(BlockAction.KEY_ALLOW_OVERRIDE, true),
-                params = act.params,
-            )
+            BlockAction.id -> withPrewarn(fg, act) {
+                showBlock(
+                    fg = fg,
+                    rule = act.rule,
+                    reflection = act.params.string(BlockAction.KEY_REFLECTION),
+                    minSeconds = act.params.int(BlockAction.KEY_MIN_SECONDS, 15),
+                    allowOverride = act.params.bool(BlockAction.KEY_ALLOW_OVERRIDE, true),
+                    params = act.params,
+                )
+            }
 
-            LockoutAction.id -> lockOut(fg, act)
+            LockoutAction.id -> withPrewarn(fg, act) { lockOut(fg, act) }
 
             WarnAction.id -> {
                 val repeatMs = act.params.int(WarnAction.KEY_REPEAT_MINUTES, 5) * 60_000L

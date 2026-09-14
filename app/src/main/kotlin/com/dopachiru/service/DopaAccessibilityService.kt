@@ -20,6 +20,7 @@ import com.dopachiru.block.LockoutScreen
 import com.dopachiru.block.OverlayHost
 import com.dopachiru.block.OverlayMode
 import com.dopachiru.block.SelfDefenseScreen
+import com.dopachiru.block.SoftNoticeScreen
 import com.dopachiru.block.IntentionChip
 import com.dopachiru.block.IntentionInputScreen
 import com.dopachiru.block.RadioScreen
@@ -104,6 +105,12 @@ class DopaAccessibilityService : AccessibilityService() {
 
     /** 待ち時間を通したセッション。同じ使用のあいだ出し直さないため。 */
     private val passedDelays = HashSet<String>()
+
+    /** そっと知らせ(閉じる前の予告)を出し終えた一続き。同じ使用では二度出さない。 */
+    private val prewarnDone = HashSet<String>()
+
+    /** いま予告を数えている最中の一続き。数え終わるまで本番の閉じるを出さない。 */
+    private val prewarnPending = HashSet<String>()
 
     private val systemReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -231,6 +238,9 @@ class DopaAccessibilityService : AccessibilityService() {
         }
         // アプリを離れた = 一続きの終わり。無視の印を落として数え直す
         punishedWarnIgnores.removeAll { it.endsWith("|$foregroundPackage") }
+        // 予告の途中で離れたら取りやめ。次に開いたらまた予告から
+        prewarnPending.clear()
+        prewarnDone.clear()
         foregroundPackage = pkg
         // 前の画面の目印・覗き猶予を持ち越さない。別アプリをショート扱いして塞ぐ事故を防ぐ
         DopaRuntime.currentScreenSignals = emptySet()
@@ -488,18 +498,20 @@ class DopaAccessibilityService : AccessibilityService() {
 
     private fun present(pkg: String, act: Decision.Act) {
         when (act.action.id) {
-            BlockAction.id -> showBlock(
-                pkg = pkg,
-                rule = act.rule,
-                reflection = act.params.string(BlockAction.KEY_REFLECTION),
-                minSeconds = act.params.int(BlockAction.KEY_MIN_SECONDS, 15),
-                coverSystemBars = act.params.bool(BlockAction.KEY_COVER_SYSTEM_BARS, true),
-                allowOverride = act.params.bool(BlockAction.KEY_ALLOW_OVERRIDE, true),
-                actionId = act.action.id,
-                violation = PointReason.OVERRIDE,
-            )
+            BlockAction.id -> withPrewarn(pkg, act) {
+                showBlock(
+                    pkg = pkg,
+                    rule = act.rule,
+                    reflection = act.params.string(BlockAction.KEY_REFLECTION),
+                    minSeconds = act.params.int(BlockAction.KEY_MIN_SECONDS, 15),
+                    coverSystemBars = act.params.bool(BlockAction.KEY_COVER_SYSTEM_BARS, true),
+                    allowOverride = act.params.bool(BlockAction.KEY_ALLOW_OVERRIDE, true),
+                    actionId = act.action.id,
+                    violation = PointReason.OVERRIDE,
+                )
+            }
 
-            LockoutAction.id -> lockOut(pkg, act)
+            LockoutAction.id -> withPrewarn(pkg, act) { lockOut(pkg, act) }
             RadioAction.id -> showRadio(pkg, act)
             IntentionAction.id -> showIntention(pkg, act)
             WarnAction.id -> showWarn(pkg, act)
@@ -508,6 +520,41 @@ class DopaAccessibilityService : AccessibilityService() {
             TimerAction.id -> showTimer(pkg, act)
             else -> Unit
         }
+    }
+
+    /**
+     * 「閉じる」の前に、薄い予告をそっと出す。
+     *
+     * いきなり画面を奪うと書きかけが飛ぶし、「気づいたら閉まってた」で終わって
+     * 手を止める間ができない。予告のあいだは下のアプリを操作できる(PASS_THROUGH)。
+     *
+     * 予告は**一続きにつき1回**だけ。数えている最中に判定が来ても本番を先に出さない
+     * ([prewarnPending] で止める)。数え終わる前にアプリを離れたら、取りやめる。
+     *
+     * @param proceed 予告のあとに出す本番(完全封印 / 閉め出し)。予告が要らなければ即実行。
+     */
+    private fun withPrewarn(pkg: String, act: Decision.Act, proceed: () -> Unit) {
+        val seconds = com.dopachiru.core.action.ActionExtras.prewarnSeconds(act.params)
+        val key = "$pkg|${act.rule.id}|${DopaRuntime.sessionSeed()}"
+        if (seconds <= 0 || key in prewarnDone) {
+            proceed()
+            return
+        }
+        if (key in prewarnPending) return
+
+        prewarnPending.add(key)
+        val overlayKey = "$pkg|prewarn|${act.rule.id}"
+        overlay.show(overlayKey, OverlayMode.PASS_THROUGH) { SoftNoticeScreen(appLabel(pkg), seconds) }
+        handler.postDelayed({
+            prewarnPending.remove(key)
+            prewarnDone.add(key)
+            // 数えているあいだに離れていたら、取りやめて覆いを引っ込める
+            if (foregroundPackage == pkg && DopaRuntime.screenOn) {
+                proceed()
+            } else if (overlay.currentKey == overlayKey) {
+                overlay.hide()
+            }
+        }, seconds * 1000L)
     }
 
     /**

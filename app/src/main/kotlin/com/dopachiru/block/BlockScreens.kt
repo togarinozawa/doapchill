@@ -715,6 +715,54 @@ fun WarnScreen(message: String) = DopaBlockTheme {
     }
 }
 
+/**
+ * 閉じる前の、薄い予告。
+ *
+ * わざと弱く出す ── これは止める画面ではなく「もう閉じるよ」の合図。
+ * 下のアプリは操作できる(PASS_THROUGH)ので、書きかけがあれば数秒で切り上げられる。
+ * 数字を出して、あと何秒で閉まるかを見せる。
+ */
+@Composable
+fun SoftNoticeScreen(appLabel: String, seconds: Int) = DopaBlockTheme {
+    var left by remember { mutableIntStateOf(seconds) }
+    LaunchedEffect(Unit) {
+        while (left > 0) {
+            kotlinx.coroutines.delay(1000)
+            left -= 1
+        }
+    }
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        Card(
+            modifier = Modifier
+                .safeDrawingPadding()
+                .padding(16.dp)
+                .fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            // 警告より薄い。奪う画面ではなく、そっと肩を叩く程度に
+            colors = CardDefaults.cardColors(containerColor = Color(0xCC1E1E2E)),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = "${appLabel}を閉じます",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = if (left > 0) "あと${left}秒" else "…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+    }
+}
+
 /** 開く前に持ち時間を宣言させる画面。 */
 @Composable
 fun DeclareScreen(

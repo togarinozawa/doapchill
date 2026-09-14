@@ -70,8 +70,21 @@ object BlockAction : ActionType {
             default = Effort.HOLD,
             help = "1タップで通れる警告は92%が無視される。手を動かさせるほど効く",
         ),
+        ParamSpec.IntParam(
+            com.dopachiru.core.action.ActionExtras.KEY_PREWARN_SECONDS,
+            "閉じる前にそっと知らせる",
+            default = 0,
+            min = 0,
+            max = com.dopachiru.core.action.ActionExtras.MAX_PREWARN_SECONDS,
+            unit = "秒",
+            help = "0 なら出さない。数秒だけ薄い予告を出してから閉じる",
+        ),
     )
 
-    override fun summarize(p: Params): String =
-        "完全封印(${p.int(KEY_MIN_SECONDS, 15)}秒)"
+    override fun summarize(p: Params): String {
+        val firm = if (p.bool(KEY_ALLOW_OVERRIDE, true)) "やんわり" else "しっかり"
+        val prewarn = com.dopachiru.core.action.ActionExtras.prewarnSeconds(p)
+        val head = if (prewarn > 0) "そっと知らせてから" else ""
+        return head + "閉じる($firm)"
+    }
 }

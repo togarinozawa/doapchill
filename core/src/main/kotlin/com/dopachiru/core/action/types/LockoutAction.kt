@@ -82,6 +82,15 @@ object LockoutAction : ActionType {
             default = "",
             help = "空ならルール名が出る",
         ),
+        ParamSpec.IntParam(
+            com.dopachiru.core.action.ActionExtras.KEY_PREWARN_SECONDS,
+            "閉じる前にそっと知らせる",
+            default = 0,
+            min = 0,
+            max = com.dopachiru.core.action.ActionExtras.MAX_PREWARN_SECONDS,
+            unit = "秒",
+            help = "0 なら出さない。数秒だけ薄い予告を出してから閉め出す",
+        ),
     )
 
     /** [KEY_SCOPE] を封鎖の範囲に読み替える。知らない値は対象ぜんぶに倒す。 */
@@ -102,8 +111,9 @@ object LockoutAction : ActionType {
 
     override fun summarize(p: Params): String {
         val minutes = p.int(KEY_MINUTES, 10)
-        val scope = if (scopeOf(p) == LockScope.APP) "そのアプリ" else "対象ぜんぶ"
         val escalates = if (p.bool(KEY_ESCALATES, false)) "(繰り返すほど長く)" else ""
-        return "${scope}を${minutes}分閉め出す$escalates"
+        val prewarn = com.dopachiru.core.action.ActionExtras.prewarnSeconds(p)
+        val head = if (prewarn > 0) "そっと知らせてから" else ""
+        return "${head}閉じて、${minutes}分は開けない$escalates"
     }
 }
