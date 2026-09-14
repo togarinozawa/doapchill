@@ -9,7 +9,7 @@ plugins {
 }
 
 /** Windows 版の版番号。持ち運び版の名前と MSI の両方で使う。 */
-val desktopVersion = "1.9.0"
+val desktopVersion = "1.10.0"
 
 kotlin {
     jvmToolchain(21)
@@ -55,7 +55,10 @@ tasks.register<Copy>("distMsi") {
     from(layout.buildDirectory.dir("compose/binaries/main/msi"))
     include("*.msi")
     into(rootProject.layout.projectDirectory.dir("dist"))
-    rename { "dopachiru-windows-$desktopVersion.msi" }
+    // 版は設定時に読んでおく。rename の中から script の値を掴むと、
+    // 構成キャッシュが「script object reference は直列化できない」で落ちる
+    val name = "dopachiru-windows-$desktopVersion.msi"
+    rename { name }
 }
 
 /**

@@ -1,6 +1,11 @@
 package com.dopachiru.desktop
 
 import com.dopachiru.core.DopaCore
+import com.dopachiru.core.gate.ChangeKind
+import com.dopachiru.core.gate.ChangeRequest
+import com.dopachiru.core.gate.ChangeStatus
+import com.dopachiru.core.gate.Gate
+import com.dopachiru.core.gate.GatePolicy
 import com.dopachiru.core.action.Rotation
 import com.dopachiru.core.action.types.BlockAction
 import com.dopachiru.core.action.types.DeclareAction
@@ -439,6 +444,157 @@ object DesktopRuntime {
     fun removeRule(id: Long) = updateRules { file ->
         val uid = file.rules.firstOrNull { it.id == id }?.uid.orEmpty()
         file.copy(rules = file.rules.filter { r -> r.id != id }).stamped(uid, deleted = true)
+    }
+
+    // ---- 関門つきのルール変更 ---------------------------------------------
+
+    /**
+     * ルールの作成・変更・削除を申し込む。
+     *
+     * 関門が1つも無ければその場で反映する。1つでもあれば申請として積み、
+     * 全部通るまで効かない ── **開きたくなった瞬間に消せる縛りは縛りではない**。
+     *
+     * @return 申請として積んだら true。即時反映したら false。
+     */
+    fun requestChange(kind: ChangeKind, rule: Rule): Boolean {
+        val gates = _settings.value.gates
+        if (gates.isEmpty()) {
+            applyChangeNow(kind, rule)
+            return false
+        }
+        updateRules { file ->
+            file.copy(
+                changeRequests = file.changeRequests + ChangeRequest(
+                    id = file.nextChangeId,
+                    kind = kind,
+                    targetRuleId = rule.id.takeIf { it != 0L },
+                    payloadJson = if (kind == ChangeKind.DELETE) {
+                        ""
+                    } else {
+                        DopaCore.json.encodeToString(Rule.serializer(), rule)
+                    },
+                    previousJson = file.rules.firstOrNull { it.id == rule.id }
+                        ?.let { DopaCore.json.encodeToString(Rule.serializer(), it) }
+                        .orEmpty(),
+                    createdAtEpochSeconds = nowSec(),
+                ),
+                nextChangeId = file.nextChangeId + 1,
+            )
+        }
+        return true
+    }
+
+    /** 申請を実際にルールへ落とす。関門を通ったあと、または関門が無いときだけ。 */
+    private fun applyChangeNow(kind: ChangeKind, rule: Rule) {
+        when (kind) {
+            ChangeKind.CREATE -> addRule(rule)
+            ChangeKind.DELETE -> removeRule(rule.id)
+            ChangeKind.UPDATE, ChangeKind.ENABLE, ChangeKind.DISABLE -> updateRules { file ->
+                file.copy(rules = file.rules.map { if (it.id == rule.id) rule else it })
+                    .stamped(rule.uid)
+            }
+        }
+    }
+
+    /** その申請にまだ残っている関門。空なら通せる。 */
+    fun remainingGates(request: ChangeRequest): List<Gate> = GatePolicy.remaining(
+        gates = _settings.value.gates,
+        clearedKeys = request.clearedGateKeys,
+        createdAt = LocalDateTime.ofEpochSecond(request.createdAtEpochSeconds, 0, zoneOffset()),
+        now = LocalDateTime.now(),
+    )
+
+    /** 手を動かして通す種類の関門(理由を書く、など)を通過済みにする。 */
+    fun clearGate(requestId: Long, key: String, reason: String = "") = updateRules { file ->
+        file.copy(
+            changeRequests = file.changeRequests.map { request ->
+                if (request.id != requestId) {
+                    request
+                } else {
+                    request.copy(
+                        clearedGateKeys = request.clearedGateKeys + key,
+                        reason = reason.ifBlank { request.reason },
+                    )
+                }
+            }
+        )
+    }
+
+    /** 申請を取り下げる。 */
+    fun cancelChange(requestId: Long) = updateRules { file ->
+        file.copy(changeRequests = file.changeRequests.filterNot { it.id == requestId })
+    }
+
+    /**
+     * 通った申請をルールに落とす。定期処理から呼ぶ。
+     *
+     * 待つだけで通る関門(クールダウン・時間帯)があるので、押した瞬間だけでなく
+     * 時間の経過でも見に来ないと、通っているのに適用されないまま止まる。
+     */
+    fun applyReadyChanges() {
+        val pending = _ruleFile.value.changeRequests.filter { it.status == ChangeStatus.PENDING }
+        if (pending.isEmpty()) return
+        val ready = pending.filter { remainingGates(it).isEmpty() }
+        if (ready.isEmpty()) return
+
+        ready.forEach { request ->
+            val rule = if (request.kind == ChangeKind.DELETE) {
+                _ruleFile.value.rules.firstOrNull { it.id == request.targetRuleId }
+            } else {
+                runCatching {
+                    DopaCore.json.decodeFromString(Rule.serializer(), request.payloadJson)
+                }.getOrNull()
+            }
+            if (rule != null) applyChangeNow(request.kind, rule)
+        }
+        updateRules { file ->
+            file.copy(changeRequests = file.changeRequests.filterNot { done -> ready.any { it.id == done.id } })
+        }
+    }
+
+    private fun zoneOffset(): java.time.ZoneOffset =
+        java.time.ZoneId.systemDefault().rules.getOffset(java.time.Instant.now())
+
+    // ---- タグ ------------------------------------------------------------
+
+    /** いま在るタグの名前。どの端末で付けたものでも、降りてきていれば出ます。 */
+    fun knownTags(): List<String> =
+        _ruleFile.value.tags.values.flatten().distinct().sorted()
+
+    /**
+     * そのプロセスに付いているタグを丸ごと入れ替える。
+     *
+     * 時刻を押すのを忘れると、変えたのに古いままの時刻で送られて**相手に負けます**。
+     * タグは行に時刻を持たないので、[RuleFile.syncState] のほうに押します。
+     */
+    fun setTagsFor(process: String, tags: Set<String>) = updateRules { file ->
+        val next = if (tags.isEmpty()) file.tags - process else file.tags + (process to tags)
+        file.copy(tags = next)
+            .withStamp(
+                SyncKinds.TAGS,
+                "${DesktopSync.PLATFORM}:$process",
+                SyncStamp(nowSec(), deleted = tags.isEmpty()),
+            )
+    }
+
+    /** そのプロセスのタグを1つ付け外しする。 */
+    fun toggleTag(process: String, tag: String) {
+        val current = _ruleFile.value.tags[process] ?: emptySet()
+        setTagsFor(process, if (tag in current) current - tag else current + tag)
+    }
+
+    /**
+     * タグの名前を、付いている全プロセスから消す。
+     *
+     * ルールがそのタグを指していても消します ── 指し先が無いタグを残すより、
+     * 「何にも当たらないルール」として編集画面で気づけるほうがよい。
+     */
+    fun deleteTag(tag: String) {
+        _ruleFile.value.tags
+            .filterValues { tag in it }
+            .keys
+            .toList()
+            .forEach { process -> setTagsFor(process, (_ruleFile.value.tags[process] ?: emptySet()) - tag) }
     }
 
     // ---- 端末間の同期 --------------------------------------------------
@@ -985,6 +1141,10 @@ object DesktopRuntime {
             _reservations.value = liveReservations
             Stores.reservations.save(liveReservations)
         }
+
+        // 待つだけで通る関門(クールダウン・時間帯)があるので、押した瞬間だけでなく
+        // 時間の経過でも見に来る。でないと通っているのに適用されないまま止まる
+        applyReadyChanges()
 
         val file = _ruleFile.value
 

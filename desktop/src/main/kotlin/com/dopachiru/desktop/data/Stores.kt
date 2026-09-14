@@ -1,5 +1,7 @@
 package com.dopachiru.desktop.data
 
+import com.dopachiru.core.gate.ChangeRequest
+import com.dopachiru.core.gate.Gate
 import com.dopachiru.core.model.FocusSettings
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.sync.SyncSettings
@@ -37,6 +39,15 @@ data class DesktopSettings(
     /** 解禁券で制限が止まっている期限(秒)。過ぎれば勝手に戻る。 */
     val passUntilSec: Long = 0L,
 
+    /**
+     * ルール変更を通しにくくするための関門。**同期しません**(端末ごと)。
+     *
+     * 空なら変更は即時反映。1つでもあると、ルールの作成・変更・削除は
+     * いったん申請になり、全部通るまで効きません ── これが無いと、
+     * 開きたくなった瞬間にルールを消せてしまい、縛りが縛りになりません。
+     */
+    val gates: List<Gate> = emptyList(),
+
     /** ブラウザ拡張からの URL 受け口を開けるか。 */
     val bridgeEnabled: Boolean = true,
 
@@ -65,6 +76,16 @@ data class RuleFile(
     val nextId: Long = 1L,
     /** プロセス名 → タグ。 */
     val tags: Map<String, Set<String>> = emptyMap(),
+
+    /**
+     * 関門待ちのルール変更。**同期しません**(端末ごと)。
+     *
+     * 承認待ちが別の端末に流れると、片方で出した申請をもう片方で承認できてしまい、
+     * 関門が意味を失います。送るものは [DesktopSync] が明示的に選んでいるので、
+     * ここに置いても勝手には出ていきません。
+     */
+    val changeRequests: List<ChangeRequest> = emptyList(),
+    val nextChangeId: Long = 1L,
 
     /**
      * 同期の覚え書き。Android の `sync_state` 表にあたるもの。

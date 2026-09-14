@@ -27,6 +27,8 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Button
+import com.dopachiru.core.gate.Gate
+import com.dopachiru.core.gate.ChangeKind
 import com.dopachiru.core.model.Focus
 import com.dopachiru.core.model.FocusScope
 import com.dopachiru.core.model.FocusTemplate
@@ -87,7 +89,7 @@ fun DesktopApp() = DopaTheme {
         Scaffold(
             topBar = {
                 TabRow(selectedTabIndex = tab) {
-                    listOf("ルール", "今日", "設定").forEachIndexed { index, title ->
+                    listOf("ルール", "タグ", "変更", "今日", "設定").forEachIndexed { index, title ->
                         Tab(
                             selected = tab == index,
                             onClick = { tab = index },
@@ -100,7 +102,9 @@ fun DesktopApp() = DopaTheme {
             Box(Modifier.padding(padding)) {
                 when (tab) {
                     0 -> RulesTab()
-                    1 -> TodayTab()
+                    1 -> TagScreen()
+                    2 -> ChangeScreen()
+                    3 -> TodayTab()
                     else -> SettingsTab()
                 }
             }
@@ -254,12 +258,15 @@ private fun RuleCard(rule: Rule) {
         }
     }
 
+    // 関門があるときは、変えるのも消すのもいったん申請になる
+    var queued by remember { mutableStateOf(false) }
+
     if (editing) {
         RuleEditorDialog(
             rule = rule,
             policy = settings.pointPolicy,
             onSave = {
-                DesktopRuntime.updateRule(it)
+                queued = DesktopRuntime.requestChange(ChangeKind.UPDATE, it)
                 editing = false
             },
             onDismiss = { editing = false },
@@ -270,15 +277,27 @@ private fun RuleCard(rule: Rule) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
             title = { Text("「${rule.name}」を削除しますか?") },
+            text = if (settings.gates.isEmpty()) null else {
+                { Text("関門を設定しているので、すぐには消えません。「変更」タブで通してください。") }
+            },
             confirmButton = {
                 TextButton(onClick = {
-                    DesktopRuntime.removeRule(rule.id)
+                    queued = DesktopRuntime.requestChange(ChangeKind.DELETE, rule)
                     confirmDelete = false
                 }) { Text("削除する") }
             },
             dismissButton = {
                 TextButton(onClick = { confirmDelete = false }) { Text("やめる") }
             },
+        )
+    }
+
+    if (queued) {
+        AlertDialog(
+            onDismissRequest = { queued = false },
+            title = { Text("変更を申請しました") },
+            text = { Text("この変更はすぐには反映されません。「変更」タブで関門を通すと適用されます。") },
+            confirmButton = { TextButton(onClick = { queued = false }) { Text("わかった") } },
         )
     }
 }
@@ -1047,9 +1066,154 @@ private fun LaunchAtLoginSection() {
  * Android 版は1枚ずつ潜る形だが、こちらは窓が横に広いので左右に割る ──
  * 潜らせると、いま何を見ているのかが分かりにくくなる。
  */
+/**
+ * ルールを変えにくくする関門。
+ *
+ * ここに1つでも置くと、ルールの**変更と削除**が申請になり、全部通るまで効かなくなる。
+ * 新しく作るぶんは素通り ── 縛りを増やすほうを渋らせる理由が無いし、渋らせると
+ * 「まず緩めてから作り直す」を覚えてしまう。
+ *
+ * Windows で出すのは、Windows だけで通せる3つに絞ってある。パスワードとミニゲームは
+ * 通す手立てがこちらに無いので置かない ── 通せない関門は、出口の無い檻になる。
+ */
+@Composable
+private fun GatesSection() {
+    val settings by DesktopRuntime.settings.collectAsState()
+    val gates = settings.gates
+
+    fun replace(next: List<Gate>) = DesktopRuntime.updateSettings { it.copy(gates = next) }
+    fun without(key: String) = gates.filterNot { it.key == key }
+
+    val cooldown = gates.filterIsInstance<Gate.Cooldown>().firstOrNull()
+    val reason = gates.filterIsInstance<Gate.WriteReason>().firstOrNull()
+    val window = gates.filterIsInstance<Gate.TimeWindow>().firstOrNull()
+
+    Text("関門", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "ルールの変更と削除を通しにくくします。1つでも置くと、変えるにも消すにも" +
+            "「変更」タブで関門を通すことになります。新しく作るぶんは素通りです。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "これが無いと、開きたくなった瞬間にルールを消せます。2秒で外せる縛りは縛りになりません。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.primary,
+    )
+
+    Spacer(Modifier.height(16.dp))
+    HorizontalDivider()
+    Spacer(Modifier.height(16.dp))
+
+    // ---- 待つ ----
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("起票から待つ", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "いちばん効きます。衝動はたいてい、この時間を越えられません。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = cooldown != null,
+            onCheckedChange = { on ->
+                replace(if (on) without("cooldown") + Gate.Cooldown() else without("cooldown"))
+            },
+        )
+    }
+    if (cooldown != null) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(
+                onClick = {
+                    replace(without("cooldown") + Gate.Cooldown((cooldown.minutes - 30).coerceAtLeast(5)))
+                },
+                enabled = cooldown.minutes > 5,
+            ) { Text("−30分") }
+            Text(cooldown.describe(), style = MaterialTheme.typography.bodyMedium)
+            TextButton(
+                onClick = { replace(without("cooldown") + Gate.Cooldown(cooldown.minutes + 30)) },
+            ) { Text("+30分") }
+        }
+    }
+
+    Spacer(Modifier.height(16.dp))
+
+    // ---- 理由を書く ----
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("理由を書かせる", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "書いた文は履歴に残ります。あとで読み返すと、だいたい大した理由ではありません。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = reason != null,
+            onCheckedChange = { on ->
+                replace(if (on) without("writeReason") + Gate.WriteReason() else without("writeReason"))
+            },
+        )
+    }
+    if (reason != null) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(
+                onClick = {
+                    replace(without("writeReason") + Gate.WriteReason((reason.minLength - 10).coerceAtLeast(10)))
+                },
+                enabled = reason.minLength > 10,
+            ) { Text("−10字") }
+            Text("${reason.minLength} 文字以上", style = MaterialTheme.typography.bodyMedium)
+            TextButton(
+                onClick = { replace(without("writeReason") + Gate.WriteReason(reason.minLength + 10)) },
+            ) { Text("+10字") }
+        }
+    }
+
+    Spacer(Modifier.height(16.dp))
+
+    // ---- 時間帯 ----
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("決まった時間帯だけ変えられる", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "既定は 8:00〜21:00。夜中に緩めるのを塞ぐためのものです。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = window != null,
+            onCheckedChange = { on ->
+                replace(if (on) without("timeWindow") + Gate.TimeWindow() else without("timeWindow"))
+            },
+        )
+    }
+    if (window != null) {
+        Text(
+            window.describe(),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+
+    if (gates.isEmpty()) {
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "いまは関門がありません。ルールの変更も削除も、その場で効きます。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+}
+
 private enum class DesktopSettingsPage(val title: String, val summary: String) {
     Behaviour("動かしかた", "ブロックの強さと一時停止"),
     Startup("起動", "Windows と一緒に立ち上げる"),
+    Gates("関門", "ルールを変えにくくする"),
     Focus("集中モード", "その場で手を止める"),
     Sync("端末間の同期", "スマホと同じルールを使う"),
     Reservation("予約", "使う時間を先に決めておく"),
@@ -1101,6 +1265,7 @@ private fun SettingsTab() {
             when (page) {
                 DesktopSettingsPage.Behaviour -> BehaviourSection()
                 DesktopSettingsPage.Startup -> LaunchAtLoginSection()
+                DesktopSettingsPage.Gates -> GatesSection()
                 DesktopSettingsPage.Focus -> FocusSection()
                 DesktopSettingsPage.Sync -> SyncSection()
                 DesktopSettingsPage.Reservation -> ReservationSection()

@@ -34,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.dopachiru.core.action.ActionRegistry
+import com.dopachiru.core.action.types.BlockAction
 import com.dopachiru.core.condition.ConditionRegistry
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.ConditionTree
@@ -48,11 +49,10 @@ import com.dopachiru.core.points.PointPolicy
 import com.dopachiru.desktop.DesktopRuntime
 
 /**
- * ルールの条件と罰を編集する。Windows 版。
+ * ルールを編集する。Windows 版。
  *
- * 対象アプリとアクションは雛形から入ったものをそのまま使う。ここで触れるのは
- * 「いつ効くか(条件)」と「破ったらどうなるか(罰)」の2つ ──
- * ルールの意味を決めているのはこの2つで、残りは雛形で十分に足りるため。
+ * 「何を(対象)・いつ(条件)・どうする(措置)・破ったら(報い)」の4つを全部ここで触る。
+ * 対象を雛形任せにしていたころは、雛形に載っていない exe を狙いようが無かった。
  */
 @Composable
 fun RuleEditorDialog(
@@ -72,7 +72,18 @@ fun RuleEditorDialog(
                     .heightIn(max = 520.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                Text("条件", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text("何を", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+                TargetEditor(
+                    target = draft.target,
+                    onChange = { draft = draft.copy(target = it) },
+                )
+
+                Spacer(Modifier.height(20.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(20.dp))
+
+                Text("いつ", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(4.dp))
                 Text(
                     ConditionTree.describe(draft.condition),
@@ -106,6 +117,9 @@ fun RuleEditorDialog(
                         )
                     }
                 }
+                val isBlock = draft.actionId == BlockAction.id
+                val allowOverride = draft.actionParams.bool(BlockAction.KEY_ALLOW_OVERRIDE, true)
+
                 ActionRegistry[draft.actionId]?.let { action ->
                     Spacer(Modifier.height(8.dp))
                     Text(
@@ -113,9 +127,53 @@ fun RuleEditorDialog(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+
+                    // 完全封印でいちばん効き方を変えるのは「押し切れるか」なので、
+                    // パラメータ欄の奥ではなくここに出す
+                    if (isBlock) {
+                        Spacer(Modifier.height(12.dp))
+                        Text("逃げ道", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+                        Spacer(Modifier.height(4.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = !allowOverride,
+                                onClick = {
+                                    draft = draft.copy(
+                                        actionParams = draft.actionParams
+                                            .with(BlockAction.KEY_ALLOW_OVERRIDE to false)
+                                    )
+                                },
+                                label = { Text("押し切れない") },
+                            )
+                            FilterChip(
+                                selected = allowOverride,
+                                onClick = {
+                                    draft = draft.copy(
+                                        actionParams = draft.actionParams
+                                            .with(BlockAction.KEY_ALLOW_OVERRIDE to true)
+                                    )
+                                },
+                                label = { Text("手間をかければ押し切れる") },
+                            )
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            if (allowOverride) {
+                                "逃げ道を残します。押し切って使うと「破った」ことになり、下の報いが科されます。"
+                            } else {
+                                "条件を満たすあいだ、開けません。通り抜ける手段はありません。"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
                     Spacer(Modifier.height(10.dp))
                     ParamEditor(
-                        specs = action.params,
+                        // 上に出した欄をここでもう一度出さない
+                        specs = action.params.filter {
+                            !(isBlock && it.key == BlockAction.KEY_ALLOW_OVERRIDE)
+                        },
                         params = draft.actionParams,
                         onChange = { draft = draft.copy(actionParams = it) },
                     )
@@ -147,16 +205,19 @@ fun RuleEditorDialog(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "その場の措置とは別に、あとから効く報い。",
+                    "「破った」= " + RuleCheck.breakMeans(draft.actionId, draft.actionParams),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.height(10.dp))
-                ConsequenceEditor(
-                    consequence = draft.consequence,
-                    policy = policy,
-                    onChange = { draft = draft.copy(consequence = it) },
-                )
+                // 破れない措置に罰を設定できてしまうと、「決めたのに何も起きない」ことになる
+                if (RuleCheck.isBreakable(draft.actionId, draft.actionParams)) {
+                    Spacer(Modifier.height(10.dp))
+                    ConsequenceEditor(
+                        consequence = draft.consequence,
+                        policy = policy,
+                        onChange = { draft = draft.copy(consequence = it) },
+                    )
+                }
             }
         },
         confirmButton = { TextButton(onClick = { onSave(draft) }) { Text("保存する") } },
