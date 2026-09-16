@@ -73,6 +73,19 @@ data class EvalContext(
     val minutesSinceBreakOf: (ruleId: Long, breakMinutes: Int) -> Int = { _, _ -> 0 },
 
     /**
+     * そのルールの対象について、いま張られている「持ち時間の窓」。
+     *
+     * 窓は最初に触った時刻に張られ、閉じても消えない。[minutesSinceBreakOf] が
+     * 「離れたら数え直す」なのに対し、こちらは**壁時計に釘を打つ** ── ギリギリで
+     * 閉じて数え直させる手を塞ぐためにある。詳しくは [UsageWindows]。
+     *
+     * 渡されなければ窓なし。数えられない端末では条件が成立しないだけで済む。
+     *
+     * @param windowMinutes 窓の幅(分)。
+     */
+    val windowUsageOf: (ruleId: Long, windowMinutes: Int) -> WindowUsage = { _, _ -> WindowUsage.NONE },
+
+    /**
      * そのルールの対象アプリを、前回いつまで使っていたか ── いまから何分前に
      * 最後の使用が終わったか。まだ一度も使っていなければ null。
      *

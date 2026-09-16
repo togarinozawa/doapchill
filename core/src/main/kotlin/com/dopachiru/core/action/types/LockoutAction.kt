@@ -114,6 +114,6 @@ object LockoutAction : ActionType {
         val escalates = if (p.bool(KEY_ESCALATES, false)) "(繰り返すほど長く)" else ""
         val prewarn = com.dopachiru.core.action.ActionExtras.prewarnSeconds(p)
         val head = if (prewarn > 0) "そっと知らせてから" else ""
-        return "${head}閉じて、${minutes}分は開けない$escalates"
+        return "${head}閉じて、このあと${minutes}分は使えなくする$escalates"
     }
 }

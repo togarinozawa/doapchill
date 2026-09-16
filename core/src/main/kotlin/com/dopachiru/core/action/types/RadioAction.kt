@@ -20,11 +20,20 @@ import com.dopachiru.core.param.Params
  * どうしても映像を見たいときのために「見る」口は残すが、手間を課す
  * ([KEY_PEEK_EFFORT])。一度覗いたら [KEY_PEEK_SECONDS] 秒だけ開けて、また覆う。
  * 塞ぎ切らないのは、レシピの手元や地図など**映像に用がある瞬間**もあるため。
+ *
+ * ## ブラウザでは覆わず、ページの中で消す
+ *
+ * 全画面で覆うやり方はブラウザに向かない。作業の資料として動画を鳴らしたいのに、
+ * 検索欄も他のタブも一緒に覆われてしまうからだ。拡張がつながっているときは、
+ * **動画の絵だけをページの中で消す** ── 音はそのまま、サムネイルも見える。
+ * [KEY_HIDE_SUGGESTIONS] と [KEY_SEARCH_ONLY] はそのときだけ効く。
  */
 object RadioAction : ActionType {
     const val KEY_MESSAGE = "message"
     const val KEY_PEEK_EFFORT = "peekEffort"
     const val KEY_PEEK_SECONDS = "peekSeconds"
+    const val KEY_HIDE_SUGGESTIONS = "hideSuggestions"
+    const val KEY_SEARCH_ONLY = "searchOnly"
 
     override val id = "radio"
     override val displayName = "音だけにする(画面を覆う)"
@@ -61,7 +70,25 @@ object RadioAction : ActionType {
             unit = "秒",
             help = "この秒数が過ぎると、また覆います",
         ),
+        ParamSpec.BoolParam(
+            KEY_HIDE_SUGGESTIONS,
+            "おすすめも消す(ブラウザのみ)",
+            default = true,
+            help = "ホームの一覧・横の関連動画・終わりぎわのカードを消す。検索の結果は残る",
+        ),
+        ParamSpec.BoolParam(
+            KEY_SEARCH_ONLY,
+            "検索からしか選べなくする(ブラウザのみ)",
+            default = false,
+            help = "ホームとショートを検索へ寄せる。見る動画を自分で決めてから開くことになる",
+        ),
     )
 
-    override fun summarize(p: Params): String = "音だけにする"
+    override fun summarize(p: Params): String {
+        val extras = buildList {
+            if (p.bool(KEY_HIDE_SUGGESTIONS, true)) add("おすすめ無し")
+            if (p.bool(KEY_SEARCH_ONLY, false)) add("検索のみ")
+        }
+        return if (extras.isEmpty()) "音だけにする" else "音だけにする(${extras.joinToString("・")})"
+    }
 }

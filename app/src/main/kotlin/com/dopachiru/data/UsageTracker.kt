@@ -2,6 +2,8 @@ package com.dopachiru.data
 
 import com.dopachiru.core.engine.UsageSnapshot
 import com.dopachiru.core.engine.UsageSpans
+import com.dopachiru.core.engine.UsageWindows
+import com.dopachiru.core.engine.WindowUsage
 import com.dopachiru.core.time.ResetPolicy
 import com.dopachiru.data.db.UsageDao
 import com.dopachiru.data.db.UsageSessionEntity
@@ -151,17 +153,30 @@ class UsageTracker(
         breakMinutes: Int,
         nowSec: Long = nowSeconds(),
         matches: (String) -> Boolean,
-    ): Int {
-        val spans = synchronized(lock) {
+    ): Int = UsageSpans.minutesSinceBreak(spansOf(matches, nowSec), breakMinutes, nowSec)
+
+    /**
+     * いま張られている「持ち時間の窓」。
+     *
+     * [minutesSinceBreak] と同じく [matches] に当たるアプリをまとめて見るが、
+     * こちらは離れても数え直さない ── 窓は最初に触った時刻に張られ、
+     * 閉じても消えない。詳しくは [UsageWindows]。
+     */
+    fun windowUsage(
+        windowMinutes: Int,
+        nowSec: Long = nowSeconds(),
+        matches: (String) -> Boolean,
+    ): WindowUsage = UsageWindows.current(spansOf(matches, nowSec), windowMinutes, nowSec)
+
+    /** 対象に当たる区間。開いている最中のものは現在時刻まで伸ばす。 */
+    private fun spansOf(matches: (String) -> Boolean, nowSec: Long): List<Pair<Long, Long>> =
+        synchronized(lock) {
             val openStart = current?.takeIf { matches(it.packageName) }?.startSec
             sessions.filter { matches(it.packageName) }.map { session ->
-                // 開いている最中のセッションは現在時刻まで伸ばして数える
                 val end = if (openStart != null && session.startSec == openStart) nowSec else session.endSec
                 session.startSec to end
             }
         }
-        return UsageSpans.minutesSinceBreak(spans, breakMinutes, nowSec)
-    }
 
     /**
      * 対象アプリを前回いつまで使っていたか ── いまから何分前に終わったか。

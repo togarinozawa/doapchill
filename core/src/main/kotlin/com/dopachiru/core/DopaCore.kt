@@ -29,6 +29,7 @@ import com.dopachiru.core.condition.types.StudySessionCondition
 import com.dopachiru.core.condition.types.TimeRangeCondition
 import com.dopachiru.core.condition.types.TotalUsageCondition
 import com.dopachiru.core.condition.types.UsageSinceBreakCondition
+import com.dopachiru.core.condition.types.WindowBudgetCondition
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.Rule
 import kotlinx.serialization.json.Json
@@ -66,6 +67,7 @@ object DopaCore {
             SessionCountCondition,
             TotalUsageCondition,
             UsageSinceBreakCondition,
+            WindowBudgetCondition,
             CooldownCondition,
             ReservationCondition,
             OnScreenCondition,

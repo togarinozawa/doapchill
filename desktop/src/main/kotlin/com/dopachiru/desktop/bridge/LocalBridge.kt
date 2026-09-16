@@ -47,6 +47,31 @@ class LocalBridge(
         val blocked: Boolean = false,
         /** 塞いでいる理由。拡張の画面に出す。 */
         val reason: String = "",
+        /**
+         * 塞ぎはしないが、ページの中で消してほしいもの。要らなければ null。
+         *
+         * 本体の全画面で覆うとブラウザでは使いものにならない(検索欄まで覆われる)ので、
+         * 「音だけにする」だけは拡張に**ページの中で**やってもらう。
+         * どれを消すかを決めるのは本体 ── 拡張は言われたとおりに消すだけで、
+         * 判定は相変わらず持たない。
+         */
+        val veil: Veil? = null,
+    )
+
+    /**
+     * ページの中で消すもの。
+     *
+     * @param video 動画の絵を消す。音は止めない。サムネイルは消さない。
+     * @param suggestions おすすめ・関連・終わりぎわのカードを消す。検索結果は残す。
+     * @param searchOnly ホームとショートを検索へ寄せる。
+     * @param message 消したところに小さく出す言葉。
+     */
+    @Serializable
+    data class Veil(
+        val video: Boolean = false,
+        val suggestions: Boolean = false,
+        val searchOnly: Boolean = false,
+        val message: String = "",
     )
 
     interface TokenStore {

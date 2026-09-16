@@ -25,16 +25,24 @@ class LocalBridgeTest {
     private var lastUrl: String? = "<未設定>"
     private var token = ""
 
+    /** 本体が「ページの中でこれを消して」と言うときの中身。既定は言わない。 */
+    private var veil: LocalBridge.Veil? = null
+
     private val client: HttpClient = HttpClient.newHttpClient()
 
     @Before
     fun setUp() {
         token = ""
         lastUrl = "<未設定>"
+        veil = null
         bridge = LocalBridge(
             onUrl = { url ->
                 lastUrl = url
-                LocalBridge.Verdict(blocked = url != null && url.contains("tiktok"), reason = "テスト")
+                LocalBridge.Verdict(
+                    blocked = url != null && url.contains("tiktok"),
+                    reason = "テスト",
+                    veil = veil,
+                )
             },
             tokenStore = object : LocalBridge.TokenStore {
                 override fun current(): String = token
@@ -144,6 +152,24 @@ class LocalBridgeTest {
 
         val ok = post("/url", body = """{"url":"https://example.com/"}""", withToken = token)
         assertTrue(ok.body().contains("\"blocked\":false"), ok.body())
+    }
+
+    @Test
+    fun `消しものは欄ごと必ず書き出す`() {
+        // 「消すものは無い」と「答えが返ってこなかった」を同じ形にしない。
+        // 拡張は欄の有無ではなく中身を見て消す
+        bridge.openPairing()
+        post("/pair")
+
+        val none = post("/url", body = """{"url":"https://youtube.com/"}""", withToken = token)
+        assertTrue(none.body().contains("\"veil\":null"), none.body())
+
+        veil = LocalBridge.Veil(video = true, suggestions = true, searchOnly = false, message = "耳で聞く")
+        val veiled = post("/url", body = """{"url":"https://youtube.com/"}""", withToken = token)
+        assertTrue(veiled.body().contains("\"video\":true"), veiled.body())
+        assertTrue(veiled.body().contains("\"searchOnly\":false"), veiled.body())
+        // 塞いではいない ── タブを退避させずに、ページの中だけを消してもらう
+        assertTrue(veiled.body().contains("\"blocked\":false"), veiled.body())
     }
 
     @Test

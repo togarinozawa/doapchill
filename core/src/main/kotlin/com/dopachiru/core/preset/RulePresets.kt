@@ -25,6 +25,7 @@ import com.dopachiru.core.condition.types.TotalUsageCondition
 import com.dopachiru.core.condition.types.OnScreenCondition
 import com.dopachiru.core.condition.types.ReservationCondition
 import com.dopachiru.core.condition.types.UsageSinceBreakCondition
+import com.dopachiru.core.condition.types.WindowBudgetCondition
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.LockScope
@@ -636,6 +637,39 @@ object RulePresets {
         },
 
         RulePreset(
+            id = "hourly_budget",
+            name = "1時間のうち15分まで",
+            description = "最初に触った時刻から1時間の窓を張り、その中で15分使ったら、" +
+                "窓が明けるまで使えなくする。**閉じても窓は消えない**ので、" +
+                "ギリギリで閉じて数え直させる手が効かない。",
+            group = PresetGroup.LIMIT,
+            evidence = "「20分使ったら10分休む」は慣れると出し抜ける ── 19分で自分から閉じ、" +
+                "休憩ぶんだけ離れれば一度も当たらない。壁時計に釘を打つほうは、" +
+                "早く閉じても持ち時間が返ってこないので、出し抜く手が無い。",
+        ) { packages ->
+            rule(
+                name = "1時間のうち15分まで",
+                packages = packages,
+                conditions = listOf(
+                    leaf(
+                        WindowBudgetCondition.id,
+                        WindowBudgetCondition.KEY_WINDOW_MINUTES to 60,
+                        WindowBudgetCondition.KEY_BUDGET_MINUTES to 15,
+                    ),
+                ),
+                // 閉め出しではなく完全封印を使う。窓が明けるまで条件が立ったままなので、
+                // 開き直しても同じ壁が立つ。時間は条件のほうが持っている
+                actionId = BlockAction.id,
+                actionParams = Params.of(
+                    BlockAction.KEY_REFLECTION to "この1時間ぶんはもう使った。次の窓まで待つ。",
+                    BlockAction.KEY_MIN_SECONDS to 10,
+                    BlockAction.KEY_ALLOW_OVERRIDE to false,
+                    BlockAction.KEY_COVER_SYSTEM_BARS to true,
+                ),
+            )
+        },
+
+        RulePreset(
             id = "site_social_night",
             name = "夜はSNSを開かない",
             description = "23時から6時まで、SNS のページを塞ぐ。" +
@@ -709,6 +743,34 @@ object RulePresets {
                     RadioAction.KEY_MESSAGE to "耳で聞く。目は要らない。",
                     RadioAction.KEY_PEEK_EFFORT to BlockAction.Effort.HOLD,
                     RadioAction.KEY_PEEK_SECONDS to 10,
+                ),
+            )
+        },
+
+        RulePreset(
+            id = "browser_video_off",
+            name = "動画サイトは音だけ・検索から",
+            description = "YouTube と niconico を、ページの中で**映像だけ消して**流します。" +
+                "音は鳴り、サムネイルも見えます。おすすめは消え、ホームとショートは検索へ寄ります。" +
+                "ブラウザ拡張をつないでいるときだけ効きます。",
+            group = PresetGroup.TRIGGER,
+            evidence = "作業中に情報が要るのは本当なので、音まで取り上げると使えない道具になる。" +
+                "「無関係な推薦」は100%が制御感を下げる(Lukoff ら, CHI 2021)ので、" +
+                "消すべきなのは映像と推薦のほうだけ。",
+            allowEmptyApps = true,
+        ) {
+            rule(
+                name = "動画サイトは音だけ",
+                packages = emptySet(),
+                sites = setOf("youtube.com", "nicovideo.jp"),
+                conditions = emptyList(),
+                actionId = RadioAction.id,
+                actionParams = Params.of(
+                    RadioAction.KEY_MESSAGE to "耳で聞く。目は要らない。",
+                    RadioAction.KEY_PEEK_EFFORT to BlockAction.Effort.HOLD,
+                    RadioAction.KEY_PEEK_SECONDS to 10,
+                    RadioAction.KEY_HIDE_SUGGESTIONS to true,
+                    RadioAction.KEY_SEARCH_ONLY to true,
                 ),
             )
         },

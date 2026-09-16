@@ -15,6 +15,7 @@ import com.dopachiru.core.action.types.WarnAction
 import com.dopachiru.core.engine.Decision
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.engine.RuleEngine
+import com.dopachiru.core.engine.WindowUsage
 import com.dopachiru.core.io.ImportPlan
 import com.dopachiru.core.io.RuleBundleIo
 import com.dopachiru.core.action.types.IntentionAction
@@ -287,6 +288,19 @@ object DesktopRuntime {
     @Volatile
     private var browserUrlAtMs: Long = 0L
 
+    /**
+     * いま拡張に頼んでいる「ページの中で消すもの」。頼んでいなければ null。
+     *
+     * [evaluate] のたびに立て直す ── 持ち越すと、ルールが外れたのに映像が
+     * 消えたままになり、拡張を切るまで直せなくなる。
+     */
+    @Volatile
+    private var browserVeil: LocalBridge.Veil? = null
+
+    /** 拡張がいま生きているか。しばらく黙っていれば居ないものとして扱う。 */
+    private fun extensionAlive(): Boolean =
+        bridge.lastSeenAtMs > 0 && System.currentTimeMillis() - bridge.lastSeenAtMs < EXTENSION_ALIVE_MS
+
     private val bridge = LocalBridge(
         onUrl = ::onBrowserUrl,
         tokenStore = object : LocalBridge.TokenStore {
@@ -330,7 +344,8 @@ object DesktopRuntime {
             is Presentation.Block -> LocalBridge.Verdict(true, p.ruleName)
             is Presentation.Locked -> LocalBridge.Verdict(true, p.reason)
             is Presentation.Delay -> LocalBridge.Verdict(true, "少し待つ")
-            else -> LocalBridge.Verdict()
+            // 塞ぎはしないが、ページの中で消してほしいものがあるかもしれない
+            else -> LocalBridge.Verdict(veil = browserVeil)
         }
     }
 
@@ -1122,6 +1137,8 @@ object DesktopRuntime {
 
     @Synchronized
     private fun evaluate(fg: ForegroundApp?) {
+        // 消しものは毎回立て直す。持ち越すと、ルールが外れたのに消えたままになる
+        browserVeil = null
         if (fg == null || fg.processName in ProtectedProcesses) {
             if (_presentation.value != null) {
                 _presentation.value = null
@@ -1206,6 +1223,16 @@ object DesktopRuntime {
                     0
                 } else {
                     ledger.minutesSinceBreak(breakMinutes) { name ->
+                        rule.target.matches(name, file.tags[name] ?: emptySet())
+                    }
+                }
+            },
+            windowUsageOf = { ruleId, windowMinutes ->
+                val rule = file.rules.firstOrNull { it.id == ruleId }
+                if (rule == null) {
+                    WindowUsage.NONE
+                } else {
+                    ledger.windowUsage(windowMinutes) { name ->
                         rule.target.matches(name, file.tags[name] ?: emptySet())
                     }
                 }
@@ -1383,6 +1410,23 @@ object DesktopRuntime {
             }
 
             RadioAction.id -> {
+                // ブラウザは拡張にページの中でやってもらう。全画面で覆うと検索欄まで
+                // 覆われて、資料として鳴らすという用途そのものが潰れる
+                if (fg.processName in Browsers && extensionAlive()) {
+                    browserVeil = LocalBridge.Veil(
+                        video = true,
+                        suggestions = act.params.bool(RadioAction.KEY_HIDE_SUGGESTIONS, true),
+                        searchOnly = act.params.bool(RadioAction.KEY_SEARCH_ONLY, false),
+                        message = act.params.string(RadioAction.KEY_MESSAGE)
+                            .lineSequence().firstOrNull()?.trim().orEmpty(),
+                    )
+                    if (_presentation.value is Presentation.Radio) {
+                        _presentation.value = null
+                        releaseHold()
+                    }
+                    return
+                }
+
                 // 覗いているあいだは覆い直さない
                 if (System.currentTimeMillis() < (radioPeekUntil[fg.processName] ?: 0L)) {
                     if (_presentation.value is Presentation.Radio) {
@@ -1632,4 +1676,13 @@ object DesktopRuntime {
      * なおブラウザが前面に無いあいだは、そもそも URL を見ないので影響しない。
      */
     private const val URL_STALE_MS = 150_000L
+
+    /**
+     * 拡張が生きていると見なす猶予。
+     *
+     * 「音だけにする」をページの中でやってもらうか、本体の全画面で覆うかの分かれ目。
+     * 拡張が黙っているのに任せると、映像が丸見えのまま何も起きない ──
+     * 迷ったら**本体が覆う**ほうへ倒すため、[URL_STALE_MS] より短くしてある。
+     */
+    private const val EXTENSION_ALIVE_MS = 90_000L
 }

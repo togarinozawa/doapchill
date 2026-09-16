@@ -10,6 +10,7 @@ import com.dopachiru.core.condition.types.CalendarBusyCondition
 import com.dopachiru.core.engine.Decision
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.engine.RuleEngine
+import com.dopachiru.core.engine.WindowUsage
 import com.dopachiru.core.gate.Gate
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.FocusSettings
@@ -296,6 +297,7 @@ object DopaRuntime {
         previousPackage = usage.previousPackage(),
         sessionSeed = usage.currentSessionSeed(),
         minutesSinceBreakOf = { ruleId, breakMinutes -> minutesSinceBreak(ruleId, breakMinutes) },
+        windowUsageOf = { ruleId, windowMinutes -> windowUsage(ruleId, windowMinutes) },
         minutesSinceLastUseOf = { ruleId -> minutesSinceLastUse(ruleId) },
         withinReservation = reservations.covers(packageName, tagCache[packageName] ?: emptySet()),
         screenSignals = currentScreenSignals,
@@ -311,6 +313,18 @@ object DopaRuntime {
     private fun minutesSinceBreak(ruleId: Long, breakMinutes: Int): Int {
         val rule = ruleCache.firstOrNull { it.id == ruleId } ?: return 0
         return usage.minutesSinceBreak(breakMinutes) { pkg ->
+            rule.target.matches(pkg, tagCache[pkg] ?: emptySet())
+        }
+    }
+
+    /**
+     * そのルールの対象について、いま張られている持ち時間の窓。
+     *
+     * 対象の解決は [minutesSinceBreak] と同じ理由でここに置く(タグを引けるのは端末側だけ)。
+     */
+    private fun windowUsage(ruleId: Long, windowMinutes: Int): WindowUsage {
+        val rule = ruleCache.firstOrNull { it.id == ruleId } ?: return WindowUsage.NONE
+        return usage.windowUsage(windowMinutes) { pkg ->
             rule.target.matches(pkg, tagCache[pkg] ?: emptySet())
         }
     }

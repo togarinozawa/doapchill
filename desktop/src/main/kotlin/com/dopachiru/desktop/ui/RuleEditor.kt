@@ -123,7 +123,7 @@ fun RuleEditorDialog(
                     FilterChip(
                         selected = plan.main == MainAction.CLOSE,
                         onClick = { setPlan(plan.copy(main = MainAction.CLOSE)) },
-                        label = { Text("閉じる") },
+                        label = { Text("使えなくする") },
                     )
                     FilterChip(
                         selected = plan.main == MainAction.DELAY,
@@ -149,8 +149,38 @@ fun RuleEditorDialog(
                     }
                 }
 
-                // 閉じるの中身
+                // 使えなくするの中身
                 if (plan.main == MainAction.CLOSE) {
+                    // 「いつまで」が完全封印と閉め出しの分かれ目
+                    Spacer(Modifier.height(12.dp))
+                    Text("いつまで", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = !plan.usesTimer,
+                            onClick = { setPlan(plan.copy(lockMinutes = 0)) },
+                            label = { Text("条件を満たしているあいだ") },
+                        )
+                        FilterChip(
+                            selected = plan.usesTimer,
+                            onClick = { setPlan(plan.copy(lockMinutes = plan.lockMinutes.coerceAtLeast(10))) },
+                            label = { Text("このあとしばらく") },
+                        )
+                        if (plan.usesTimer) {
+                            NumberStepper(
+                                value = plan.lockMinutes, min = 1, max = 12 * 60, step = 5, suffix = "分",
+                                onChange = { setPlan(plan.copy(lockMinutes = it)) },
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        if (plan.usesTimer) "閉めてから${plan.lockMinutes}分は、条件が外れても開きません。"
+                        else "条件が続くかぎり、開き直しても閉まったまま。条件が外れたら開きます。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
                     Spacer(Modifier.height(12.dp))
                     if (!plan.usesTimer) {
                         Text("逃げ道", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
@@ -170,13 +200,13 @@ fun RuleEditorDialog(
                         Spacer(Modifier.height(4.dp))
                         Text(
                             if (plan.soft) "手間をかければ押し切れます。押し切ると「破った」ことに。"
-                            else "条件を満たすあいだ、押し切れません。条件が外れたら開きます。",
+                            else "押し切る口はありません。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     } else {
                         Text(
-                            "時間で締め出すあいだは押し切れません(閉め出し)。",
+                            "時間で締め出すあいだは押し切れません。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -193,11 +223,6 @@ fun RuleEditorDialog(
                             },
                             label = { Text("閉じる前にそっと知らせる") },
                         )
-                        FilterChip(
-                            selected = plan.usesTimer,
-                            onClick = { setPlan(plan.copy(lockMinutes = if (plan.usesTimer) 0 else 10)) },
-                            label = { Text("閉じたあと開けない") },
-                        )
                     }
                     if (plan.prewarnSeconds > 0) {
                         Spacer(Modifier.height(6.dp))
@@ -207,16 +232,6 @@ fun RuleEditorDialog(
                                 value = plan.prewarnSeconds, min = 1, max = ActionExtras.MAX_PREWARN_SECONDS,
                                 step = 1, suffix = "秒",
                                 onChange = { setPlan(plan.copy(prewarnSeconds = it)) },
-                            )
-                        }
-                    }
-                    if (plan.usesTimer) {
-                        Spacer(Modifier.height(6.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("開けない長さ ", style = MaterialTheme.typography.bodySmall)
-                            NumberStepper(
-                                value = plan.lockMinutes, min = 1, max = 12 * 60, step = 5, suffix = "分",
-                                onChange = { setPlan(plan.copy(lockMinutes = it)) },
                             )
                         }
                     }

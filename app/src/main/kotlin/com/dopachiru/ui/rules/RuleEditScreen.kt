@@ -748,8 +748,8 @@ private fun ActionStep(
 
     // --- 主な動作(1つ選ぶ) ---
     EscapeCard(
-        title = "閉じる",
-        body = "アプリを使えなくする。いちばん基本。",
+        title = "使えなくする",
+        body = "一度閉じて終わりではなく、開き直しても閉まったまま。いちばん基本。",
         selected = plan.main == MainAction.CLOSE,
         onClick = { viewModel.setPlan(plan.copy(main = MainAction.CLOSE)) },
     )
@@ -768,8 +768,48 @@ private fun ActionStep(
         onClick = { viewModel.setPlan(plan.copy(main = MainAction.WARN)) },
     )
 
-    // --- 閉じるの中身 ---
+    // --- 使えなくするの中身 ---
     if (plan.main == MainAction.CLOSE) {
+        // 「いつまで」が完全封印と閉め出しの分かれ目。ここを選ばせるのが要
+        Spacer(Modifier.height(16.dp))
+        Text("いつまで", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = !plan.usesTimer,
+                onClick = { viewModel.setPlan(plan.copy(lockMinutes = 0)) },
+                label = { Text("条件を満たしているあいだ") },
+            )
+            FilterChip(
+                selected = plan.usesTimer,
+                onClick = { viewModel.setPlan(plan.copy(lockMinutes = plan.lockMinutes.coerceAtLeast(10))) },
+                label = { Text("このあとしばらく") },
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        if (plan.usesTimer) {
+            AmountStepper(
+                value = plan.lockMinutes,
+                min = 1,
+                max = 12 * 60,
+                step = 5,
+                suffix = "分",
+                onChange = { viewModel.setPlan(plan.copy(lockMinutes = it)) },
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "閉めてから${plan.lockMinutes}分は、条件が外れても開きません。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Text(
+                "条件が続くかぎり、開き直しても閉まったまま。条件が外れたら開きます。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
         Spacer(Modifier.height(16.dp))
         if (!plan.usesTimer) {
             Text("逃げ道", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
@@ -791,14 +831,14 @@ private fun ActionStep(
                 if (plan.soft) {
                     "手間をかければ押し切れます。押し切ると「破った」ことになります。"
                 } else {
-                    "条件を満たすあいだ、押し切れません。条件が外れたら開きます。"
+                    "押し切る口はありません。"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
             Text(
-                "時間で締め出すあいだは押し切れません(閉め出し)。",
+                "時間で締め出すあいだは押し切れません。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -827,20 +867,6 @@ private fun ActionStep(
             )
         }
 
-        CheckRow(
-            checked = plan.usesTimer,
-            title = "閉じたあと、しばらく開けない",
-            onToggle = { on -> viewModel.setPlan(plan.copy(lockMinutes = if (on) 10 else 0)) },
-        ) {
-            AmountStepper(
-                value = plan.lockMinutes,
-                min = 1,
-                max = 12 * 60,
-                step = 5,
-                suffix = "分",
-                onChange = { viewModel.setPlan(plan.copy(lockMinutes = it)) },
-            )
-        }
     }
 
     // --- くわしい動作 ---

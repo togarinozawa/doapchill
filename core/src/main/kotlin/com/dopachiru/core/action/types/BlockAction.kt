@@ -25,8 +25,10 @@ object BlockAction : ActionType {
     }
 
     override val id = "block"
-    override val displayName = "完全封印"
-    override val description = "全画面でブロック画面を出す。指定秒数が経つまで閉じられない。"
+    override val displayName = "条件のあいだ使えなくする"
+    override val description =
+        "全画面でブロック画面を出す。**一度閉じて終わりではない** ── 条件が続くかぎり、" +
+            "開き直すたびに同じ壁が立つ。条件が外れたら開く。"
     override val severity = 100
 
     override val params = listOf(
@@ -85,6 +87,6 @@ object BlockAction : ActionType {
         val firm = if (p.bool(KEY_ALLOW_OVERRIDE, true)) "やんわり" else "しっかり"
         val prewarn = com.dopachiru.core.action.ActionExtras.prewarnSeconds(p)
         val head = if (prewarn > 0) "そっと知らせてから" else ""
-        return head + "閉じる($firm)"
+        return head + "条件のあいだ使えなくする($firm)"
     }
 }

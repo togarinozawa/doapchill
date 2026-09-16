@@ -23,14 +23,15 @@ import com.dopachiru.core.param.Params
  *
  * | UI | 保存 |
  * |---|---|
- * | 閉じる・条件が続くあいだ(やんわり/しっかり) | [BlockAction](押し切れる/切れない) |
- * | 閉じる・N分開けない | [LockoutAction](N分。押し切れない) |
+ * | 使えなくする・条件を満たしているあいだ(やんわり/しっかり) | [BlockAction](押し切れる/切れない) |
+ * | 使えなくする・このあとN分 | [LockoutAction](N分。押し切れない) |
  * | 少し待たせて通す | [DelayAction] |
  * | 警告だけ | [WarnAction] |
  * | くわしい | それ以外の措置そのまま |
  *
  * 完全封印と閉め出しの違い(条件バウンドか、タイマーバウンドか)は、
- * **「閉じたあと開けない」を入れるかどうか**という1つの選択に畳んである。
+ * **「いつまで」の二択**に畳んである。どちらも「一度閉じて終わり」ではない ──
+ * 前者は条件が続くかぎり、後者は時間が来るまで、開き直しても同じ壁が立つ。
  */
 enum class MainAction { CLOSE, DELAY, WARN, ADVANCED }
 
@@ -40,7 +41,7 @@ data class ActionPlan(
     /** CLOSE のとき、押し切れる(やんわり)か。タイマーを入れたら無視される(閉め出しは押し切れない)。 */
     val soft: Boolean = false,
 
-    /** 0 = 条件が続くあいだ閉じる(完全封印)。1以上 = 閉じて、その分だけ開けない(閉め出し)。 */
+    /** 0 = 条件が続くあいだ使えなくする(完全封印)。1以上 = 閉じて、その分だけ使えなくする(閉め出し)。 */
     val lockMinutes: Int = 0,
 
     /** 閉じる前にそっと知らせる秒数。0 = 出さない。CLOSE のときだけ効く。 */
@@ -49,7 +50,7 @@ data class ActionPlan(
     /** ADVANCED のときに使う措置の id(音だけ・目的を書く・宣言・経過表示)。 */
     val advancedActionId: String = RadioAction.id,
 ) {
-    /** 「閉じたあと開けない」を使っているか。ここが完全封印と閉め出しの分かれ目。 */
+    /** 「このあとN分」を選んでいるか。ここが完全封印と閉め出しの分かれ目。 */
     val usesTimer: Boolean get() = main == MainAction.CLOSE && lockMinutes > 0
 
     /** この計画を実行する措置の id。 */

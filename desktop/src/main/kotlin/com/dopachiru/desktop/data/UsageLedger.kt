@@ -2,6 +2,8 @@ package com.dopachiru.desktop.data
 
 import com.dopachiru.core.engine.UsageSnapshot
 import com.dopachiru.core.engine.UsageSpans
+import com.dopachiru.core.engine.UsageWindows
+import com.dopachiru.core.engine.WindowUsage
 import com.dopachiru.core.time.ResetPolicy
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -116,17 +118,29 @@ class UsageLedger(private val zone: ZoneId = ZoneId.systemDefault()) {
         breakMinutes: Int,
         nowSeconds: Long = nowSec(),
         matches: (String) -> Boolean,
-    ): Int {
-        val spans = synchronized(lock) {
+    ): Int = UsageSpans.minutesSinceBreak(spansOf(matches, nowSeconds), breakMinutes, nowSeconds)
+
+    /**
+     * いま張られている「持ち時間の窓」。
+     *
+     * [minutesSinceBreak] と違って離れても数え直さない ── 窓は最初に触った時刻に
+     * 張られ、閉じても消えない。詳しくは [UsageWindows]。
+     */
+    fun windowUsage(
+        windowMinutes: Int,
+        nowSeconds: Long = nowSec(),
+        matches: (String) -> Boolean,
+    ): WindowUsage = UsageWindows.current(spansOf(matches, nowSeconds), windowMinutes, nowSeconds)
+
+    /** 対象に当たる区間。開いている最中のものは現在時刻まで伸ばす。 */
+    private fun spansOf(matches: (String) -> Boolean, nowSeconds: Long): List<Pair<Long, Long>> =
+        synchronized(lock) {
             val openStart = open?.takeIf { matches(it.processName) }?.startSec
             entries.filter { matches(it.processName) }.map { entry ->
-                // 開いている最中の区間は現在時刻まで伸ばして数える
                 val end = if (openStart != null && entry.startSec == openStart) nowSeconds else entry.endSec
                 entry.startSec to end
             }
         }
-        return UsageSpans.minutesSinceBreak(spans, breakMinutes, nowSeconds)
-    }
 
     /**
      * 対象を前回いつまで使っていたか(分前)。一度も無ければ null。

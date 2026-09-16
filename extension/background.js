@@ -65,12 +65,22 @@ async function findPort() {
 
 // ---- 判定を頼む ------------------------------------------------------
 
+function readVerdict(verdict) {
+  return {
+    ok: true,
+    blocked: !!verdict.blocked,
+    reason: verdict.reason || '',
+    // 塞ぎはしないが、ページの中で消してほしいもの。無ければ null
+    veil: verdict.veil || null,
+  };
+}
+
 async function askAbout(url) {
   if (!state.token) return { ok: false };
   try {
     const verdict = await call('/url', { url });
     state.online = true;
-    return { ok: true, blocked: !!verdict.blocked, reason: verdict.reason || '' };
+    return readVerdict(verdict);
   } catch (e) {
     // ポートが変わったのかもしれない。一度だけ探し直す
     const p = await findPort();
@@ -81,11 +91,36 @@ async function askAbout(url) {
     try {
       const verdict = await call('/url', { url });
       state.online = true;
-      return { ok: true, blocked: !!verdict.blocked, reason: verdict.reason || '' };
+      return readVerdict(verdict);
     } catch (e2) {
       state.online = false;
       return { ok: false };
     }
+  }
+}
+
+// ---- 消しもの --------------------------------------------------------
+//
+// 本体が「これを消して」と言ってきたら、そのタブの中の係(veil.js)に渡す。
+// 本体に届かないときは**何も消さない** ── 本体が落ちただけで映像が
+// 消えたままになるほうが困る。塞ぐときと同じ倒し方。
+
+const veils = new Map(); // tabId -> veil | null
+
+async function sendVeil(tabId, veil) {
+  const before = veils.get(tabId) || null;
+  if (JSON.stringify(before) === JSON.stringify(veil || null)) return;
+  veils.set(tabId, veil || null);
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: 'veil', veil: veil || null });
+  } catch (e) {
+    // 係の居ないページ(対象外のサイト)。何もしない
+  }
+  // 次に開いたページで、描かれる前に当てられるように覚えておく
+  try {
+    await chrome.storage.local.set({ veilCache: { veil: veil || null, at: Date.now() } });
+  } catch (e) {
+    // 保存できなくても、報せが届けば消せる
   }
 }
 
@@ -141,6 +176,7 @@ async function reportActiveTab() {
   if (!answer.ok) {
     // 本体に届かない。既定は通す ── 本体が落ちただけで
     // ブラウザが使えなくなるほうが、取り返しがつかない
+    if (tab) await sendVeil(tab.id, null);
     if (state.blockWhenOffline && tab && !parked.has(tab.id)) {
       await park(tab.id, url, '本体につながりません');
     }
@@ -152,6 +188,8 @@ async function reportActiveTab() {
   } else if (tab && parked.has(tab.id)) {
     await unpark(tab.id);
   }
+
+  if (tab) await sendVeil(tab.id, answer.blocked ? null : answer.veil);
 }
 
 // ---- きっかけ --------------------------------------------------------
@@ -179,7 +217,10 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
   reportActiveTab();
 });
 
-chrome.tabs.onRemoved.addListener((tabId) => parked.delete(tabId));
+chrome.tabs.onRemoved.addListener((tabId) => {
+  parked.delete(tabId);
+  veils.delete(tabId);
+});
 
 // 退避ページと設定画面からの問い合わせ
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -192,6 +233,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         parked.delete(sender.tab.id);
       }
       sendResponse(answer);
+      return;
+    }
+    // ページの中の係が「いま何を消せばいい?」と聞いてきた。
+    // 覚えている答えをすぐ返し、裏で本体に聞き直す
+    if (msg.type === 'veil?') {
+      const tabId = sender.tab && sender.tab.id;
+      sendResponse({ veil: (tabId != null && veils.get(tabId)) || null });
+      reportActiveTab();
       return;
     }
     if (msg.type === 'pair') {
