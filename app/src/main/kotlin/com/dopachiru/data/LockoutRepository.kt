@@ -124,11 +124,13 @@ class LockoutRepository(
         allowTags: Set<String>,
         effort: String,
         abortPoints: Int,
+        label: String = "",
     ): Lockout? = startFocusWithTarget(
         target = Target(matchAll = true, exceptPackages = allowPackages, exceptTags = allowTags),
         minutes = minutes,
         effort = effort,
         abortPoints = abortPoints,
+        label = label,
     )
 
     /**
@@ -183,10 +185,18 @@ class LockoutRepository(
         return focus
     }
 
-    /** 開発ツール専用。 */
-    fun clearAll() {
+    /**
+     * 閉まっているものを全部開ける。**開けた件数を返す。**
+     *
+     * 開発ツールと、別の端末からの「開けて」(関門を通ったもの)が使う。
+     * 件数を返すのは、送った側の画面に「何も閉まっていませんでした」を出すため
+     * ── 通ったのに何も起きなかったのか、そもそも閉まっていなかったのかを分ける。
+     */
+    fun clearAll(): Int {
+        val count = cache.size
         cache = emptyList()
         scope.launch { dao.deleteAll() }
+        return count
     }
 
     private fun nowSec(): Long = System.currentTimeMillis() / 1000

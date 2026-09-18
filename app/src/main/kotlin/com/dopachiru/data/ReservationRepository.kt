@@ -40,15 +40,25 @@ class ReservationRepository(
         scope.launch { store.setReservations(loaded) }
     }
 
-    /** そのアプリが、いま予約の時間帯の中にいるか。判定から同期的に呼ばれる。 */
-    fun covers(packageName: String, tagsOfApp: Set<String>, url: String? = null, nowSec: Long = nowSec()): Boolean {
+    /**
+     * そのアプリが、いま予約の時間帯の中にいるか。判定から同期的に呼ばれる。
+     *
+     * @param deviceId この端末。別の端末に向けて取られた枠は効かせない。
+     */
+    fun covers(
+        packageName: String,
+        tagsOfApp: Set<String>,
+        url: String? = null,
+        nowSec: Long = nowSec(),
+        deviceId: String = "",
+    ): Boolean {
         val pruned = Reservations.prune(cache, nowSec)
         if (pruned.size != cache.size) {
             cache = pruned
             _flow.value = pruned
             scope.launch { store.setReservations(pruned) }
         }
-        return Reservations.covers(pruned, packageName, tagsOfApp, nowSec, url)
+        return Reservations.covers(pruned, packageName, tagsOfApp, nowSec, url, deviceId)
     }
 
     /**
@@ -62,6 +72,7 @@ class ReservationRepository(
         endEpochSec: Long,
         minLeadMinutes: Int,
         note: String = "",
+        devices: Set<String> = emptySet(),
     ): Reservation? {
         val now = nowSec()
         if (startEpochSec < now + minLeadMinutes * 60L) return null
@@ -72,11 +83,16 @@ class ReservationRepository(
             startEpochSec = startEpochSec,
             endEpochSec = endEpochSec,
             note = note,
+            devices = devices,
         )
         val next = Reservations.prune(cache, now) + reservation
         cache = next
         _flow.value = next
-        scope.launch { store.setReservations(next) }
+        scope.launch {
+            store.setReservations(next)
+            // 変えた時刻を残さないと、据え置きの時刻のまま送られてサーバーに弾かれる
+            onChanged(reservation.uid, false)
+        }
         return reservation
     }
 
@@ -85,8 +101,20 @@ class ReservationRepository(
         val next = cache.filterNot { it.uid == uid }
         cache = next
         _flow.value = next
-        scope.launch { store.setReservations(next) }
+        scope.launch {
+            store.setReservations(next)
+            // 墓標を残す。残さないと、次の同期で別の端末から送り返されて生き返る
+            onChanged(uid, true)
+        }
     }
+
+    /**
+     * 変えたことを同期側に伝える差し込み口。
+     *
+     * [SyncManager] を直に持たせないのは、予約の置き場所が同期の都合を知らずに
+     * 済むようにするため(同期を切っていても予約は動く)。
+     */
+    var onChanged: suspend (uid: String, deleted: Boolean) -> Unit = { _, _ -> }
 
     /** いまと、これからの予約。画面に並べる用。開始の早い順。 */
     fun upcoming(nowSec: Long = nowSec()): List<Reservation> =

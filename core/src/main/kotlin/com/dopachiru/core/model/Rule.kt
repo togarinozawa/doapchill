@@ -113,4 +113,14 @@ data class Rule(
      * ルールもここに落ちるので、黙って封鎖が始まることはない。
      */
     val consequence: Consequence = Consequence.NONE,
-)
+
+    /**
+     * どの端末で効かせるか(deviceId の集合)。空ならどの端末でも。
+     *
+     * 既定が空なので、この欄より前に作ったルールは挙動が変わらない。[DeviceScope]
+     */
+    val devices: Set<String> = DeviceScope.EVERYWHERE,
+) {
+    /** その端末で評価に載せるか。 */
+    fun appliesToDevice(deviceId: String): Boolean = DeviceScope.appliesTo(devices, deviceId)
+}

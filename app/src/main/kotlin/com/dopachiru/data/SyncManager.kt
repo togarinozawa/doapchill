@@ -3,6 +3,7 @@ package com.dopachiru.data
 import android.content.Context
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.sync.AppInfo
+import com.dopachiru.core.sync.DeviceInfo
 import com.dopachiru.core.sync.Envelope
 import com.dopachiru.core.sync.MergeAction
 import com.dopachiru.core.sync.SyncApi
@@ -58,7 +59,7 @@ class SyncManager(
         if (!settings.enabled || !settings.isConfigured) return@withContext Outcome.NotConfigured
 
         val api = SyncApi(settings.baseUrl, settings.token)
-        val outgoing = collect()
+        val outgoing = collect(settings)
 
         val response = when (
             val r = api.sync(
@@ -75,6 +76,9 @@ class SyncManager(
             response.of(SyncKinds.RULES),
             response.of(SyncKinds.TAGS),
             response.of(SyncKinds.APPS),
+            response.of(SyncKinds.DEVICES),
+            response.of(SyncKinds.RESERVATIONS),
+            response.of(SyncKinds.COMMANDS),
         )
 
         // 実績は別の口。落ちても同期そのものは成立したことにする ──
@@ -109,7 +113,7 @@ class SyncManager(
 
     // ---- 送るものを集める --------------------------------------------------
 
-    private suspend fun collect(): Map<String, List<Envelope>> {
+    private suspend fun collect(settings: SyncSettings): Map<String, List<Envelope>> {
         val local = rules.allWithUpdatedAt()
         val ruleEnvelopes = ArrayList<Envelope>()
         val liveUids = HashSet<String>()
@@ -144,10 +148,47 @@ class SyncManager(
             SyncMapper.appEnvelope(info, stampFor(SyncKinds.APPS, info.uid))
         }
 
+        // この端末の行。毎回書くので、lastSeen がそのまま「最後に同期した時刻」になる
+        val now = System.currentTimeMillis() / 1000
+        val self = SyncMapper.deviceEnvelope(
+            DeviceInfo(
+                deviceId = settings.deviceId,
+                name = settingsStore.deviceName.first().ifBlank { settings.deviceId },
+                platform = PLATFORM,
+                version = appVersion(),
+                lastSeenSec = now,
+            ),
+            updatedAt = now,
+        )
+
+        // 予約。**端末をまたいで配ります** ── 決める端末と使う端末が別でよい
+        val liveReservations = HashSet<String>()
+        val reservationEnvelopes = ArrayList<Envelope>()
+        for (reservation in settingsStore.reservations.first()) {
+            if (reservation.uid.isBlank()) continue
+            liveReservations += reservation.uid
+            reservationEnvelopes += SyncMapper.reservationEnvelope(
+                reservation,
+                stampFor(SyncKinds.RESERVATIONS, reservation.uid),
+            )
+        }
+        for (state in syncStateDao.ofKind(SyncKinds.RESERVATIONS)) {
+            if (!state.deleted || state.uid in liveReservations) continue
+            reservationEnvelopes += Envelope(state.uid, state.updatedAt, deleted = true)
+        }
+
+        // 頼みごと。**配るのは頼みであって実行ではありません**
+        val commandEnvelopes = settingsStore.commands.first().map { command ->
+            SyncMapper.commandEnvelope(command, stampFor(SyncKinds.COMMANDS, command.uid))
+        }
+
         return mapOf(
             SyncKinds.RULES to ruleEnvelopes,
             SyncKinds.TAGS to tagEnvelopes,
             SyncKinds.APPS to appEnvelopes,
+            SyncKinds.DEVICES to listOf(self),
+            SyncKinds.RESERVATIONS to reservationEnvelopes,
+            SyncKinds.COMMANDS to commandEnvelopes,
         )
     }
 
@@ -166,6 +207,38 @@ class SyncManager(
         val now = System.currentTimeMillis() / 1000
         syncStateDao.put(SyncStateEntity(kind, uid, now, deleted = false))
         return now
+    }
+
+    /**
+     * この版の番号。名簿に載せて、端末どうしの食い違いの切り分けに使う。
+     *
+     * `BuildConfig` を生やさずに PackageManager から読むのは、この1文字列のために
+     * ビルドの設定を増やしたくないため。読めなければ空でよい(見た目だけのもの)。
+     */
+    private fun appVersion(): String = runCatching {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
+    }.getOrDefault("")
+
+    /**
+     * 「いま変えた」と記録する。
+     *
+     * 予約と頼みごとは Room の表ではなく DataStore の JSON に住んでいるので、
+     * 行に更新時刻を持てません。**変えた側がここを叩かないと、据え置きの時刻のまま
+     * 送られてサーバーに弾かれます**(後に書かれたほうが勝つので、同じ時刻は負ける)。
+     */
+    suspend fun touch(kind: String, uid: String) {
+        if (uid.isBlank()) return
+        syncStateDao.put(
+            SyncStateEntity(kind, uid, System.currentTimeMillis() / 1000, deleted = false),
+        )
+    }
+
+    /** 消したことを覚える。残さないと、次の同期で別の端末から送り返されて生き返ります。 */
+    suspend fun tombstone(kind: String, uid: String) {
+        if (uid.isBlank()) return
+        syncStateDao.put(
+            SyncStateEntity(kind, uid, System.currentTimeMillis() / 1000, deleted = true),
+        )
     }
 
     private suspend fun recentUsage(): List<UsageDay> {
@@ -188,6 +261,9 @@ class SyncManager(
         incomingRules: List<Envelope>,
         incomingTags: List<Envelope>,
         incomingApps: List<Envelope>,
+        incomingDevices: List<Envelope>,
+        incomingReservations: List<Envelope>,
+        incomingCommands: List<Envelope>,
     ): Int {
         var applied = 0
         val localRuleTimes = rules.updatedAtByUid()
@@ -235,6 +311,85 @@ class SyncManager(
             applied++
         }
 
+        // ---- 端末の名簿 ----------------------------------------------
+        if (incomingDevices.isNotEmpty()) {
+            var roster = settingsStore.devices.first()
+            for (envelope in incomingDevices) {
+                val info = SyncMapper.deviceOf(envelope) ?: continue
+                roster = roster.filterNot { it.deviceId == info.deviceId } + info
+                syncStateDao.put(
+                    SyncStateEntity(SyncKinds.DEVICES, envelope.uid, envelope.updatedAt, false),
+                )
+                applied++
+            }
+            settingsStore.setDevices(roster)
+        }
+
+        // ---- 予約 ------------------------------------------------------
+        if (incomingReservations.isNotEmpty()) {
+            var list = settingsStore.reservations.first()
+            for (envelope in incomingReservations) {
+                val local = syncStateDao.get(SyncKinds.RESERVATIONS, envelope.uid)?.updatedAt
+                when (decideMerge(envelope, local)) {
+                    MergeAction.Skip -> continue
+
+                    MergeAction.Delete -> {
+                        list = list.filterNot { it.uid == envelope.uid }
+                        syncStateDao.put(
+                            SyncStateEntity(SyncKinds.RESERVATIONS, envelope.uid, envelope.updatedAt, true),
+                        )
+                        applied++
+                    }
+
+                    MergeAction.Apply -> {
+                        val reservation = SyncMapper.reservationOf(envelope) ?: continue
+                        val existing = list.firstOrNull { it.uid == envelope.uid }
+                        val placed = reservation.copy(id = existing?.id ?: 0L)
+                        list = list.filterNot { it.uid == envelope.uid } + placed
+                        syncStateDao.put(
+                            SyncStateEntity(SyncKinds.RESERVATIONS, envelope.uid, envelope.updatedAt, false),
+                        )
+                        applied++
+                    }
+                }
+            }
+            settingsStore.setReservations(list)
+        }
+
+        // ---- 頼みごと --------------------------------------------------
+        // 置くだけ。通すかどうかは DopaRuntime が自分の関門で決める
+        if (incomingCommands.isNotEmpty()) {
+            var list = settingsStore.commands.first()
+            for (envelope in incomingCommands) {
+                val local = syncStateDao.get(SyncKinds.COMMANDS, envelope.uid)?.updatedAt
+                when (decideMerge(envelope, local)) {
+                    MergeAction.Skip -> continue
+
+                    MergeAction.Delete -> {
+                        list = list.filterNot { it.uid == envelope.uid }
+                        syncStateDao.put(
+                            SyncStateEntity(SyncKinds.COMMANDS, envelope.uid, envelope.updatedAt, true),
+                        )
+                        applied++
+                    }
+
+                    MergeAction.Apply -> {
+                        val command = SyncMapper.commandOf(envelope) ?: continue
+                        list = list.filterNot { it.uid == envelope.uid } + command
+                        syncStateDao.put(
+                            SyncStateEntity(SyncKinds.COMMANDS, envelope.uid, envelope.updatedAt, false),
+                        )
+                        applied++
+                    }
+                }
+            }
+            // 終わったものは少しだけ残す(送った側に「済み」を出すため)
+            val cutoff = System.currentTimeMillis() / 1000 - COMMAND_KEEP_SEC
+            settingsStore.setCommands(
+                list.filterNot { !it.isOpen && it.handledAtSec in 1 until cutoff },
+            )
+        }
+
         return applied
     }
 
@@ -246,5 +401,8 @@ class SyncManager(
 
         /** 墓標を置いておく長さ。長く寝ていた端末が復活させない程度に長く。 */
         const val TOMBSTONE_KEEP_SEC = 90L * 24 * 60 * 60
+
+        /** 終わった頼みごとを残しておく長さ。送った側の画面に「済み」を出すため。 */
+        const val COMMAND_KEEP_SEC = 3L * 24 * 60 * 60
     }
 }

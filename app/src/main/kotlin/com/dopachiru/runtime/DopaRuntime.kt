@@ -12,7 +12,15 @@ import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.engine.RuleEngine
 import com.dopachiru.core.engine.WindowUsage
 import com.dopachiru.core.gate.Gate
+import com.dopachiru.core.model.Command
+import com.dopachiru.core.model.CommandKind
+import com.dopachiru.core.model.CommandState
+import com.dopachiru.core.model.CommandVerdict
+import com.dopachiru.core.model.Commands
 import com.dopachiru.core.model.ConditionNode
+import com.dopachiru.core.model.DeviceScope
+import com.dopachiru.core.model.FocusSchedule
+import com.dopachiru.core.model.FocusSchedules
 import com.dopachiru.core.model.FocusSettings
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Lockouts
@@ -21,6 +29,8 @@ import com.dopachiru.core.model.Rule
 import com.dopachiru.core.param.Params
 import com.dopachiru.core.points.PointPolicy
 import com.dopachiru.core.points.PointReason
+import com.dopachiru.core.sync.DeviceInfo
+import com.dopachiru.core.sync.SyncKinds
 import com.dopachiru.core.time.ResetPolicy
 import com.dopachiru.data.CalendarReader
 import com.dopachiru.data.ChangeRequestRepository
@@ -40,10 +50,13 @@ import com.dopachiru.data.db.DopaDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.util.UUID
 
 /**
  * アプリ全体で1つだけ持つ実行時の状態。
@@ -169,6 +182,14 @@ object DopaRuntime {
         reservations = ReservationRepository(settings, scope)
         points = PointsRepository(db.pointEventDao(), scope)
         sync = SyncManager(app, rules, stats, db.syncStateDao(), settings)
+        // 予約を変えたら、同期の「いつ変えたか」も一緒に動かす
+        reservations.onChanged = { uid, deleted ->
+            if (deleted) {
+                sync.tombstone(SyncKinds.RESERVATIONS, uid)
+            } else {
+                sync.touch(SyncKinds.RESERVATIONS, uid)
+            }
+        }
         changes = ChangeRequestRepository(
             dao = db.changeRequestDao(),
             ruleRepository = rules,
@@ -193,7 +214,14 @@ object DopaRuntime {
         scope.launch {
             rules.rules.collect {
                 ruleCache = it
+                recomputeRuleScope()
                 recomputeCalendarNeed()
+            }
+        }
+        scope.launch {
+            settings.syncSettings.collect {
+                myDeviceId = it.deviceId
+                recomputeRuleScope()
             }
         }
         scope.launch { rules.tagsByPackage.collect { tagCache = it } }
@@ -207,7 +235,27 @@ object DopaRuntime {
         scope.launch { settings.studyPrepMinutes.collect { studyWindows.prepMinutes = it } }
         scope.launch { settings.pointPolicy.collect { pointPolicy = it } }
         scope.launch { settings.focusSettings.collect { focusSettings = it } }
+        scope.launch { settings.focusSchedules.collect { focusSchedules = it } }
+        scope.launch { settings.focusScheduleRuns.collect { scheduleRuns = it } }
         scope.launch { settings.passUntilEpochSec.collect { passUntilSec = it } }
+    }
+
+    /** この端末の deviceId。同期を設定していなければ空。 */
+    @Volatile
+    var myDeviceId: String = ""
+        private set
+
+    /**
+     * この端末で評価に載せるルールだけ。
+     *
+     * 別の端末に向けて書かれたものは**載せません**。載せたうえで無視すると、
+     * 慣れの数え方や持ち時間の窓が端末ごとにずれます。[DeviceScope]
+     */
+    @Volatile
+    private var scopedRules: List<Rule> = emptyList()
+
+    private fun recomputeRuleScope() {
+        scopedRules = ruleCache.filter { it.appliesToDevice(myDeviceId) }
     }
 
     @Volatile
@@ -299,7 +347,11 @@ object DopaRuntime {
         minutesSinceBreakOf = { ruleId, breakMinutes -> minutesSinceBreak(ruleId, breakMinutes) },
         windowUsageOf = { ruleId, windowMinutes -> windowUsage(ruleId, windowMinutes) },
         minutesSinceLastUseOf = { ruleId -> minutesSinceLastUse(ruleId) },
-        withinReservation = reservations.covers(packageName, tagCache[packageName] ?: emptySet()),
+        withinReservation = reservations.covers(
+            packageName,
+            tagCache[packageName] ?: emptySet(),
+            deviceId = myDeviceId,
+        ),
         screenSignals = currentScreenSignals,
         overrideCountOf = { ruleId -> overrideCounts[ruleId] ?: 0 },
     )
@@ -350,7 +402,7 @@ object DopaRuntime {
         if (packageName in protectedApps) return Decision.Allow
         val nowSec = System.currentTimeMillis() / 1000
         return engine.decide(
-            rules = ruleCache,
+            rules = scopedRules,
             lockouts = lockouts.current(nowSec),
             ctx = buildContext(packageName, now),
             nowSec = nowSec,
@@ -466,7 +518,7 @@ object DopaRuntime {
      *
      * @return 始められたら true。すでに走っていれば false。
      */
-    fun startFocus(minutes: Int = focusSettings.defaultMinutes): Boolean {
+    fun startFocus(minutes: Int = focusSettings.defaultMinutes, label: String = ""): Boolean {
         if (!initialized) return false
         lockouts.startFocus(
             minutes = minutes,
@@ -474,6 +526,7 @@ object DopaRuntime {
             allowTags = focusSettings.allowTags,
             effort = focusSettings.abortEffort,
             abortPoints = if (pointPolicy.enabled) pointPolicy.focusAbortCost else 0,
+            label = label,
         ) ?: return false
         DopaAccessibilityService.kickEvaluation()
         return true
@@ -752,7 +805,244 @@ object DopaRuntime {
                 stats.updateTotalScreenMinutes(minutes)
             }
         }
+        syncIfDue()
+        startScheduledFocusIfDue()
         return if (batterySaverMode) SAVER_TICK_MS else ACTIVE_TICK_MS
+    }
+
+    // ---- 自分で始めなくても始まる集中 ----------------------------------
+
+    @Volatile
+    private var focusSchedules: List<FocusSchedule> = emptyList()
+
+    /**
+     * 予定された集中を、時間が来ていれば始める。
+     *
+     * ## なぜ [tick] から呼ぶのか
+     *
+     * 集中を**自分の起動に依存させない**のがこの機能の中身なので、画面を開いた
+     * ときではなく常駐の刻みから見ます。裏を返すと、**画面が消えているあいだは
+     * 始まりません** ── [tick] 自体が止まるためです。眺めていないなら
+     * 取り上げるものが無いので、それで構いません。
+     *
+     * ## 二度始めない
+     *
+     * 走らせた日を [SettingsStore.focusScheduleRuns] に書きます。これが無いと、
+     * 明けた瞬間にまた条件を満たして始まり、永久に閉まります。
+     * **書くのは実際に始められたときだけ**にしてあります ── 先に書いてしまうと、
+     * すでに別の集中が走っていて始められなかった日が「やった日」として潰れます。
+     */
+    private fun startScheduledFocusIfDue() {
+        val schedules = focusSchedules
+        if (schedules.isEmpty()) return
+        // すでに何か閉まっているなら足さない。集中の上に集中を重ねない
+        if (lockouts.current().isNotEmpty()) return
+
+        val now = now()
+        val today = now.toLocalDate()
+        val periodStartSec = ResetPolicy().periodStart(now)
+            .atZone(java.time.ZoneId.systemDefault()).toEpochSecond()
+        val firstTouchMinute = usage.firstUseSecSince(periodStartSec)?.let { sec ->
+            val at = LocalDateTime.ofInstant(
+                java.time.Instant.ofEpochSecond(sec),
+                java.time.ZoneId.systemDefault(),
+            )
+            at.hour * 60 + at.minute
+        }
+
+        val due = schedules.firstOrNull {
+            FocusSchedules.isDue(it, now, firstTouchMinute, scheduleRuns[it.uid]?.let(LocalDate::parse))
+        } ?: return
+
+        val started = startFocus(due.minutes, label = due.stepFor(today).ifBlank { due.label + "の集中" })
+        if (!started) return
+
+        scope.launch {
+            val next = scheduleRuns + (due.uid to today.toString())
+            scheduleRuns = next
+            settings.setFocusScheduleRuns(next)
+        }
+    }
+
+    /** 予定ごとの「最後に走らせた日」。判定から同期的に読むのでキャッシュする。 */
+    @Volatile
+    private var scheduleRuns: Map<String, String> = emptyMap()
+
+    // ---- 端末をまたいだ頼みごと ----------------------------------------
+
+    @Volatile
+    private var lastSyncAtMs: Long = 0L
+
+    /**
+     * 自動同期。常駐の刻みに相乗りします。
+     *
+     * これが無いと、端末をまたいだ頼みごとは**設定画面のボタンを押すまで届きません**。
+     * WorkManager を足さないのは、常駐サービスがもう回っているから ── 依存を1つ
+     * 増やすより、いまある刻みの裏に乗せるほうが壊れる場所が少ない。
+     *
+     * 画面が消えているあいだは [tick] 自体が呼ばれないので、ここも止まります。
+     * スマホは主に**頼む側**なので、受け取りが遅れても困りません。
+     */
+    private fun syncIfDue() {
+        val now = System.currentTimeMillis()
+        if (now - lastSyncAtMs < SYNC_EVERY_MS) return
+        lastSyncAtMs = now
+        scope.launch {
+            val settings = this@DopaRuntime.settings.syncSettings.first()
+            if (!settings.enabled || !settings.isConfigured) return@launch
+            runCatching { sync.syncNow() }
+            runInbox()
+        }
+    }
+
+    /** 名簿。画面で相手を選ぶために使う。 */
+    val devices: Flow<List<DeviceInfo>> get() = settings.devices
+
+    /** 出したもの・受け取ったものの一覧。 */
+    val commands: Flow<List<Command>> get() = settings.commands
+
+    /**
+     * 別の端末に頼む。**積むだけで、実行はしません。**
+     *
+     * 積んだ直後に同期を回します ── 押してから刻み1回ぶん待たされると、
+     * 「効かない」と思ってもう一度押すことになります。
+     */
+    suspend fun requestOnDevice(
+        to: String,
+        kind: String,
+        params: Params = Params.EMPTY,
+        reason: String = "",
+    ): Command {
+        val nowSec = System.currentTimeMillis() / 1000
+        val command = Command(
+            uid = UUID.randomUUID().toString(),
+            to = to,
+            from = myDeviceId,
+            kind = kind,
+            params = params,
+            reason = reason,
+            issuedAtSec = nowSec,
+            expiresAtSec = nowSec + if (CommandKind.loosens(kind)) {
+                Commands.LOOSEN_TTL_SEC
+            } else {
+                Commands.TIGHTEN_TTL_SEC
+            },
+        )
+        putCommand(command)
+        scope.launch { runCatching { sync.syncNow() } }
+        return command
+    }
+
+    /** 出した頼みを取り下げる。相手がまだ実行していなければ効く。 */
+    suspend fun cancelCommand(uid: String) {
+        val command = settings.commands.first().firstOrNull { it.uid == uid } ?: return
+        if (!command.isOpen) return
+        putCommand(
+            command.copy(
+                state = CommandState.CANCELLED,
+                handledAtSec = System.currentTimeMillis() / 1000,
+            ),
+        )
+        scope.launch { runCatching { sync.syncNow() } }
+    }
+
+    /**
+     * 届いた頼みごとを捌く。
+     *
+     * 通すかどうかの判断は core の [Commands.triage] に1つだけ置いてあります ──
+     * Windows と別々に書くと、かたや関門を通しかたや素通し、が必ず起きます。
+     * ここがやるのは、通ったものを **Android のやり方で実行すること**だけ。
+     */
+    suspend fun runInbox() {
+        val me = myDeviceId
+        if (me.isBlank()) return
+        val nowSec = System.currentTimeMillis() / 1000
+        var changed = false
+
+        for (command in settings.commands.first()) {
+            when (val verdict = Commands.triage(command, me, gateCache, nowSec)) {
+                is CommandVerdict.Ignore -> Unit
+
+                is CommandVerdict.Drop -> {
+                    putCommand(
+                        command.copy(state = verdict.state, note = verdict.note, handledAtSec = nowSec),
+                    )
+                    changed = true
+                }
+
+                is CommandVerdict.Wait -> {
+                    val note = "あと: " + verdict.describe()
+                    // 受け取った時刻はクールダウンの起点なので、一度書いたら上書きしない
+                    if (command.state == CommandState.PENDING) {
+                        putCommand(
+                            command.copy(
+                                state = CommandState.ACCEPTED,
+                                acceptedAtSec = nowSec,
+                                note = note,
+                            ),
+                        )
+                        changed = true
+                    } else if (command.note != note) {
+                        putCommand(command.copy(note = note))
+                        changed = true
+                    }
+                }
+
+                is CommandVerdict.Run -> {
+                    val note = execute(command)
+                    putCommand(
+                        command.copy(
+                            state = if (note.startsWith("×")) CommandState.REFUSED else CommandState.DONE,
+                            note = note,
+                            handledAtSec = nowSec,
+                        ),
+                    )
+                    changed = true
+                }
+            }
+        }
+
+        // 答えを返す。返さないと、送った側はいつまでも「届けています」のまま
+        if (changed) runCatching { sync.syncNow() }
+    }
+
+    /** 実行そのもの。Android のやり方。頭に × を付けると断ったことになる。 */
+    private suspend fun execute(command: Command): String = when (command.kind) {
+        CommandKind.FOCUS_START, CommandKind.LOCK_NOW -> {
+            val minutes = command.params.int(CommandKind.KEY_MINUTES, 25)
+            if (startFocus(minutes)) "${minutes}分の集中を始めました" else "×すでに集中しています"
+        }
+
+        CommandKind.RULE_ENABLE, CommandKind.RULE_DISABLE -> {
+            val uid = command.params.string(CommandKind.KEY_RULE_UID)
+            val rule = rules.getAll().firstOrNull { it.uid == uid }
+            if (rule == null) {
+                "×そのルールがこの端末にありません"
+            } else {
+                val on = command.kind == CommandKind.RULE_ENABLE
+                rules.setEnabled(rule.id, on)
+                "「${rule.name}」を" + (if (on) "有効にしました" else "止めました")
+            }
+        }
+
+        CommandKind.UNLOCK -> {
+            val count = lockouts.clearAll()
+            if (count == 0) "閉まっているものはありませんでした" else "${count}件を開けました"
+        }
+
+        CommandKind.PASS -> {
+            val minutes = command.params.int(CommandKind.KEY_MINUTES, 15)
+            settings.setPassUntil(System.currentTimeMillis() / 1000 + minutes * 60L)
+            "${minutes}分の解禁券を使いました"
+        }
+
+        else -> "×知らない頼みです(${command.kind})"
+    }
+
+    private suspend fun putCommand(command: Command) {
+        val list = settings.commands.first()
+        settings.setCommands(list.filterNot { it.uid == command.uid } + command)
+        sync.touch(SyncKinds.COMMANDS, command.uid)
     }
 
     /** 学習予定を完走していたら加点する。中断したものは対象外。 */
@@ -807,6 +1097,14 @@ object DopaRuntime {
     }
 
     private const val ACTIVE_TICK_MS = 60_000L
+    /**
+     * 自動同期の間隔。
+     *
+     * Windows(1分)より長いのは、スマホが主に**頼む側**だから ── 受け取りが
+     * 数分遅れても困らず、通信と電池のほうが惜しい。頼んだ瞬間には別途すぐ送ります。
+     */
+    private const val SYNC_EVERY_MS = 5L * 60 * 1000
+
     private const val SAVER_TICK_MS = 180_000L
     private const val IDLE_TICK_MS = 600_000L
     private const val CALENDAR_ACTIVE_MS = 5 * 60_000L

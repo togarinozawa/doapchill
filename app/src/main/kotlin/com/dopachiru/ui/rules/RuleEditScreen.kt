@@ -60,6 +60,7 @@ import com.dopachiru.core.gate.ChangeKind
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.ConditionTree
 import com.dopachiru.core.model.Consequence
+import com.dopachiru.core.sync.DeviceInfo
 import com.dopachiru.core.model.RuleCheck
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.model.RulePhrase
@@ -109,6 +110,13 @@ data class RuleEditState(
     val pointPolicy: PointPolicy = PointPolicy.DEFAULT,
     val availableTags: List<String> = emptyList(),
     val mode: TargetMode = TargetMode.APPS,
+
+    /** どの端末で効かせるか。空ならどの端末でも。 */
+    val devices: Set<String> = emptySet(),
+    /** 選べる端末の名簿。同期を設定していなければ空で、欄ごと出さない。 */
+    val knownDevices: List<DeviceInfo> = emptyList(),
+    /** この端末の deviceId。名簿に「この端末」と出すため。 */
+    val myDeviceId: String = "",
     /** いま何番目の段にいるか。0=何を 1=いつ 2=どうする */
     val step: Int = 0,
     val loaded: Boolean = false,
@@ -149,9 +157,19 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val tags = DopaRuntime.rules.tags.first()
             val policy = DopaRuntime.settings.pointPolicy.first()
+            val roster = DopaRuntime.devices.first()
+            val me = DopaRuntime.myDeviceId
             val rule = if (ruleId == 0L) null else DopaRuntime.rules.getById(ruleId)
             if (rule == null) {
-                _state.update { it.copy(availableTags = tags, pointPolicy = policy, loaded = true) }
+                _state.update {
+                    it.copy(
+                        availableTags = tags,
+                        pointPolicy = policy,
+                        knownDevices = roster,
+                        myDeviceId = me,
+                        loaded = true,
+                    )
+                }
                 return@launch
             }
             _state.value = RuleEditState(
@@ -170,6 +188,9 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
                 consequence = rule.consequence,
                 pointPolicy = policy,
                 availableTags = tags,
+                devices = rule.devices,
+                knownDevices = roster,
+                myDeviceId = me,
                 mode = when {
                     rule.target.matchAll -> TargetMode.ALL
                     rule.target.sites.isNotEmpty() && rule.target.packages.isEmpty() -> TargetMode.SITES
@@ -181,6 +202,15 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setName(value: String) = _state.update { it.copy(name = value) }
+
+    /** どの端末で効かせるか。空にすると「すべての端末」に戻る。 */
+    fun toggleDevice(deviceId: String) = _state.update {
+        it.copy(
+            devices = if (deviceId in it.devices) it.devices - deviceId else it.devices + deviceId,
+        )
+    }
+
+    fun setEverywhere() = _state.update { it.copy(devices = emptySet()) }
 
     fun setStep(step: Int) = _state.update { it.copy(step = step.coerceIn(0, LAST_STEP)) }
 
@@ -276,6 +306,7 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
                 actionId = current.actionId,
                 actionParams = current.actionParams,
                 consequence = current.consequence,
+                devices = current.devices,
             )
             val isNew = current.id == 0L
             val gates = if (isNew) emptyList() else DopaRuntime.settings.gates.first()
@@ -451,6 +482,48 @@ private fun BottomBar(
 
 // ---- 1. 何を -----------------------------------------------------------
 
+/**
+ * 「どの端末で効かせるか」。
+ *
+ * 同期を設定していなければ**欄ごと出しません** ── 端末が1台しかない人に
+ * 端末の話をさせない。名簿は同期で届くので、届いていなければ選びようもない。
+ */
+@Composable
+private fun DeviceScopeSection(state: RuleEditState, viewModel: RuleEditViewModel) {
+    if (state.knownDevices.size < 2) return
+
+    Text("どの端末で", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+    Spacer(Modifier.height(6.dp))
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = state.devices.isEmpty(),
+            onClick = viewModel::setEverywhere,
+            label = { Text("すべての端末") },
+        )
+        state.knownDevices.forEach { device ->
+            FilterChip(
+                selected = device.deviceId in state.devices,
+                onClick = { viewModel.toggleDevice(device.deviceId) },
+                label = {
+                    Text(
+                        device.displayName +
+                            if (device.deviceId == state.myDeviceId) "(この端末)" else "",
+                    )
+                },
+            )
+        }
+    }
+    if (state.devices.isNotEmpty() && state.myDeviceId !in state.devices) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "このルールはこの端末では効きません。名簿に入れた端末にだけかかります。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    Spacer(Modifier.height(20.dp))
+}
+
 @Composable
 private fun TargetStep(
     state: RuleEditState,
@@ -462,6 +535,8 @@ private fun TargetStep(
 
     Text("何を止めますか", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
     Spacer(Modifier.height(12.dp))
+
+    DeviceScopeSection(state, viewModel)
 
     TargetMode.entries.forEach { mode ->
         ModeCard(mode = mode, selected = state.mode == mode, onClick = { viewModel.setMode(mode) })

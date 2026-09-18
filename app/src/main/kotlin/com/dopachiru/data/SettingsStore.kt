@@ -11,15 +11,21 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.dopachiru.core.DopaCore
 import com.dopachiru.core.gate.Gate
+import com.dopachiru.core.model.Command
+import com.dopachiru.core.model.FocusSchedule
+import com.dopachiru.core.model.FocusSchedules
 import com.dopachiru.core.model.FocusSettings
 import com.dopachiru.core.model.Reservation
 import com.dopachiru.core.model.ReservationRules
 import com.dopachiru.core.points.PointPolicy
+import com.dopachiru.core.sync.DeviceInfo
 import com.dopachiru.core.sync.SyncSettings
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import java.security.SecureRandom
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
@@ -52,6 +58,11 @@ class SettingsStore(private val context: Context) {
         val focusSettingsJson = stringPreferencesKey("focus_settings_json")
         val syncSettingsJson = stringPreferencesKey("sync_settings_json")
         val reservationsJson = stringPreferencesKey("reservations_json")
+        val deviceName = stringPreferencesKey("device_name")
+        val devicesJson = stringPreferencesKey("devices_json")
+        val commandsJson = stringPreferencesKey("commands_json")
+        val focusSchedulesJson = stringPreferencesKey("focus_schedules_json")
+        val focusScheduleRunsJson = stringPreferencesKey("focus_schedule_runs_json")
         val reservationLeadMinutes = intPreferencesKey("reservation_lead_minutes")
     }
 
@@ -189,6 +200,93 @@ class SettingsStore(private val context: Context) {
     suspend fun setReservations(list: List<Reservation>) {
         val encoded = DopaCore.json.encodeToString(ListSerializer(Reservation.serializer()), list)
         context.dataStore.edit { it[Keys.reservationsJson] = encoded }
+    }
+
+    /**
+     * 名簿に出すこの端末の名前。空なら deviceId がそのまま出る。
+     *
+     * deviceId と分けてあるのは、**deviceId を変えると実績の見出しが切れる**ため。
+     * 呼び名を変えたいだけのときに過去の記録を捨てさせない。
+     */
+    val deviceName: Flow<String> = context.dataStore.data.map { it[Keys.deviceName] ?: "" }
+
+    suspend fun setDeviceName(name: String) {
+        context.dataStore.edit { it[Keys.deviceName] = name.trim().take(40) }
+    }
+
+    /**
+     * 端末の名簿。同期のたびに入れ替わる、ただの控え。
+     *
+     * 消えても次の同期でまた届くので、Room の表にするほどのものではない。
+     */
+    val devices: Flow<List<DeviceInfo>> = context.dataStore.data.map { prefs ->
+        val raw = prefs[Keys.devicesJson] ?: return@map emptyList()
+        runCatching {
+            DopaCore.json.decodeFromString(ListSerializer(DeviceInfo.serializer()), raw)
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun setDevices(list: List<DeviceInfo>) {
+        val encoded = DopaCore.json.encodeToString(ListSerializer(DeviceInfo.serializer()), list)
+        context.dataStore.edit { it[Keys.devicesJson] = encoded }
+    }
+
+    /** 端末をまたいだ頼みごと。出したものと受け取ったものの両方。 */
+    val commands: Flow<List<Command>> = context.dataStore.data.map { prefs ->
+        val raw = prefs[Keys.commandsJson] ?: return@map emptyList()
+        runCatching {
+            DopaCore.json.decodeFromString(ListSerializer(Command.serializer()), raw)
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun setCommands(list: List<Command>) {
+        val encoded = DopaCore.json.encodeToString(ListSerializer(Command.serializer()), list)
+        context.dataStore.edit { it[Keys.commandsJson] = encoded }
+    }
+
+    /**
+     * 自分で始めなくても始まる集中の予定。
+     *
+     * 起動の手間がかかる道具は、起動の手間を払えないときにちょうど効かない ──
+     * その穴を埋めるためのもの。[com.dopachiru.core.model.FocusSchedule]
+     */
+    val focusSchedules: Flow<List<FocusSchedule>> = context.dataStore.data.map { prefs ->
+        val raw = prefs[Keys.focusSchedulesJson] ?: return@map emptyList()
+        runCatching {
+            DopaCore.json.decodeFromString(ListSerializer(FocusSchedule.serializer()), raw)
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun setFocusSchedules(list: List<FocusSchedule>) {
+        val encoded = DopaCore.json.encodeToString(
+            ListSerializer(FocusSchedule.serializer()),
+            list.take(FocusSchedules.MAX),
+        )
+        context.dataStore.edit { it[Keys.focusSchedulesJson] = encoded }
+    }
+
+    /**
+     * 予定ごとに、最後に走らせた日(`uid` → `yyyy-MM-dd`)。
+     *
+     * **同じ日に二度始めないための鍵**です。これが無いと、集中が明けた瞬間に
+     * また始まって永久に閉まります ── 出口の無い封鎖は事故です。
+     */
+    val focusScheduleRuns: Flow<Map<String, String>> = context.dataStore.data.map { prefs ->
+        val raw = prefs[Keys.focusScheduleRunsJson] ?: return@map emptyMap()
+        runCatching {
+            DopaCore.json.decodeFromString(
+                MapSerializer(String.serializer(), String.serializer()),
+                raw,
+            )
+        }.getOrDefault(emptyMap())
+    }
+
+    suspend fun setFocusScheduleRuns(runs: Map<String, String>) {
+        val encoded = DopaCore.json.encodeToString(
+            MapSerializer(String.serializer(), String.serializer()),
+            runs,
+        )
+        context.dataStore.edit { it[Keys.focusScheduleRunsJson] = encoded }
     }
 
     /** 予約をいまから何分先からしか取れないか。直前予約を封じる待ち。 */

@@ -317,7 +317,11 @@ fun SettingsPageScreen(
             item {
                 when (page) {
                     SettingsPage.Required -> RequiredSection()
-                    SettingsPage.Focus -> FocusCard()
+                    SettingsPage.Focus -> {
+                        FocusCard()
+                        Spacer(Modifier.height(16.dp))
+                        FocusScheduleCard()
+                    }
                     SettingsPage.Guard -> GuardSection(viewModel)
                     SettingsPage.Screen -> ScreenSection(viewModel)
                     SettingsPage.Sync -> SyncCard()

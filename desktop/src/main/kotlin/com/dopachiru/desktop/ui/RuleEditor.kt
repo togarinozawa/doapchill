@@ -85,6 +85,51 @@ fun RuleEditorDialog(
                     onChange = { draft = draft.copy(target = it) },
                 )
 
+                // どの端末で効かせるか。端末が2台以上あるときだけ聞く ──
+                // 1台しかない人に端末の話をさせない
+                val roster = DesktopRuntime.ruleFile.collectAsState().value.devices
+                val me = DesktopRuntime.myDeviceId()
+                if (roster.size >= 2) {
+                    Spacer(Modifier.height(16.dp))
+                    Text("どの端末で", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.height(4.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = draft.devices.isEmpty(),
+                            onClick = { draft = draft.copy(devices = emptySet()) },
+                            label = { Text("すべての端末") },
+                        )
+                        roster.sortedBy { it.displayName }.forEach { device ->
+                            FilterChip(
+                                selected = device.deviceId in draft.devices,
+                                onClick = {
+                                    draft = draft.copy(
+                                        devices = if (device.deviceId in draft.devices) {
+                                            draft.devices - device.deviceId
+                                        } else {
+                                            draft.devices + device.deviceId
+                                        },
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        device.displayName +
+                                            if (device.deviceId == me) "(この端末)" else "",
+                                    )
+                                },
+                            )
+                        }
+                    }
+                    if (draft.devices.isNotEmpty() && me !in draft.devices) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "このルールはこの端末では効きません。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
                 Spacer(Modifier.height(20.dp))
                 HorizontalDivider()
                 Spacer(Modifier.height(20.dp))

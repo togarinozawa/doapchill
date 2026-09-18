@@ -202,6 +202,20 @@ class UsageTracker(
         }
     }
 
+    /**
+     * その日はじめて端末に触った時刻。まだ触っていなければ null。
+     *
+     * 「起きてから◯分後に集中を始める」の起点。**起床時刻そのものは測れません**が、
+     * 寝ているあいだは何も開かないので、日付が変わってから最初に開いたアプリが
+     * 実用上そこに当たります。画面を点けただけで何も開かなかったぶんは数えませんが、
+     * それは**眺めてもいない**ということなので、取り上げるものが無くて構いません。
+     *
+     * @param fromSec その日の始まり([com.dopachiru.core.time.ResetPolicy] の区切り)。
+     */
+    fun firstUseSecSince(fromSec: Long): Long? = synchronized(lock) {
+        sessions.filter { it.startSec >= fromSec }.minOfOrNull { it.startSec }
+    }
+
     /** いま開いているセッションを識別する種。開くたびに変わる。 */
     fun currentSessionSeed(): Long = synchronized(lock) { current?.startSec ?: 0L }
 

@@ -21,6 +21,11 @@ import com.dopachiru.core.io.RuleBundleIo
 import com.dopachiru.core.action.types.IntentionAction
 import com.dopachiru.core.action.types.LockoutAction
 import com.dopachiru.core.action.types.RadioAction
+import com.dopachiru.core.model.Command
+import com.dopachiru.core.model.CommandKind
+import com.dopachiru.core.model.CommandState
+import com.dopachiru.core.model.CommandVerdict
+import com.dopachiru.core.model.Commands
 import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.Focus
 import com.dopachiru.core.model.Lockout
@@ -28,6 +33,7 @@ import com.dopachiru.core.model.Lockouts
 import com.dopachiru.core.model.Reservation
 import com.dopachiru.core.model.Reservations
 import com.dopachiru.core.model.Rule
+import com.dopachiru.core.param.Params
 import com.dopachiru.core.points.PointEvent
 import com.dopachiru.core.points.PointReason
 import com.dopachiru.core.time.ResetPolicy
@@ -52,9 +58,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import com.dopachiru.core.sync.DeviceInfo
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -403,6 +413,13 @@ object DesktopRuntime {
 
         scope.launch { watchLoop() }
         scope.launch { persistLoop() }
+        startSyncLoop()
+
+        // 立ち上げ直後に1回。PC を開いた瞬間に、寝ているあいだの頼みごとが届く
+        scope.launch {
+            val sync = _settings.value.sync
+            if (sync.enabled && sync.isConfigured) runCatching { syncNow() }
+        }
     }
 
     private fun nowSec(): Long = System.currentTimeMillis() / 1000
@@ -453,6 +470,16 @@ object DesktopRuntime {
             nextId = file.nextId + 1,
         ).stamped(uid)
     }
+
+    /**
+     * まるごと写して1本増やす。
+     *
+     * 同期でルールは全端末に配られるので、**端末ごとに違う中身にしたいときは
+     * 2本に分ける**しかありません。そのための複製です。番号と uid は
+     * [addRule] が新しく振ります ── 引き継ぐと、写した先が元を上書きします。
+     */
+    fun duplicateRule(rule: Rule) =
+        addRule(rule.copy(id = 0L, uid = "", name = rule.name + "(写し)"))
 
     /**
      * ルールを消す。
@@ -641,16 +668,224 @@ object DesktopRuntime {
                 ),
             )
         }
-        return DesktopSync.run(
+        val outcome = DesktopSync.run(
             file = _ruleFile.value,
+            reservations = _reservations.value,
             settings = _settings.value.sync,
             usage = usage,
+            selfName = _settings.value.deviceName,
+            selfVersion = AppVersion.CURRENT,
             onApply = { updated ->
                 _ruleFile.value = updated
                 Stores.rules.save(updated)
             },
+            onReservations = { updated ->
+                _reservations.value = updated
+                Stores.reservations.save(updated)
+            },
             onSettings = { next -> updateSettings { it.copy(sync = next) } },
         )
+        // 届いた頼みごとをここで捌く。同期の直後にやらないと、次の巡回まで
+        // 「送ったのに何も起きない」時間ができる
+        if (outcome is DesktopSync.Outcome.Done) runInbox()
+        return outcome
+    }
+
+    /**
+     * 自動同期。設定してあれば [SYNC_EVERY_MS] ごとに勝手に回ります。
+     *
+     * これが無いと、端末をまたいだ頼みごとは**設定画面のボタンを押すまで届きません**。
+     * Windows は常駐しているので、素直な繰り返しで足ります。
+     */
+    private fun startSyncLoop() = scope.launch {
+        while (isActive) {
+            delay(SYNC_EVERY_MS)
+            val sync = _settings.value.sync
+            if (!sync.enabled || !sync.isConfigured) continue
+            runCatching { syncNow() }
+        }
+    }
+
+    // ---- 端末をまたいだ頼みごと ----------------------------------------
+
+    /** 名簿。自分を含む。最後に同期した順ではなく、名前順で安定させる。 */
+    val devices: StateFlow<List<DeviceInfo>> = _ruleFile
+        .map { file -> file.devices.sortedBy { it.displayName } }
+        .stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    /** この端末の deviceId。同期を設定していなければ空。 */
+    fun myDeviceId(): String = _settings.value.sync.deviceId
+
+    /** 名簿に出す呼び名。deviceId とは別物(変えても実績の見出しは切れない)。 */
+    fun setDeviceName(name: String) {
+        updateSettings { it.copy(deviceName = name.trim().take(40)) }
+        syncInBackground()
+    }
+
+    /** 画面の「いま同期する」。待たせないよう裏で回す。 */
+    fun syncInBackground() = scope.launch { runCatching { syncNow() } }
+
+    /**
+     * 別の端末に頼む。**積むだけで、実行はしません。**
+     *
+     * 積んだ直後に同期を回します ── 押してから最大で巡回1回ぶん待たされると、
+     * 「効かない」と思ってもう一度押すことになります。
+     */
+    fun requestOnDevice(
+        to: String,
+        kind: String,
+        params: Params = Params.EMPTY,
+        reason: String = "",
+    ): Command {
+        val now = nowSec()
+        val command = Command(
+            uid = java.util.UUID.randomUUID().toString(),
+            to = to,
+            from = myDeviceId(),
+            kind = kind,
+            params = params,
+            reason = reason,
+            issuedAtSec = now,
+            expiresAtSec = now + if (CommandKind.loosens(kind)) {
+                Commands.LOOSEN_TTL_SEC
+            } else {
+                Commands.TIGHTEN_TTL_SEC
+            },
+        )
+        putCommand(command)
+        scope.launch { runCatching { syncNow() } }
+        return command
+    }
+
+    /** 出した頼みを取り下げる。まだ相手が実行していなければ効く。 */
+    fun cancelCommand(uid: String) {
+        val command = _ruleFile.value.commands.firstOrNull { it.uid == uid } ?: return
+        if (!command.isOpen) return
+        putCommand(command.copy(state = CommandState.CANCELLED, handledAtSec = nowSec()))
+        scope.launch { runCatching { syncNow() } }
+    }
+
+    /**
+     * 届いた頼みごとを捌く。
+     *
+     * 通すかどうかの判断は core の [Commands.triage] に1つだけ置いてあります ──
+     * Android と別々に書くと、かたや関門を通しかたや素通し、が必ず起きます。
+     * ここがやるのは、通ったものを **Windows のやり方で実行すること**だけ。
+     */
+    @Synchronized
+    fun runInbox() {
+        val me = myDeviceId()
+        if (me.isBlank()) return
+        val now = nowSec()
+        val gates = _settings.value.gates
+        var changed = false
+
+        for (command in _ruleFile.value.commands.toList()) {
+            when (val verdict = Commands.triage(command, me, gates, now)) {
+                is CommandVerdict.Ignore -> Unit
+
+                is CommandVerdict.Drop -> {
+                    putCommand(
+                        command.copy(
+                            state = verdict.state,
+                            note = verdict.note,
+                            handledAtSec = now,
+                        ),
+                    )
+                    changed = true
+                }
+
+                is CommandVerdict.Wait -> {
+                    // 受け取ったことだけ書き戻す。クールダウンの起点になるので、
+                    // 一度書いたら上書きしない
+                    if (command.state == CommandState.PENDING) {
+                        putCommand(
+                            command.copy(
+                                state = CommandState.ACCEPTED,
+                                acceptedAtSec = now,
+                                note = "あと: " + verdict.describe(),
+                            ),
+                        )
+                        changed = true
+                    } else if (command.note != "あと: " + verdict.describe()) {
+                        putCommand(command.copy(note = "あと: " + verdict.describe()))
+                        changed = true
+                    }
+                }
+
+                is CommandVerdict.Run -> {
+                    val note = execute(command)
+                    putCommand(
+                        command.copy(
+                            state = if (note.startsWith("×")) CommandState.REFUSED else CommandState.DONE,
+                            note = note,
+                            handledAtSec = now,
+                        ),
+                    )
+                    changed = true
+                }
+            }
+        }
+
+        // 答えを相手に返す。返さないと、送った側はいつまでも「届けています」のまま
+        if (changed) scope.launch { runCatching { syncNow() } }
+    }
+
+    /** 実行そのもの。Windows のやり方。頭に × を付けると断ったことになる。 */
+    private fun execute(command: Command): String = when (command.kind) {
+        CommandKind.FOCUS_START -> {
+            val minutes = command.params.int(CommandKind.KEY_MINUTES, 25)
+            startFocus(minutes)
+            "${minutes}分の集中を始めました"
+        }
+
+        CommandKind.LOCK_NOW -> {
+            val minutes = command.params.int(CommandKind.KEY_MINUTES, 30)
+            startFocus(minutes)
+            "${minutes}分閉め出しました"
+        }
+
+        CommandKind.RULE_ENABLE, CommandKind.RULE_DISABLE -> {
+            val uid = command.params.string(CommandKind.KEY_RULE_UID)
+            val rule = _ruleFile.value.rules.firstOrNull { it.uid == uid }
+            if (rule == null) {
+                "×そのルールがこの端末にありません"
+            } else {
+                val on = command.kind == CommandKind.RULE_ENABLE
+                setRuleEnabled(rule.id, on)
+                "「${rule.name}」を" + (if (on) "有効にしました" else "止めました")
+            }
+        }
+
+        CommandKind.UNLOCK -> {
+            val count = _lockouts.value.size
+            if (count == 0) {
+                "閉まっているものはありませんでした"
+            } else {
+                _lockouts.value = emptyList()
+                Stores.lockouts.save(emptyList())
+                evaluate(_foreground.value)
+                "${count}件を開けました"
+            }
+        }
+
+        CommandKind.PASS -> {
+            val minutes = command.params.int(CommandKind.KEY_MINUTES, 15)
+            updateSettings { it.copy(passUntilSec = nowSec() + minutes * 60L) }
+            evaluate(_foreground.value)
+            "${minutes}分の解禁券を使いました"
+        }
+
+        else -> "×知らない頼みです(${command.kind})"
+    }
+
+    private fun putCommand(command: Command) {
+        val file = _ruleFile.value
+        val next = file.copy(
+            commands = file.commands.filterNot { it.uid == command.uid } + command,
+        ).withStamp(SyncKinds.COMMANDS, command.uid, SyncStamp(nowSec(), false))
+        _ruleFile.value = next
+        Stores.rules.save(next)
     }
 
     // ---- 持ち出しと取り込み --------------------------------------------
@@ -1253,6 +1488,7 @@ object DesktopRuntime {
                 file.tags[fg.processName] ?: emptySet(),
                 nowSec,
                 url,
+                deviceId = myDeviceId(),
             ),
             // Windows にはアプリ内の画面を見分ける手立てが無い。ブラウザのショートは
             // sites(URL)側で当たるので、ここは空でよい
@@ -1260,7 +1496,12 @@ object DesktopRuntime {
             overrideCountOf = { ruleId -> overrideCounts[ruleId] ?: 0 },
         )
 
-        when (val decision = engine.decide(file.rules, context) { file.tags[it] ?: emptySet() }) {
+        // 別の端末に向けて書かれたルールは、評価に**載せない**。載せたうえで
+        // 無視すると、慣れの数え方や持ち時間の窓が端末ごとにずれる
+        val me = myDeviceId()
+        val mine = file.rules.filter { it.appliesToDevice(me) }
+
+        when (val decision = engine.decide(mine, context) { file.tags[it] ?: emptySet() }) {
             is Decision.Allow -> {
                 if (_presentation.value != null) {
                     _presentation.value = null
@@ -1685,4 +1926,13 @@ object DesktopRuntime {
      * 迷ったら**本体が覆う**ほうへ倒すため、[URL_STALE_MS] より短くしてある。
      */
     private const val EXTENSION_ALIVE_MS = 90_000L
+
+    /**
+     * 自動同期の間隔。
+     *
+     * 遠隔の頼みごとが届くまでの待ちが、そのままこの長さになります。
+     * 「いま PC を閉め出して」が5分後に効くのでは頼む気にならないので短くしてあります。
+     * Cloudflare の無料枠(1日10万読み)に対して、1分ごとでも1日1440回。桁が2つ違います。
+     */
+    private const val SYNC_EVERY_MS = 60_000L
 }

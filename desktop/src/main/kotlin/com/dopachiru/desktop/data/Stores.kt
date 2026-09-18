@@ -2,8 +2,10 @@ package com.dopachiru.desktop.data
 
 import com.dopachiru.core.gate.ChangeRequest
 import com.dopachiru.core.gate.Gate
+import com.dopachiru.core.model.Command
 import com.dopachiru.core.model.FocusSettings
 import com.dopachiru.core.model.Lockout
+import com.dopachiru.core.sync.DeviceInfo
 import com.dopachiru.core.sync.SyncSettings
 import com.dopachiru.core.model.Reservation
 import com.dopachiru.core.model.Rule
@@ -57,6 +59,14 @@ data class DesktopSettings(
     /** 端末間の同期。既定では切ってある。 */
     val sync: SyncSettings = SyncSettings(),
 
+    /**
+     * 名簿に出すこの端末の名前。空なら deviceId がそのまま出る。
+     *
+     * deviceId と分けてあるのは、**deviceId を変えると実績の見出しが切れる**ため。
+     * 呼び名を変えたいだけのときに過去の記録を捨てさせない。
+     */
+    val deviceName: String = "",
+
     /** 予約をいまから何分先からしか取れないか。直前予約を封じる待ち。 */
     val reservationLeadMinutes: Int = com.dopachiru.core.model.ReservationRules.MIN_LEAD_MINUTES,
 
@@ -86,6 +96,22 @@ data class RuleFile(
      */
     val changeRequests: List<ChangeRequest> = emptyList(),
     val nextChangeId: Long = 1L,
+
+    /**
+     * 他の端末の名簿。同期のたびに入れ替わる。
+     *
+     * 自分の行もここに入れる ── 名前を付け替えたときに送る元が要るのと、
+     * 画面で「この端末」を他と同じ形で見せるため。
+     */
+    val devices: List<DeviceInfo> = emptyList(),
+
+    /**
+     * 端末をまたいだ頼みごと。出したものと、受け取ったものの両方。
+     *
+     * 済んだものも少しのあいだ残す ── 送った側の画面に「済み」を出すため。
+     * 掃除は [DesktopSync] が期限で落とす。
+     */
+    val commands: List<Command> = emptyList(),
 
     /**
      * 同期の覚え書き。Android の `sync_state` 表にあたるもの。

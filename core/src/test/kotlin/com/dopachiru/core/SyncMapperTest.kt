@@ -1,11 +1,16 @@
 package com.dopachiru.core
 
 import com.dopachiru.core.action.types.BlockAction
+import com.dopachiru.core.model.Command
+import com.dopachiru.core.model.CommandKind
+import com.dopachiru.core.model.CommandState
 import com.dopachiru.core.model.ConditionNode
+import com.dopachiru.core.model.Reservation
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.model.Target
 import com.dopachiru.core.param.Params
 import com.dopachiru.core.sync.AppInfo
+import com.dopachiru.core.sync.DeviceInfo
 import com.dopachiru.core.sync.Envelope
 import com.dopachiru.core.sync.MergeAction
 import com.dopachiru.core.sync.SyncMapper
@@ -143,5 +148,82 @@ class SyncMapperTest {
             MergeAction.Skip,
             decideMerge(Envelope("u1", 50, deleted = true), localUpdatedAt = 100),
         )
+    }
+
+    // ---- 端末の名簿・予約・頼みごと ---------------------------------------
+
+    @Test
+    fun `端末の名簿が往復する`() {
+        val info = DeviceInfo(
+            deviceId = "pc",
+            name = "しごと用",
+            platform = AppInfo.WINDOWS,
+            version = "1.13.0",
+            lastSeenSec = 1_700_000_000,
+        )
+        val back = SyncMapper.deviceOf(SyncMapper.deviceEnvelope(info, 100))
+        assertEquals(info, back)
+    }
+
+    @Test
+    fun `予約が往復する。端末の指定も運ぶ`() {
+        val reservation = Reservation(
+            id = 9L,
+            uid = "r1",
+            target = Target(packages = setOf("chrome.exe")),
+            startEpochSec = 1_700_000_000,
+            endEpochSec = 1_700_003_600,
+            note = "調べ物",
+            devices = setOf("pc"),
+        )
+        val back = SyncMapper.reservationOf(SyncMapper.reservationEnvelope(reservation, 100))
+        assertNotNull(back)
+        assertEquals(setOf("pc"), back.devices)
+        assertEquals("調べ物", back.note)
+        // 端末ごとの番号は運ばない。向こうの番号を持ち込むと既存のものを踏む
+        assertEquals(0L, back.id)
+    }
+
+    @Test
+    fun `頼みごとが往復する`() {
+        val command = Command(
+            uid = "c1",
+            to = "pc",
+            from = "phone",
+            kind = CommandKind.LOCK_NOW,
+            params = Params.of(CommandKind.KEY_MINUTES to 30),
+            reason = "集中したい",
+            issuedAtSec = 1_700_000_000,
+            expiresAtSec = 1_700_001_800,
+            state = CommandState.ACCEPTED,
+            acceptedAtSec = 1_700_000_060,
+            clearedGateKeys = setOf("password"),
+            note = "あと: 起票から1時間待つ",
+        )
+        val back = SyncMapper.commandOf(SyncMapper.commandEnvelope(command, 100))
+        assertEquals(command, back)
+    }
+
+    @Test
+    fun `ルールは端末の指定も運ぶ`() {
+        val back = SyncMapper.ruleOf(
+            SyncMapper.ruleEnvelope(rule().copy(devices = setOf("pc")), 100),
+        )
+        assertNotNull(back)
+        assertEquals(setOf("pc"), back.devices)
+    }
+
+    @Test
+    fun `端末の指定が無い古いルールも読める`() {
+        // 欄を足す前に保存されたものは、この欄を持っていない。
+        // 既定が空(= どの端末でも効く)なので、縛りが勝手に外れることはない
+        val bare = DopaCore.json.parseToJsonElement(
+            """{"name":"むかしのルール","target":{},"condition":{"kind":"allOf","children":[]},"actionId":"block"}"""
+        )
+        val envelope = Envelope("old", 1, payload = bare as kotlinx.serialization.json.JsonObject)
+        val back = SyncMapper.ruleOf(envelope)
+        assertNotNull(back)
+        assertTrue(back.devices.isEmpty())
+        assertTrue(back.appliesToDevice("どの端末でも"))
     }
 }

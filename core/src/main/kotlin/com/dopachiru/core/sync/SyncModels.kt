@@ -32,7 +32,32 @@ object SyncKinds {
      */
     const val APPS = "apps"
 
-    val ALL = listOf(RULES, TAGS, GATES, CHANGE_REQUESTS, APPS)
+    /**
+     * 端末の名簿。どの端末があるかを知るため。
+     *
+     * これが無いと「PC に頼む」の *PC* を選べません。`deviceId` はこれまで
+     * 実績の見出しでしかなく、一覧がどこにもありませんでした。
+     */
+    const val DEVICES = "devices"
+
+    /**
+     * 予約。**端末をまたいで配ります。**
+     *
+     * 予約は「冷静なうちに決めておく枠」なので、決める端末と使う端末が別でも
+     * 構いません ── むしろ「PC の前に座る前に決める」ほうが趣旨に合っています。
+     * どの端末の枠かは [com.dopachiru.core.model.Reservation.devices] が持ちます。
+     */
+    const val RESERVATIONS = "reservations"
+
+    /**
+     * 別の端末への頼みごと。
+     *
+     * **配るのは頼みであって、実行ではありません。** やるかどうかは受け取った端末が
+     * 決めます([com.dopachiru.core.model.Command])。
+     */
+    const val COMMANDS = "commands"
+
+    val ALL = listOf(RULES, TAGS, GATES, CHANGE_REQUESTS, APPS, DEVICES, RESERVATIONS, COMMANDS)
 }
 
 /**

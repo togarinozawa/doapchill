@@ -145,6 +145,7 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
 @Composable
 fun DashboardScreen(
     onOpenReservations: () -> Unit = {},
+    onOpenDevices: () -> Unit = {},
     viewModel: DashboardViewModel = viewModel(),
 ) {
     val streak by viewModel.streak.collectAsState()
@@ -176,6 +177,8 @@ fun DashboardScreen(
         item { FocusCard(viewModel) }
 
         item { ReservationCard(onOpen = onOpenReservations) }
+
+        item { DeviceCard(onOpen = onOpenDevices) }
 
         if (pointPolicy.enabled) {
             item {
@@ -583,21 +586,57 @@ private fun ReservationCard(onOpen: () -> Unit) {
     val active = reservations.count { it.coversAt(now) }
     val upcoming = reservations.count { it.isUpcomingAt(now) }
 
+    // 予約そのものは下タブに居るので、ここは**知らせることがあるときだけ**出す。
+    // 何も無いのに毎日置いておくと、記録の画面が案内板で埋まる
+    if (active == 0 && upcoming == 0) return
+
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Text("予約", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(4.dp))
             Text(
-                when {
-                    active > 0 -> "いま使える予約が ${active} 件あります。"
-                    upcoming > 0 -> "これからの予約が ${upcoming} 件。"
-                    else -> "使う時間を先に決めておけます。「予約した時間だけ開ける」ルールと組みます。"
+                if (active > 0) {
+                    "いま使える予約が ${active} 件あります。"
+                } else {
+                    "これからの予約が ${upcoming} 件。"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(12.dp))
-            OutlinedButton(onClick = onOpen) { Text("予約を管理する") }
+            OutlinedButton(onClick = onOpen) { Text("予約を見る") }
+        }
+    }
+}
+
+/**
+ * 端末どうし。名簿が届いていないうちは**出しません** ── 端末が1台しかない人に
+ * 端末の話をさせない。
+ */
+@Composable
+private fun DeviceCard(onOpen: () -> Unit) {
+    val roster by DopaRuntime.devices.collectAsState(initial = emptyList())
+    val commands by DopaRuntime.commands.collectAsState(initial = emptyList())
+    if (roster.size < 2) return
+
+    val others = roster.size - 1
+    val waiting = commands.count { it.isOpen }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text("ほかの端末", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (waiting > 0) {
+                    "${others}台つながっています。やりとりが ${waiting} 件、進行中です。"
+                } else {
+                    "${others}台つながっています。集中を始めさせたり、予約を入れたりできます。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(onClick = onOpen) { Text("端末を見る") }
         }
     }
 }

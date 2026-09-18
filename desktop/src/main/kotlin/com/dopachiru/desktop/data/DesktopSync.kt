@@ -1,6 +1,8 @@
 package com.dopachiru.desktop.data
 
+import com.dopachiru.core.model.Reservation
 import com.dopachiru.core.sync.AppInfo
+import com.dopachiru.core.sync.DeviceInfo
 import com.dopachiru.core.sync.Envelope
 import com.dopachiru.core.sync.MergeAction
 import com.dopachiru.core.sync.SyncApi
@@ -37,18 +39,31 @@ object DesktopSync {
     private const val USAGE_DAYS = 14
     private const val TOMBSTONE_KEEP_SEC = 90L * 24 * 60 * 60
 
-    /** 1往復。**呼ぶ側が別スレッドに逃がしてください** ── 素直に待ちます。 */
+    /** 終わった頼みごとを残しておく長さ。送った側の画面に「済み」を出すため。 */
+    private const val COMMAND_KEEP_SEC = 3L * 24 * 60 * 60
+
+    /**
+     * 1往復。**呼ぶ側が別スレッドに逃がしてください** ── 素直に待ちます。
+     *
+     * @param reservations 予約は別の店に住んでいるので、出し入れを引数で受けます。
+     * @param selfName この端末の名前。名簿に載せる。
+     * @param selfVersion アプリの版。食い違いの切り分け用。
+     */
     fun run(
         file: RuleFile,
+        reservations: List<Reservation>,
         settings: SyncSettings,
         usage: List<UsageDay>,
+        selfName: String,
+        selfVersion: String,
         onApply: (RuleFile) -> Unit,
+        onReservations: (List<Reservation>) -> Unit,
         onSettings: (SyncSettings) -> Unit,
     ): Outcome {
         if (!settings.enabled || !settings.isConfigured) return Outcome.NotConfigured
 
         val api = SyncApi(settings.baseUrl, settings.token)
-        val outgoing = collect(file)
+        val outgoing = collect(file, reservations, settings, selfName, selfVersion)
 
         val response = when (
             val r = api.sync(
@@ -62,6 +77,7 @@ object DesktopSync {
         }
 
         var next = file
+        var nextReservations = reservations
         var pulled = 0
 
         for (envelope in response.of(SyncKinds.RULES)) {
@@ -117,12 +133,86 @@ object DesktopSync {
             pulled++
         }
 
+        // ---- 端末の名簿 ----------------------------------------------
+        // 名簿は古いほうを残す理由が無いので、届いたものをそのまま置き換える
+        for (envelope in response.of(SyncKinds.DEVICES)) {
+            val info = SyncMapper.deviceOf(envelope) ?: continue
+            next = next.copy(
+                devices = next.devices.filterNot { it.deviceId == info.deviceId } + info,
+            ).withStamp(SyncKinds.DEVICES, envelope.uid, SyncStamp(envelope.updatedAt, false))
+            pulled++
+        }
+
+        // ---- 予約 ------------------------------------------------------
+        for (envelope in response.of(SyncKinds.RESERVATIONS)) {
+            val localAt = next.stampOf(SyncKinds.RESERVATIONS, envelope.uid)?.updatedAt
+            when (decideMerge(envelope, localAt)) {
+                MergeAction.Skip -> Unit
+
+                MergeAction.Delete -> {
+                    nextReservations = nextReservations.filterNot { it.uid == envelope.uid }
+                    next = next.withStamp(
+                        SyncKinds.RESERVATIONS,
+                        envelope.uid,
+                        SyncStamp(envelope.updatedAt, true),
+                    )
+                    pulled++
+                }
+
+                MergeAction.Apply -> {
+                    val reservation = SyncMapper.reservationOf(envelope) ?: continue
+                    val existing = nextReservations.firstOrNull { it.uid == envelope.uid }
+                    val placed = reservation.copy(id = existing?.id ?: 0L)
+                    nextReservations = if (existing == null) {
+                        nextReservations + placed
+                    } else {
+                        nextReservations.map { if (it.uid == envelope.uid) placed else it }
+                    }
+                    next = next.withStamp(
+                        SyncKinds.RESERVATIONS,
+                        envelope.uid,
+                        SyncStamp(envelope.updatedAt, false),
+                    )
+                    pulled++
+                }
+            }
+        }
+
+        // ---- 頼みごと --------------------------------------------------
+        // 実行はここではしない。届いたものを置くだけで、通すかどうかは
+        // DesktopRuntime が自分の関門で決める
+        for (envelope in response.of(SyncKinds.COMMANDS)) {
+            val localAt = next.stampOf(SyncKinds.COMMANDS, envelope.uid)?.updatedAt
+            when (decideMerge(envelope, localAt)) {
+                MergeAction.Skip -> Unit
+
+                MergeAction.Delete -> {
+                    next = next.copy(commands = next.commands.filterNot { it.uid == envelope.uid })
+                        .withStamp(SyncKinds.COMMANDS, envelope.uid, SyncStamp(envelope.updatedAt, true))
+                    pulled++
+                }
+
+                MergeAction.Apply -> {
+                    val command = SyncMapper.commandOf(envelope) ?: continue
+                    next = next.copy(
+                        commands = next.commands.filterNot { it.uid == envelope.uid } + command,
+                    ).withStamp(SyncKinds.COMMANDS, envelope.uid, SyncStamp(envelope.updatedAt, false))
+                    pulled++
+                }
+            }
+        }
+
         // 古い墓標を落とす。長く寝ていた端末が復活させない程度には残す
         val cutoff = nowSec() - TOMBSTONE_KEEP_SEC
         next = next.copy(
             syncState = next.syncState.filterNot { (_, s) -> s.deleted && s.updatedAt < cutoff },
+            // 終わった頼みごとは少しだけ残す(送った側に「済み」を出すため)
+            commands = next.commands.filterNot {
+                !it.isOpen && it.handledAtSec in 1 until (nowSec() - COMMAND_KEEP_SEC)
+            },
         )
         onApply(next)
+        onReservations(nextReservations)
 
         // 実績は別の口。落ちても同期そのものは成立したことにする ──
         // ルールが配れているのに「失敗」と出ると、直す先を見誤る
@@ -151,7 +241,13 @@ object DesktopSync {
      * 「前回から変わったぶんだけ」を端末側でやると、取りこぼしたときに
      * 二度と送られないバグが出ます。古いものはサーバー側が捨てます。
      */
-    private fun collect(file: RuleFile): Map<String, List<Envelope>> {
+    private fun collect(
+        file: RuleFile,
+        reservations: List<Reservation>,
+        settings: SyncSettings,
+        selfName: String,
+        selfVersion: String,
+    ): Map<String, List<Envelope>> {
         val rules = ArrayList<Envelope>()
         val live = HashSet<String>()
 
@@ -163,13 +259,7 @@ object DesktopSync {
                 file.stampOf(SyncKinds.RULES, rule.uid)?.updatedAt ?: nowSec(),
             )
         }
-        val prefix = SyncKinds.RULES + "|"
-        for ((key, stamp) in file.syncState) {
-            if (!stamp.deleted || !key.startsWith(prefix)) continue
-            val uid = key.removePrefix(prefix)
-            if (uid in live) continue
-            rules += Envelope(uid = uid, updatedAt = stamp.updatedAt, deleted = true)
-        }
+        rules += tombstones(file, SyncKinds.RULES, live)
 
         val tags = file.tags.map { (process, set) ->
             SyncMapper.tagsEnvelope(
@@ -197,7 +287,56 @@ object DesktopSync {
             )
         }
 
-        return mapOf(SyncKinds.RULES to rules, SyncKinds.TAGS to tags, SyncKinds.APPS to apps)
+        // この端末の行。毎回書くので、lastSeen がそのまま「最後に同期した時刻」になる
+        val self = SyncMapper.deviceEnvelope(
+            DeviceInfo(
+                deviceId = settings.deviceId,
+                name = selfName.ifBlank { settings.deviceId },
+                platform = PLATFORM,
+                version = selfVersion,
+                lastSeenSec = nowSec(),
+            ),
+            updatedAt = nowSec(),
+        )
+
+        val liveReservations = HashSet<String>()
+        val reservationEnvelopes = ArrayList<Envelope>()
+        for (reservation in reservations) {
+            if (reservation.uid.isBlank()) continue
+            liveReservations += reservation.uid
+            reservationEnvelopes += SyncMapper.reservationEnvelope(
+                reservation,
+                file.stampOf(SyncKinds.RESERVATIONS, reservation.uid)?.updatedAt ?: nowSec(),
+            )
+        }
+        reservationEnvelopes += tombstones(file, SyncKinds.RESERVATIONS, liveReservations)
+
+        val commands = file.commands.map { command ->
+            SyncMapper.commandEnvelope(
+                command,
+                file.stampOf(SyncKinds.COMMANDS, command.uid)?.updatedAt ?: nowSec(),
+            )
+        }
+
+        return mapOf(
+            SyncKinds.RULES to rules,
+            SyncKinds.TAGS to tags,
+            SyncKinds.APPS to apps,
+            SyncKinds.DEVICES to listOf(self),
+            SyncKinds.RESERVATIONS to reservationEnvelopes,
+            SyncKinds.COMMANDS to commands,
+        )
+    }
+
+    /** 消したものの墓標。無いと、消した端末以外から送り返されて生き返る。 */
+    private fun tombstones(file: RuleFile, kind: String, live: Set<String>): List<Envelope> {
+        val prefix = "$kind|"
+        return file.syncState.mapNotNull { (key, stamp) ->
+            if (!stamp.deleted || !key.startsWith(prefix)) return@mapNotNull null
+            val uid = key.removePrefix(prefix)
+            if (uid in live) return@mapNotNull null
+            Envelope(uid = uid, updatedAt = stamp.updatedAt, deleted = true)
+        }
     }
 
     private fun failed(

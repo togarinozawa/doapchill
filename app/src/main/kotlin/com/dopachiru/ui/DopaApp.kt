@@ -3,6 +3,7 @@ package com.dopachiru.ui
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Label
@@ -19,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.navigation
@@ -27,6 +29,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.dopachiru.ui.changes.ChangeRequestScreen
 import com.dopachiru.ui.dashboard.DashboardScreen
+import com.dopachiru.ui.devices.DeviceScreen
 import com.dopachiru.ui.reservation.ReservationScreen
 import com.dopachiru.ui.rules.RuleEditScreen
 import com.dopachiru.ui.rules.RuleListScreen
@@ -41,6 +44,15 @@ private enum class TopLevel(
     val icon: ImageVector,
 ) {
     Dashboard("dashboard", "記録", Icons.Filled.Insights),
+
+    /**
+     * 予約。**下タブに独立させてある。**
+     *
+     * 記録の中の札から入る形だと、「使いたくなる前に枠を取る」という予約の使いどきに
+     * 辿り着けない ── 使いたくなってから探すことになり、それでは開いた瞬間に決める
+     * 「宣言」と変わらなくなる。冷静なうちに手が届く場所に置く必要がある。
+     */
+    Reservations("reservations", "予約", Icons.Filled.Event),
     Rules("rules", "ルール", Icons.Filled.Block),
     Tags("tags", "タグ", Icons.Filled.Label),
     Changes("changes", "変更", Icons.Filled.History),
@@ -49,6 +61,21 @@ private enum class TopLevel(
 
 /** 設定の一覧そのものの経路。入れ子の図の始点。 */
 private const val SETTINGS_INDEX = "settings/index"
+
+/**
+ * 下タブの切り替え。
+ *
+ * 見ていた場所を覚えて戻す([saveState] / [restoreState])。覚えないと、
+ * タブを往復するたびに一番上へ飛ばされる。
+ * 始点まで畳むのは、戻るを押し続けても履歴が積み上がっていないようにするため。
+ */
+private fun NavHostController.switchTo(item: TopLevel) {
+    navigate(item.route) {
+        popUpTo(graph.findStartDestination().id) { saveState = true }
+        launchSingleTop = true
+        restoreState = true
+    }
+}
 
 @Composable
 fun DopaApp() {
@@ -63,13 +90,7 @@ fun DopaApp() {
                     val selected = currentDestination?.hierarchy?.any { it.route == item.route } == true
                     NavigationBarItem(
                         selected = selected,
-                        onClick = {
-                            navController.navigate(item.route) {
-                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        },
+                        onClick = { navController.switchTo(item) },
                         icon = { Icon(item.icon, contentDescription = item.label) },
                         label = { Text(item.label) },
                     )
@@ -83,10 +104,17 @@ fun DopaApp() {
             modifier = Modifier.padding(padding),
         ) {
             composable(TopLevel.Dashboard.route) {
-                DashboardScreen(onOpenReservations = { navController.navigate("reservations") })
+                DashboardScreen(
+                    // 予約は下タブに居る。ここから飛ぶときもタブと同じ積み方をする ──
+                    // 素の navigate だと戻る履歴が積み上がって、タブで戻れなくなる
+                    onOpenReservations = { navController.switchTo(TopLevel.Reservations) },
+                    onOpenDevices = { navController.navigate("devices") },
+                )
             }
 
-            composable("reservations") { ReservationScreen() }
+            composable(TopLevel.Reservations.route) { ReservationScreen() }
+
+            composable("devices") { DeviceScreen() }
 
             composable(TopLevel.Rules.route) {
                 RuleListScreen(

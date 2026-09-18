@@ -9,9 +9,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -32,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import com.dopachiru.core.model.Reservation
 import com.dopachiru.core.model.ReservationRules
 import com.dopachiru.core.model.Target
+import com.dopachiru.data.AppLabels
 import com.dopachiru.runtime.DopaRuntime
 import com.dopachiru.ui.rules.AppPickerDialog
 import com.dopachiru.ui.rules.InstalledApps
@@ -57,8 +60,25 @@ fun ReservationScreen() {
         initial = ReservationRules.MIN_LEAD_MINUTES,
     )
 
+    val roster by DopaRuntime.devices.collectAsState(initial = emptyList())
+    val me = DopaRuntime.myDeviceId
+
     var picked by remember { mutableStateOf(setOf<String>()) }
     var showPicker by remember { mutableStateOf(false) }
+
+    /** どの端末の枠か。null = すべての端末。 */
+    var forDevice by remember { mutableStateOf<String?>(null) }
+    // 端末を変えたら選んだアプリは捨てる。PC のプロセス名をスマホの枠に
+    // 持ち越しても、どこにも当たらないルールになるだけ
+    val targetDevice = forDevice
+    val foreignApps = remember(targetDevice, roster) {
+        val platform = roster.firstOrNull { it.deviceId == targetDevice }?.platform
+        if (targetDevice == null || targetDevice == me || platform.isNullOrBlank()) {
+            emptyList()
+        } else {
+            AppLabels.of(context, platform)
+        }
+    }
     var startSec by remember { mutableLongStateOf(0L) }
     var durationMinutes by remember { mutableIntStateOf(30) }
     var refused by remember { mutableStateOf(false) }
@@ -88,6 +108,32 @@ fun ReservationScreen() {
                     Text("新しく予約する", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(12.dp))
 
+                    // 端末が2台以上あるときだけ聞く。1台しかない人に端末の話をさせない
+                    if (roster.size >= 2) {
+                        Text("どの端末の枠", style = MaterialTheme.typography.labelLarge)
+                        Spacer(Modifier.height(4.dp))
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = forDevice == null,
+                                onClick = { forDevice = null; picked = emptySet() },
+                                label = { Text("すべての端末") },
+                            )
+                            roster.forEach { device ->
+                                FilterChip(
+                                    selected = forDevice == device.deviceId,
+                                    onClick = { forDevice = device.deviceId; picked = emptySet() },
+                                    label = {
+                                        Text(
+                                            device.displayName +
+                                                if (device.deviceId == me) "(この端末)" else "",
+                                        )
+                                    },
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(16.dp))
+                    }
+
                     Text("対象アプリ", style = MaterialTheme.typography.labelLarge)
                     Spacer(Modifier.height(4.dp))
                     if (picked.isEmpty()) {
@@ -98,11 +144,44 @@ fun ReservationScreen() {
                         )
                     } else {
                         picked.forEach { pkg ->
-                            Text("・" + InstalledApps.labelOf(context, pkg), style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                "・" + if (foreignApps.isEmpty()) {
+                                    InstalledApps.labelOf(context, pkg)
+                                } else {
+                                    foreignApps.firstOrNull { it.first == pkg }?.second ?: pkg
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
                         }
                     }
                     Spacer(Modifier.height(8.dp))
-                    OutlinedButton(onClick = { showPicker = true }) { Text("選ぶ") }
+
+                    if (foreignApps.isEmpty()) {
+                        OutlinedButton(onClick = { showPicker = true }) { Text("選ぶ") }
+                        if (targetDevice != null && targetDevice != me) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "その端末のアプリがまだ届いていません。向こうで一度ルールかタグに使うと、" +
+                                    "名前がこちらに届いて選べるようになります。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    } else {
+                        // よその端末のアプリは、向こうが送ってきた名札から選ぶ。
+                        // こちらには chrome.exe の一覧など無い
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            foreignApps.forEach { (id, label) ->
+                                FilterChip(
+                                    selected = id in picked,
+                                    onClick = {
+                                        picked = if (id in picked) picked - id else picked + id
+                                    },
+                                    label = { Text(label) },
+                                )
+                            }
+                        }
+                    }
 
                     Spacer(Modifier.height(16.dp))
                     Text("いつから", style = MaterialTheme.typography.labelLarge)
@@ -149,6 +228,7 @@ fun ReservationScreen() {
                                 startEpochSec = startSec,
                                 endEpochSec = startSec + durationMinutes * 60L,
                                 minLeadMinutes = leadMinutes,
+                                devices = setOfNotNull(forDevice),
                             )
                             refused = booked == null
                             if (booked != null) picked = emptySet()

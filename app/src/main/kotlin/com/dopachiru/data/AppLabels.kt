@@ -35,6 +35,20 @@ object AppLabels {
     fun all(context: Context): Map<String, String> =
         prefs(context).all.mapNotNull { (k, v) -> (v as? String)?.let { k to it } }.toMap()
 
+    /**
+     * その端末で見かけたアプリを、識別子と名前の組で。名前順。
+     *
+     * **スマホから PC の予約を取る**ときに要る ── こちらには `chrome.exe` の
+     * 一覧など無いので、向こうが送ってきた名札から選ばせるしかない。
+     * 送られてくるのは向こうのルールとタグが触れているものだけなので、
+     * 「PC で一度でも指したことがあるアプリ」から選ぶことになる。
+     */
+    fun of(context: Context, platform: String): List<Pair<String, String>> =
+        all(context).mapNotNull { (uid, label) ->
+            val (owner, id) = AppInfo.idOf(uid) ?: return@mapNotNull null
+            if (owner != platform) null else id to label
+        }.sortedBy { it.second }
+
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 }

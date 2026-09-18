@@ -67,6 +67,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.dopachiru.core.action.ActionRegistry
 import com.dopachiru.core.model.ConditionTree
+import com.dopachiru.core.model.DeviceScope
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.points.PointEvent
@@ -89,7 +90,7 @@ fun DesktopApp() = DopaTheme {
         Scaffold(
             topBar = {
                 TabRow(selectedTabIndex = tab) {
-                    listOf("ルール", "タグ", "変更", "今日", "設定").forEachIndexed { index, title ->
+                    listOf("ルール", "タグ", "変更", "端末", "今日", "設定").forEachIndexed { index, title ->
                         Tab(
                             selected = tab == index,
                             onClick = { tab = index },
@@ -104,7 +105,8 @@ fun DesktopApp() = DopaTheme {
                     0 -> RulesTab()
                     1 -> TagScreen()
                     2 -> ChangeScreen()
-                    3 -> TodayTab()
+                    3 -> DeviceScreen()
+                    4 -> TodayTab()
                     else -> SettingsTab()
                 }
             }
@@ -248,9 +250,20 @@ private fun RuleCard(rule: Rule) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (rule.devices.isNotEmpty()) {
+                val names = DesktopRuntime.ruleFile.collectAsState().value.devices
+                    .associate { it.deviceId to it.displayName }
+                Text(
+                    "端末: " + DeviceScope.describe(rule.devices) { names[it] ?: it },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Spacer(Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(onClick = { editing = true }) { Text("条件と罰を編集") }
+                // 端末ごとに違う中身にしたいときは、2本に分けてそれぞれ宛先を変える
+                TextButton(onClick = { DesktopRuntime.duplicateRule(rule) }) { Text("複製") }
                 TextButton(onClick = { confirmDelete = true }) {
                     Text("削除", color = MaterialTheme.colorScheme.error)
                 }

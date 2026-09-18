@@ -553,15 +553,27 @@ fun LockoutScreen(
                 },
             )
             Spacer(Modifier.height(8.dp))
+            // 集中のときは、ここに「最初の一歩」が入ることがある。塞ぐのは麻酔を
+            // 取り上げるだけで、行き先はこの1行しか無い ── 小さく灰色で出すと
+            // 残り時間だけを眺めることになるので、集中のときは大きく出す
             Text(
                 text = when {
                     focus != null -> reason.ifBlank { "自分で始めた集中" }
                     reason.isBlank() -> "ルールを破った罰"
                     else -> "「$reason」を破った罰"
                 },
-                style = MaterialTheme.typography.bodyMedium,
+                style = if (focus != null) {
+                    MaterialTheme.typography.titleLarge
+                } else {
+                    MaterialTheme.typography.bodyMedium
+                },
+                fontWeight = if (focus != null) FontWeight.Medium else FontWeight.Normal,
                 textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (focus != null) {
+                    MaterialTheme.colorScheme.onBackground
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
             )
 
             Spacer(Modifier.height(48.dp))

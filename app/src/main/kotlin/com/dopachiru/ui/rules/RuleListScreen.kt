@@ -42,6 +42,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dopachiru.core.action.ActionRegistry
 import com.dopachiru.core.gate.ChangeKind
 import com.dopachiru.core.model.ConditionTree
+import com.dopachiru.core.model.DeviceScope
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.preset.PresetGroup
 import com.dopachiru.core.preset.RulePreset
@@ -50,6 +51,7 @@ import com.dopachiru.runtime.DopaRuntime
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -72,6 +74,27 @@ class RuleListViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * まるごと写して1本増やす。
+     *
+     * 同期でルールは全端末に配られるので、**端末ごとに違う中身にしたいときは
+     * 2本に分ける**しかありません。そのための複製です。番号と uid は新しく振ります
+     * ── 引き継ぐと、写した先が元を上書きします。
+     *
+     * 新規作成なので関門は通しません(縛りを増やす方向)。
+     */
+    fun duplicate(rule: Rule) {
+        viewModelScope.launch {
+            val copy = rule.copy(id = 0L, uid = "", name = rule.name + "(写し)")
+            DopaRuntime.changes.request(ChangeKind.CREATE, copy, emptyList())
+        }
+    }
+
+    /** 名簿。一覧に「どの端末で効くか」を出すため。 */
+    val deviceNames: StateFlow<Map<String, String>> = DopaRuntime.devices
+        .map { list -> list.associate { it.deviceId to it.displayName } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
     /** 雛形から作る。新規作成なのでゲートは通さず即時反映。 */
     fun createFromPreset(preset: RulePreset, packages: Set<String>) {
         if (packages.isEmpty() && !preset.allowEmptyApps) return
@@ -88,6 +111,7 @@ fun RuleListScreen(
     viewModel: RuleListViewModel = viewModel(),
 ) {
     val rules by viewModel.rules.collectAsState()
+    val deviceNames by viewModel.deviceNames.collectAsState()
     val context = LocalContext.current
 
     var pickingPreset by remember { mutableStateOf(false) }
@@ -162,6 +186,20 @@ fun RuleListScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.primary,
                                 )
+                                if (rule.devices.isNotEmpty()) {
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        "端末: " + DeviceScope.describe(rule.devices) { id ->
+                                            deviceNames[id] ?: id
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                // 端末ごとに別々に持ちたいときのための複製。
+                                // 同期でルールは全端末に配られるので、分けたいときは
+                                // 2本に増やして、それぞれ宛先を変えることになる
+                                TextButton(onClick = { viewModel.duplicate(rule) }) { Text("複製") }
                             }
                             Switch(
                                 checked = rule.enabled,

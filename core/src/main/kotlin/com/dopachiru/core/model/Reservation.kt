@@ -37,8 +37,20 @@ data class Reservation(
 
     /** 何のための枠か。任意。 */
     val note: String = "",
+
+    /**
+     * どの端末の枠か(deviceId の集合)。空ならどの端末でも。
+     *
+     * **スマホから PC の枠を取る**のがこれの主な使い道。冷静なうちに決めるという
+     * 予約の性質からして、決める端末と使う端末が別でも構わない ── むしろ
+     * 「PC の前に座る前に決める」ほうが、予約の趣旨に合っている。[DeviceScope]
+     */
+    val devices: Set<String> = DeviceScope.EVERYWHERE,
 ) {
     fun coversAt(nowSec: Long): Boolean = nowSec in startEpochSec until endEpochSec
+
+    /** その端末で効かせるか。 */
+    fun appliesToDevice(deviceId: String): Boolean = DeviceScope.appliesTo(devices, deviceId)
 
     /** まだ始まっていない予約か。 */
     fun isUpcomingAt(nowSec: Long): Boolean = nowSec < startEpochSec
@@ -61,8 +73,11 @@ object Reservations {
         tagsOfApp: Set<String>,
         nowSec: Long,
         url: String? = null,
+        deviceId: String = "",
     ): Boolean = all.any {
-        it.coversAt(nowSec) && it.target.matches(packageName, tagsOfApp, url)
+        it.coversAt(nowSec) &&
+            it.appliesToDevice(deviceId) &&
+            it.target.matches(packageName, tagsOfApp, url)
     }
 
     /** 終わった予約を落とす。 */

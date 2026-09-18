@@ -1,6 +1,8 @@
 package com.dopachiru.core.sync
 
 import com.dopachiru.core.DopaCore
+import com.dopachiru.core.model.Command
+import com.dopachiru.core.model.Reservation
 import com.dopachiru.core.model.Rule
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -13,12 +15,15 @@ import kotlinx.serialization.json.jsonPrimitive
  *
  * ## 何を配って、何を配らないか
  *
- * 配るのは **ルール・タグ・アプリの名札・使用実績**。
+ * 配るのは **ルール・タグ・アプリの名札・使用実績・端末の名簿・予約・頼みごと**。
  *
  * **ゲートと変更リクエストは配りません。** ゲート(変更に摩擦をかける仕組み)は
  * 端末ごとの自分との約束で、変更リクエストはその端末で承認待ちのものです。
  * 承認待ちが別の端末に流れると、**片方で作った申請をもう片方で承認できてしまい**、
  * ゲートを置いた意味が消えます。
+ *
+ * 遠隔操作([Command])はこの線を越えません ── 配るのは**頼み**であって、
+ * 通すかどうかは受け取った端末が自分の関門で決めます。
  *
  * ## 鍵の付けかた
  *
@@ -100,6 +105,65 @@ object SyncMapper {
         if (label.isNullOrBlank()) return null
         return AppInfo(id = id, label = label, platform = platform)
     }
+
+    // ---- 端末の名簿 -------------------------------------------------------
+
+    /** 鍵は deviceId そのもの。端末は端末なので、platform で分ける必要がない。 */
+    fun deviceEnvelope(info: DeviceInfo, updatedAt: Long): Envelope = Envelope(
+        uid = info.deviceId,
+        updatedAt = updatedAt,
+        payload = SyncApi.JSON.encodeToJsonElement(DeviceInfo.serializer(), info) as JsonObject,
+    )
+
+    fun deviceOf(envelope: Envelope): DeviceInfo? = runCatching {
+        SyncApi.JSON.decodeFromJsonElement(DeviceInfo.serializer(), envelope.payload)
+            .copy(deviceId = envelope.uid)
+    }.getOrNull()
+
+    // ---- 予約 -------------------------------------------------------------
+
+    fun reservationEnvelope(
+        reservation: Reservation,
+        updatedAt: Long,
+        deleted: Boolean = false,
+    ): Envelope = Envelope(
+        uid = reservation.uid,
+        updatedAt = updatedAt,
+        deleted = deleted,
+        // ルールと同じで、端末ごとの番号(id)は運ばない
+        payload = if (deleted) {
+            JsonObject(emptyMap())
+        } else {
+            DopaCore.json.encodeToJsonElement(
+                Reservation.serializer(),
+                reservation.copy(id = 0L),
+            ) as JsonObject
+        },
+    )
+
+    fun reservationOf(envelope: Envelope): Reservation? = runCatching {
+        DopaCore.json.decodeFromJsonElement(Reservation.serializer(), envelope.payload)
+            .copy(uid = envelope.uid, id = 0L)
+    }.getOrNull()
+
+    // ---- 頼みごと ---------------------------------------------------------
+
+    fun commandEnvelope(command: Command, updatedAt: Long, deleted: Boolean = false): Envelope =
+        Envelope(
+            uid = command.uid,
+            updatedAt = updatedAt,
+            deleted = deleted,
+            payload = if (deleted) {
+                JsonObject(emptyMap())
+            } else {
+                DopaCore.json.encodeToJsonElement(Command.serializer(), command) as JsonObject
+            },
+        )
+
+    fun commandOf(envelope: Envelope): Command? = runCatching {
+        DopaCore.json.decodeFromJsonElement(Command.serializer(), envelope.payload)
+            .copy(uid = envelope.uid)
+    }.getOrNull()
 }
 
 /** 受け取った1件を、手元のものと比べてどうするか。 */
