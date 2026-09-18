@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  3×4 の集中ウィジェット。
+
+  minWidth / minHeight はセル数から換算する(70×n − 30)。
+  Android 12 以降は targetCellWidth / targetCellHeight のほうが見られるので、
+  両方書いてある ── 片方だけだと、古い端末か新しい端末のどちらかで
+  意図しない大きさで置かれる。
+
+  updatePeriodMillis を 0 にしてあるのは、**残り時間を Chronometer が
+  自分で進める**ため。ここで定期更新をかけると、電池を使ったうえに
+  下限30分なのでどのみち間に合わない。状態が変わった瞬間に
+  こちらから書き換える(FocusWidget.refresh)。
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="180dp"
+    android:minHeight="250dp"
+    android:targetCellWidth="3"
+    android:targetCellHeight="4"
+    android:minResizeWidth="180dp"
+    android:minResizeHeight="180dp"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:initialLayout="@layout/widget_focus"
+    android:previewLayout="@layout/widget_focus"
+    android:description="@string/widget_focus_description"
+    android:updatePeriodMillis="0" />

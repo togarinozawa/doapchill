@@ -13,4 +13,13 @@
     <string name="focus_30_long">30分だけ集中する</string>
     <string name="focus_pick">長さを選ぶ</string>
     <string name="focus_pick_long">何分止めるかを選んで始める</string>
+
+    <!-- ホーム画面の集中ウィジェット(3×4) -->
+    <string name="widget_focus_description">集中の残り時間と、長さを選ぶボタン</string>
+    <string name="widget_focus_idle_title">集中</string>
+    <string name="widget_focus_idle_note">長さを選ぶと、その場で手が止まります。電話・ホーム・設定は開いたままです。</string>
+    <string name="widget_focus_running_title">集中中</string>
+    <string name="widget_focus_pick">選ぶ</string>
+    <string name="widget_focus_open">ドパチルを開く</string>
+    <string name="widget_focus_stop">切り上げる(本体を開きます)</string>
 </resources>

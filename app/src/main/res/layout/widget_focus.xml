@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ホーム画面に置く集中ボタン(3×4)。
+
+  ## なぜ大きいものが要るのか
+
+  1タップのショートカット(FocusShortcutActivity)は既にあるが、長さが決め打ちで、
+  **走っている最中は何も見えない**。集中中はアプリが全部塞がっているので
+  ホーム画面しか見られないのに、そこに残り時間も「最初の一歩」も出ていなかった。
+  いちばん見たいときに見えないのでは、置いてある意味が薄い。
+
+  ## 切り上げるボタンは置いていない
+
+  足すのは1タップ、やめるのは本体を開いてから。自分で決めた時間を1タップで
+  消せるなら、それは決めたことになっていない。足す側だけ軽いのは、
+  縛りを増やす方向に摩擦をかける理由が無いため。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="12dp"
+    android:background="@drawable/widget_background">
+
+    <TextView
+        android:id="@+id/widget_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/widget_focus_idle_title"
+        android:textColor="@color/widget_accent"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:maxLines="1"
+        android:ellipsize="end" />
+
+    <!--
+      走っているあいだの残り時間。Chronometer にしてあるのは、**こちらから
+      更新しなくても勝手に進む**ため。RemoteViews を毎分書き換える仕掛けを
+      持たずに済むので、電池も要らないし、書き換えを取りこぼして時間が
+      止まって見えることもない。
+    -->
+    <Chronometer
+        android:id="@+id/widget_countdown"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:textColor="@color/widget_text"
+        android:textSize="40sp"
+        android:visibility="gone" />
+
+    <!-- 最初の一歩、または状態の一言 -->
+    <TextView
+        android:id="@+id/widget_note"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textColor="@color/widget_text_dim"
+        android:textSize="13sp"
+        android:maxLines="3"
+        android:ellipsize="end" />
+
+    <Space
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="8dp">
+
+        <TextView
+            android:id="@+id/widget_button_1"
+            style="@style/WidgetFocusButton"
+            android:layout_marginEnd="6dp" />
+
+        <TextView
+            android:id="@+id/widget_button_2"
+            style="@style/WidgetFocusButton"
+            android:layout_marginEnd="6dp" />
+
+        <TextView
+            android:id="@+id/widget_button_3"
+            style="@style/WidgetFocusButton" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="6dp">
+
+        <TextView
+            android:id="@+id/widget_button_4"
+            style="@style/WidgetFocusButton"
+            android:layout_marginEnd="6dp" />
+
+        <TextView
+            android:id="@+id/widget_button_5"
+            style="@style/WidgetFocusButton"
+            android:layout_marginEnd="6dp" />
+
+        <TextView
+            android:id="@+id/widget_button_6"
+            style="@style/WidgetFocusButton" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/widget_open"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:gravity="center"
+        android:padding="6dp"
+        android:text="@string/widget_focus_open"
+        android:textColor="@color/widget_text_dim"
+        android:textSize="12sp" />
+</LinearLayout>

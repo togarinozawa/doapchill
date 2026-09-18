@@ -47,6 +47,7 @@ import com.dopachiru.data.StatsRepository
 import com.dopachiru.data.StudyWindowRepository
 import com.dopachiru.data.UsageTracker
 import com.dopachiru.data.db.DopaDatabase
+import com.dopachiru.focus.FocusWidget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -74,6 +75,9 @@ object DopaRuntime {
     private var initialized = false
 
     private lateinit var powerManager: PowerManager
+
+    /** ホーム画面のウィジェットを描き直すために持つ。判定には使わない。 */
+    private lateinit var appContext: Context
 
     lateinit var db: DopaDatabase
         private set
@@ -168,6 +172,7 @@ object DopaRuntime {
         DopaCore.registerAll()
 
         val app = context.applicationContext
+        appContext = app
         powerManager = app.getSystemService(PowerManager::class.java)
         protectedApps = ProtectedApps(app)
         db = DopaDatabase.get(app)
@@ -529,6 +534,7 @@ object DopaRuntime {
             label = label,
         ) ?: return false
         DopaAccessibilityService.kickEvaluation()
+        refreshWidget()
         return true
     }
 
@@ -551,7 +557,19 @@ object DopaRuntime {
             label = template.displayLabel(),
         ) ?: return false
         DopaAccessibilityService.kickEvaluation()
+        refreshWidget()
         return true
+    }
+
+    /**
+     * ホーム画面のウィジェットを描き直す。
+     *
+     * 集中が始まった・伸びた・明けた・切り上げられた瞬間に呼ぶ。呼ばないと、
+     * 明けたあとも残り時間が残って見える。置かれていなければ何もしない。
+     */
+    private fun refreshWidget() {
+        if (!::appContext.isInitialized) return
+        runCatching { FocusWidget.refresh(appContext) }
     }
 
     /** 走っている集中に時間を足す。 */
@@ -559,6 +577,7 @@ object DopaRuntime {
         if (!initialized) return false
         lockouts.extendFocus(addMinutes) ?: return false
         DopaAccessibilityService.kickEvaluation()
+        refreshWidget()
         return true
     }
 
@@ -581,6 +600,7 @@ object DopaRuntime {
             points.record(-cost, PointReason.FOCUS_ABORTED, "残り${focus.remainingMinutesAt(now)}分")
         }
         DopaAccessibilityService.kickEvaluation()
+        refreshWidget()
         return true
     }
 
@@ -790,7 +810,10 @@ object DopaRuntime {
         val foreground = currentForegroundPackage
         usage.tick()
         declarations.tick(foreground)
-        awardFinishedFocus(lockouts.purgeExpired())
+        val expired = lockouts.purgeExpired()
+        awardFinishedFocus(expired)
+        // 明けた瞬間にウィジェットを戻す。放っておくと残り時間が残って見える
+        if (expired.any { it.isChosen }) refreshWidget()
         refreshCalendarIfStale()
         awardStudyIfCompleted()
 

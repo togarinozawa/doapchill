@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      ウィジェットの色。テーマから引けないので直に持つ ── ホーム画面の上では
+      アプリのテーマが効かない(RemoteViews はランチャーのプロセスで描かれる)。
+    -->
+    <color name="widget_background">#F21E1E2E</color>
+    <color name="widget_surface">#33FFFFFF</color>
+    <color name="widget_accent">#FFB4A0FF</color>
+    <color name="widget_text">#FFECECF4</color>
+    <color name="widget_text_dim">#FFA9A9B8</color>
+
+    <style name="WidgetFocusButton">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:gravity">center</item>
+        <item name="android:paddingTop">10dp</item>
+        <item name="android:paddingBottom">10dp</item>
+        <item name="android:background">@drawable/widget_button_background</item>
+        <item name="android:textColor">@color/widget_text</item>
+        <item name="android:textSize">15sp</item>
+        <item name="android:maxLines">1</item>
+    </style>
+</resources>

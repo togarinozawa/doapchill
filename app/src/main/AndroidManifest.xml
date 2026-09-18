@@ -162,6 +162,25 @@
         </receiver>
 
         <!--
+          ホーム画面に置く集中ウィジェット(3×4)。
+
+          exported="true" なのは、ランチャーが置くために要るため。
+          受け取る動作は「始める」と「足す」だけで、どちらも縛りを**増やす**
+          方向なので、他所から叩かれても困らない(緩めるものは1つも無い)。
+        -->
+        <receiver
+            android:name=".focus.FocusWidget"
+            android:exported="true"
+            android:label="@string/widget_focus_idle_title">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/focus_widget_info" />
+        </receiver>
+
+        <!--
           連携アプリから学習予定を受け取る口。
           マニフェスト登録なのは、ユーザー補助が一時的に落ちていても取りこぼさないため。
           送り主は setPackage("com.dopachiru") を付けること(Android 8 以降、
