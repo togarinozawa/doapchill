@@ -48,7 +48,8 @@ private const val RELEASE_PHRASE = "いま見なくていい"
 /**
  * 完全封印の画面。Android 版と同じ文言・同じ間で出す。
  *
- * [Presentation.Block.minSeconds] のあいだは閉じるボタンが出ない。
+ * [Presentation.Block.minSeconds] のあいだ待たされるのは**押し切る側だけ**。
+ * 「わかった、やめる」は最初から押せる。
  */
 @Composable
 fun BlockScreen(
@@ -102,28 +103,24 @@ fun BlockScreen(
 
             Spacer(Modifier.height(56.dp))
 
+            // 「やめる」は待たせない。待ち時間は**逃げる側**に要る摩擦であって、
+            // 素直にやめる側にまでかけるとただの罰になる(Android 版と同じ約束)
+            Button(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Text("わかった、やめる", modifier = Modifier.padding(vertical = 6.dp))
+            }
+            Spacer(Modifier.height(12.dp))
+
             if (remaining > 0) {
                 Text(
-                    "$remaining",
-                    fontSize = 56.sp,
-                    fontWeight = FontWeight.Light,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "秒",
+                    "$remaining 秒後に、押し切る口が開きます",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                Button(
-                    onClick = onDismiss,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                ) {
-                    Text("わかった、やめる", modifier = Modifier.padding(vertical = 6.dp))
-                }
-                Spacer(Modifier.height(12.dp))
                 if (block.allowOverride) {
                     TextButton(
                         // 1タップで通れる警告は92%が無視される。手を動かさせる

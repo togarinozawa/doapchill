@@ -57,6 +57,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,6 +66,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.dopachiru.core.action.ActionRegistry
 import com.dopachiru.core.model.ConditionTree
 import com.dopachiru.core.model.DeviceScope
@@ -691,6 +693,17 @@ private fun SyncSection() {
     var showToken by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf("") }
+
+    // 出した短い合言葉と、その残り秒。切れたことが見えないと、
+    // 打ち込んで「合わない」と悩むことになる
+    var invite by remember { mutableStateOf("") }
+    var inviteLeft by remember { mutableIntStateOf(0) }
+    LaunchedEffect(invite) {
+        while (inviteLeft > 0) {
+            kotlinx.coroutines.delay(1_000)
+            inviteLeft -= 1
+        }
+    }
     val scope = rememberCoroutineScope()
 
     Text("端末間の同期", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
@@ -782,6 +795,69 @@ private fun SyncSection() {
             },
             enabled = sync.isConfigured && sync.enabled && !busy,
         ) { Text("いま同期する") }
+    }
+
+    // ここから、もう1台を繋ぐための短い合言葉。
+    //
+    // 本物の合言葉は48文字あって、スマホに打ち込むのは現実的でない。
+    // カメラも権限も要らない代わりに**2分で死ぬ・1回しか使えない**ので、
+    // 残り時間を出しておく ── 出さないと、切れたコードを打ち込んで悩むことになる。
+    if (sync.isConfigured) {
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(20.dp))
+
+        Text("もう1台を繋ぐ", style = MaterialTheme.typography.bodyLarge)
+        Text(
+            "短い合言葉を出します。スマホの「同期」で住所を入れて、そこに打ち込んでください。" +
+                "48文字のほうを写す必要はありません。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+
+        if (invite.isNotBlank()) {
+            Text(
+                invite,
+                style = MaterialTheme.typography.displaySmall,
+                fontWeight = FontWeight.Medium,
+                letterSpacing = 4.sp,
+            )
+            Text(
+                if (inviteLeft > 0) "あと ${inviteLeft} 秒で切れます" else "切れました。出し直してください",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (inviteLeft > 0) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+
+        OutlinedButton(
+            onClick = {
+                busy = true
+                result = "合言葉を出しています…"
+                scope.launch {
+                    val out = withContext(Dispatchers.IO) { DesktopRuntime.newInvite() }
+                    when (out) {
+                        is DesktopRuntime.InviteResult.Ok -> {
+                            invite = out.code
+                            inviteLeft = out.seconds
+                            result = ""
+                        }
+
+                        is DesktopRuntime.InviteResult.Failed -> {
+                            invite = ""
+                            result = out.message
+                        }
+                    }
+                    busy = false
+                }
+            },
+            enabled = !busy,
+        ) { Text(if (invite.isBlank()) "合言葉を出す" else "出し直す") }
     }
 
     if (result.isNotBlank()) {
@@ -1328,29 +1404,55 @@ private fun BehaviourSection() {
     )
     Spacer(Modifier.height(12.dp))
 
-    BlockStrength.entries.forEach { strength ->
-        Row(
-            Modifier.fillMaxWidth().padding(vertical = 6.dp),
-            verticalAlignment = Alignment.Top,
-        ) {
-            RadioButton(
-                selected = settings.blockStrength == strength,
-                onClick = { DesktopRuntime.updateSettings { it.copy(blockStrength = strength) } },
-            )
-            Column(Modifier.padding(start = 4.dp)) {
-                Text(strength.displayName, style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    strength.description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+    // プロセスの一時停止は開発者向けの奥に隠す。編集中のものを壊しうるうえ、
+    // 選ぶとオーバーレイが出なくなるので「効いていない」と見える
+    BlockStrength.entries
+        .filter { settings.developerMode || it != BlockStrength.SUSPEND }
+        .forEach { strength ->
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                RadioButton(
+                    selected = settings.blockStrength == strength,
+                    onClick = { DesktopRuntime.updateSettings { it.copy(blockStrength = strength) } },
                 )
+                Column(Modifier.padding(start = 4.dp)) {
+                    Text(strength.displayName, style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        strength.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
-    }
 
     Spacer(Modifier.height(20.dp))
     HorizontalDivider()
     Spacer(Modifier.height(20.dp))
+
+    if (settings.developerMode) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("一時停止", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "何も止めなくなります。トレイからも切り替えられます。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = settings.paused,
+                onCheckedChange = { DesktopRuntime.updateSettings { s -> s.copy(paused = it) } },
+            )
+        }
+        Spacer(Modifier.height(20.dp))
+    }
 
     Row(
         Modifier.fillMaxWidth(),
@@ -1358,16 +1460,36 @@ private fun BehaviourSection() {
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Column(Modifier.weight(1f)) {
-            Text("一時停止", style = MaterialTheme.typography.bodyLarge)
+            Text("開発者向けの操作を出す", style = MaterialTheme.typography.bodyLarge)
             Text(
-                "何も止めなくなります。トレイからも切り替えられます。",
+                "一時停止と、プロセスの一時停止。**縛りを丸ごと無効にできるもの**なので、" +
+                    "普段は隠してあります ── 手の届くところにあると、詰まったときにまず" +
+                    "それを押してしまうので。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Switch(
-            checked = settings.paused,
-            onCheckedChange = { DesktopRuntime.updateSettings { s -> s.copy(paused = it) } },
+            checked = settings.developerMode,
+            onCheckedChange = { on ->
+                DesktopRuntime.updateSettings { s ->
+                    // 隠すときは、隠れる設定に居座らせない。SUSPEND のまま隠すと
+                    // 「オーバーレイが出ない」まま直せなくなる。一時停止も同じ
+                    if (on) {
+                        s.copy(developerMode = true)
+                    } else {
+                        s.copy(
+                            developerMode = false,
+                            paused = false,
+                            blockStrength = if (s.blockStrength == BlockStrength.SUSPEND) {
+                                BlockStrength.MINIMIZE
+                            } else {
+                                s.blockStrength
+                            },
+                        )
+                    }
+                }
+            },
         )
     }
 }

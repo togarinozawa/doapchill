@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -1387,6 +1388,43 @@ private fun FocusCard() {
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = { showAllowPicker = true }) { Text("選ぶ") }
 
+            // タグでも逃がせるようにする。アプリを1つずつ選び直さずに済むのと、
+            // **あとから入れたアプリが自動で入る**のが効く ── 1つずつだと、
+            // 新しく入れた音楽アプリが集中のたびに閉まって、そのたび設定を開くことになる
+            Spacer(Modifier.height(16.dp))
+            Text("タグで逃がす", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "そのタグが付いたアプリをまとめて逃がします。あとでタグに足したアプリも、" +
+                    "設定を触らずに逃げるようになります。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            if (tags.isEmpty()) {
+                Text(
+                    "タグがまだありません。ルールのタブから作れます。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    tags.forEach { tag ->
+                        FilterChip(
+                            selected = tag in settings.allowTags,
+                            onClick = {
+                                val next = if (tag in settings.allowTags) {
+                                    settings.allowTags - tag
+                                } else {
+                                    settings.allowTags + tag
+                                }
+                                update(settings.copy(allowTags = next))
+                            },
+                            label = { Text(tag) },
+                        )
+                    }
+                }
+            }
+
             Spacer(Modifier.height(16.dp))
             HorizontalDivider()
             Spacer(Modifier.height(16.dp))
@@ -1678,6 +1716,9 @@ private fun SyncCard() {
     var busy by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf("") }
 
+    /** PC に出した短い合言葉。引き換えると本物が [token] に入る。 */
+    var invite by remember { mutableStateOf("") }
+
     fun save(transform: (SyncSettings) -> SyncSettings) {
         scope.launch { DopaRuntime.settings.setSyncSettings(transform(settings)) }
     }
@@ -1698,6 +1739,49 @@ private fun SyncCard() {
                 label = { Text("サーバーの住所") },
                 placeholder = { Text("https://dopa.togar.dev") },
                 singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
+
+            // 短い合言葉で繋ぐ道。
+            //
+            // 48文字の合言葉を PC から写すのが面倒、というのがそもそもの動機。
+            // PC 側で「合言葉を出す」を押すと8文字が出るので、それをここに打つ。
+            // **2分で切れて1回しか使えない**ので、切れたら出し直してもらう。
+            OutlinedTextField(
+                value = invite,
+                onValueChange = { invite = it.uppercase().take(12) },
+                label = { Text("短い合言葉で繋ぐ") },
+                placeholder = { Text("PC に出た8文字") },
+                singleLine = true,
+                supportingText = {
+                    Text(
+                        "Windows の設定 → 端末間の同期 →「合言葉を出す」。" +
+                            "48文字のほうを写す必要はありません。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                },
+                trailingIcon = {
+                    TextButton(
+                        onClick = {
+                            busy = true
+                            result = "引き換えています…"
+                            scope.launch {
+                                val got = DopaRuntime.claimInvite(url.trim(), invite.trim())
+                                result = got.fold(
+                                    onSuccess = { claimed ->
+                                        token = claimed
+                                        invite = ""
+                                        "繋がりました。下の「保存する」を押してください"
+                                    },
+                                    onFailure = { it.message ?: "引き換えられませんでした" },
+                                )
+                                busy = false
+                            }
+                        },
+                        enabled = !busy && url.isNotBlank() && invite.trim().length >= 6,
+                    ) { Text("引き換える") }
+                },
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(8.dp))

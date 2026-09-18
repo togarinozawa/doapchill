@@ -94,6 +94,26 @@ data class SyncResponse(
 data class PingResponse(val ok: Boolean = false, val rev: Long = 0L, val serverTime: Long = 0L)
 
 /**
+ * 短い合言葉。端末を増やすときに、48文字の本物を打ち込まずに済ませるためのもの。
+ *
+ * **短命かつ使い切り**なのが安全の要です。画面に残り時間を出してください ──
+ * 出さないと、切れたコードを打ち込んで「合わない」と悩むことになります。
+ */
+@Serializable
+data class InviteResponse(
+    val code: String = "",
+    val expiresAt: Long = 0L,
+    val ttlSeconds: Int = 0,
+)
+
+@Serializable
+data class ClaimRequest(val code: String)
+
+/** 引き換えた本物の合言葉。 */
+@Serializable
+data class ClaimResponse(val token: String = "")
+
+/**
  * アプリの名札。
  *
  * `id` は端末ごとの識別子(Android はパッケージ名、Windows は実行ファイル名)。

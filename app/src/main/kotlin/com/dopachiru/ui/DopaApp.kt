@@ -5,8 +5,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.material.icons.filled.Insights
-import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -30,6 +30,7 @@ import androidx.navigation.compose.rememberNavController
 import com.dopachiru.ui.changes.ChangeRequestScreen
 import com.dopachiru.ui.dashboard.DashboardScreen
 import com.dopachiru.ui.devices.DeviceScreen
+import com.dopachiru.ui.focus.FocusScreen
 import com.dopachiru.ui.reservation.ReservationScreen
 import com.dopachiru.ui.rules.RuleEditScreen
 import com.dopachiru.ui.rules.RuleListScreen
@@ -53,8 +54,16 @@ private enum class TopLevel(
      * 「宣言」と変わらなくなる。冷静なうちに手が届く場所に置く必要がある。
      */
     Reservations("reservations", "予約", Icons.Filled.Event),
+
+    /**
+     * 集中。**タグと入れ替えた。**
+     *
+     * 集中はいちばん使う操作なのに記録の中の札に埋もれていて、タグはルールを
+     * 書くときにしか触らないのにタブを1つ持っていた。釣り合っていなかった。
+     * タグはルールタブの中に移してある。
+     */
+    Focus("focus", "集中", Icons.Filled.SelfImprovement),
     Rules("rules", "ルール", Icons.Filled.Block),
-    Tags("tags", "タグ", Icons.Filled.Label),
     Changes("changes", "変更", Icons.Filled.History),
     Settings("settings", "設定", Icons.Filled.Settings),
 }
@@ -116,10 +125,19 @@ fun DopaApp() {
 
             composable("devices") { DeviceScreen() }
 
+            composable(TopLevel.Focus.route) {
+                FocusScreen(
+                    onOpenSettings = {
+                        navController.navigate("settings/page/" + SettingsPage.Focus.id)
+                    },
+                )
+            }
+
             composable(TopLevel.Rules.route) {
                 RuleListScreen(
                     onCreate = { navController.navigate("rule/0") },
                     onEdit = { id -> navController.navigate("rule/$id") },
+                    onOpenTags = { navController.navigate("tags") },
                 )
             }
 
@@ -131,7 +149,9 @@ fun DopaApp() {
                 )
             }
 
-            composable(TopLevel.Tags.route) { TagScreen() }
+            // タグはタブをやめて、ルールタブの中から入る。ルールを書くときにしか
+            // 触らないものに、下タブを1つ使う必要はない
+            composable("tags") { TagScreen() }
 
             composable(TopLevel.Changes.route) { ChangeRequestScreen() }
 

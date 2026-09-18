@@ -47,7 +47,10 @@ import kotlin.math.roundToInt
 /**
  * 完全封印のブロック画面。
  *
- * [minSeconds] のあいだは閉じるボタンが出ない。すぐ閉じられないこと自体が抑止になる。
+ * [minSeconds] のあいだ待たされるのは**押し切る側だけ**。「わかった、やめる」は
+ * 最初から押せる。待ち時間は「1タップで通れる壁は事実上そこに無い」ために置いたもので、
+ * それは逃げる側に要る摩擦であって、素直にやめる側にまでかけるとただの罰になる
+ * ── 同意している人を待たせても、抑止は1ミリも増えない。
  *
  * [allowOverride] が false のときは「それでも使う」が出ない。学習予定の最中など、
  * 逃げ道を残さないと決めた場面で使う。ホームには戻れるので閉じ込めにはならない。
@@ -126,28 +129,31 @@ fun BlockScreen(
 
             Spacer(Modifier.height(56.dp))
 
+            // 「やめる」は**待たせない**。
+            //
+            // 待ち時間は元々「1タップで通れる壁は事実上そこに無い」(GoalKeeper,
+            // IMWUT 2019 では警告の92%が無視された)ために置いたものだが、
+            // それは**逃げる側**に必要な摩擦であって、素直にやめる側にまでかけると
+            // ただの罰になる。同意している人を待たせても、抑止は1ミリも増えない。
+            Button(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Text("わかった、やめる", modifier = Modifier.padding(vertical = 6.dp))
+            }
+            Spacer(Modifier.height(12.dp))
+
             if (remaining > 0) {
+                // 押し切る口が開くまでの残り。壁そのものは出たままなので、
+                // 数字が消えるのを待つ必要はない(上のボタンはもう押せる)
                 Text(
-                    text = "$remaining",
-                    fontSize = 56.sp,
-                    fontWeight = FontWeight.Light,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "秒",
+                    text = "$remaining 秒後に、押し切る口が開きます",
                     style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                Button(
-                    onClick = onDismiss,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                ) {
-                    Text("わかった、やめる", modifier = Modifier.padding(vertical = 6.dp))
-                }
-                Spacer(Modifier.height(12.dp))
                 when {
                     allowOverride -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         TextButton(

@@ -65,13 +65,17 @@ fun main(args: Array<String>) = application {
         onAction = { windowOpen = true },
         menu = {
             Item("開く", onClick = { windowOpen = true })
-            CheckboxItem(
-                "一時停止",
-                checked = settings.paused,
-                onCheckedChange = { paused ->
-                    DesktopRuntime.updateSettings { it.copy(paused = paused) }
-                },
-            )
+            // 一時停止は開発者向けの奥に置いてある。トレイにも出すと、
+            // 設定で隠した意味が無くなる ── 詰まったときにまず押してしまう
+            if (settings.developerMode) {
+                CheckboxItem(
+                    "一時停止",
+                    checked = settings.paused,
+                    onCheckedChange = { paused ->
+                        DesktopRuntime.updateSettings { it.copy(paused = paused) }
+                    },
+                )
+            }
             Separator()
             Item(
                 "終了",

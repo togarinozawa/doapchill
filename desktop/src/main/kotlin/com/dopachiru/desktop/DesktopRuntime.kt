@@ -59,6 +59,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import com.dopachiru.core.sync.DeviceInfo
+import com.dopachiru.core.sync.SyncApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -724,6 +725,31 @@ object DesktopRuntime {
 
     /** 画面の「いま同期する」。待たせないよう裏で回す。 */
     fun syncInBackground() = scope.launch { runCatching { syncNow() } }
+
+    sealed interface InviteResult {
+        data class Ok(val code: String, val seconds: Int) : InviteResult
+        data class Failed(val message: String) : InviteResult
+    }
+
+    /**
+     * もう1台を繋ぐための短い合言葉を出す。**呼ぶ側が別スレッドへ。**
+     *
+     * 本物の合言葉は48文字あり、スマホに打ち込むのは現実的でない。
+     * カメラも権限も要らない代わりに2分で死ぬので、画面に残り時間を出すこと。
+     */
+    fun newInvite(): InviteResult {
+        val sync = _settings.value.sync
+        if (!sync.isConfigured) return InviteResult.Failed("先に住所と合言葉を保存してください")
+        val api = SyncApi(sync.baseUrl, sync.token)
+        return when (val out = api.newInvite()) {
+            is SyncApi.Outcome.Ok ->
+                InviteResult.Ok(out.value.code, out.value.ttlSeconds.coerceAtLeast(1))
+
+            is SyncApi.Outcome.Unreachable -> InviteResult.Failed(out.message)
+            is SyncApi.Outcome.Rejected -> InviteResult.Failed(out.message)
+            is SyncApi.Outcome.Malformed -> InviteResult.Failed(out.message)
+        }
+    }
 
     /**
      * 別の端末に頼む。**積むだけで、実行はしません。**

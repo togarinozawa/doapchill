@@ -59,7 +59,13 @@
         android:maxLines="3"
         android:ellipsize="end" />
 
-    <Space
+    <!--
+      余白。**Space は使えない。**
+      RemoteViews が扱えるビューは決まっていて(FrameLayout / LinearLayout /
+      RelativeLayout / GridLayout と TextView などの数種)、Space はそこに無い。
+      入れるとランチャーが膨らませるのに失敗して「ウィジェットを読み込めません」になる。
+    -->
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1" />

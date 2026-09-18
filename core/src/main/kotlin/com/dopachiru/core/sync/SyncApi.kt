@@ -71,6 +71,33 @@ class SyncApi(
      */
     fun health(): Outcome<Unit> = request("GET", "/health", null, withToken = false) { }
 
+    // ---- 短い合言葉で繋ぐ ------------------------------------------------
+
+    /**
+     * 短いコードを1つ発行してもらう。**すでに繋がっている端末から呼びます。**
+     *
+     * 本物の合言葉は48文字あり、端末を増やすたびに打ち込むのは現実的ではない。
+     * QR と同じことを、カメラも権限も使わずにやるための口です。
+     */
+    fun newInvite(): Outcome<InviteResponse> = request(
+        "POST",
+        "/invite/new",
+        "{}",
+    ) { JSON.decodeFromString(InviteResponse.serializer(), it) }
+
+    /**
+     * コードと引き換えに本物の合言葉を受け取る。**これから繋ぐ端末から呼びます。**
+     *
+     * 合言葉をまだ持っていないので、ここだけ認証を通しません
+     * (サーバー側で2分・使い切りに絞ってあります)。
+     */
+    fun claimInvite(code: String): Outcome<ClaimResponse> = request(
+        "POST",
+        "/invite/claim",
+        JSON.encodeToString(ClaimRequest.serializer(), ClaimRequest(code)),
+        withToken = false,
+    ) { JSON.decodeFromString(ClaimResponse.serializer(), it) }
+
     // ------------------------------------------------------------------
 
     private fun <T> request(

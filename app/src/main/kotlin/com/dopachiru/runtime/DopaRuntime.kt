@@ -30,6 +30,7 @@ import com.dopachiru.core.param.Params
 import com.dopachiru.core.points.PointPolicy
 import com.dopachiru.core.points.PointReason
 import com.dopachiru.core.sync.DeviceInfo
+import com.dopachiru.core.sync.SyncApi
 import com.dopachiru.core.sync.SyncKinds
 import com.dopachiru.core.time.ResetPolicy
 import com.dopachiru.data.CalendarReader
@@ -54,6 +55,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -917,6 +919,37 @@ object DopaRuntime {
             runInbox()
         }
     }
+
+    /**
+     * 短い合言葉と引き換えに、本物の合言葉を受け取る。
+     *
+     * 48文字の合言葉を PC から写すのが面倒、というだけのための道です。
+     * カメラも権限も要らない代わりに、サーバー側で**2分・使い切り**に絞ってあります。
+     */
+    suspend fun claimInvite(baseUrl: String, code: String): Result<String> =
+        withContext(Dispatchers.IO) {
+            if (baseUrl.isBlank()) return@withContext Result.failure(
+                IllegalArgumentException("先にサーバーの住所を入れてください"),
+            )
+            // 合言葉をまだ持っていないので、空のまま呼ぶ(この口だけ認証が要らない)
+            when (val out = SyncApi(baseUrl, "").claimInvite(code)) {
+                is SyncApi.Outcome.Ok ->
+                    out.value.token.takeIf { it.isNotBlank() }
+                        ?.let { Result.success(it) }
+                        ?: Result.failure(IllegalStateException("サーバーが合言葉を持っていません"))
+
+                is SyncApi.Outcome.Rejected ->
+                    // 見つからないのと切れたのをサーバーは区別しない(総当たりの手掛かりになる)
+                    Result.failure(
+                        IllegalStateException(
+                            if (out.code == 404) "その合言葉は見つかりません。切れているかもしれません" else out.message,
+                        ),
+                    )
+
+                is SyncApi.Outcome.Unreachable -> Result.failure(IllegalStateException(out.message))
+                is SyncApi.Outcome.Malformed -> Result.failure(IllegalStateException(out.message))
+            }
+        }
 
     /** 名簿。画面で相手を選ぶために使う。 */
     val devices: Flow<List<DeviceInfo>> get() = settings.devices

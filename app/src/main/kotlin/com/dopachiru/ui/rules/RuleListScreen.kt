@@ -108,6 +108,7 @@ class RuleListViewModel(app: Application) : AndroidViewModel(app) {
 fun RuleListScreen(
     onCreate: () -> Unit,
     onEdit: (Long) -> Unit,
+    onOpenTags: () -> Unit = {},
     viewModel: RuleListViewModel = viewModel(),
 ) {
     val rules by viewModel.rules.collectAsState()
@@ -140,6 +141,7 @@ fun RuleListScreen(
                 RuleTransferControls()
                 Spacer(Modifier.height(8.dp))
                 TextButton(onClick = onCreate) { Text("ゼロから組む") }
+                TextButton(onClick = onOpenTags) { Text("タグを編集") }
             }
         } else {
             LazyColumn(
@@ -147,11 +149,18 @@ fun RuleListScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 item {
-                    OutlinedButton(
-                        onClick = { pickingPreset = true },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("雛形から足す")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { pickingPreset = true },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("雛形から足す")
+                        }
+                        // タグはタブをやめてここに置いた。ルールを書くときにしか
+                        // 触らないものに、下タブを1つ使う必要はない
+                        OutlinedButton(onClick = onOpenTags, modifier = Modifier.weight(1f)) {
+                            Text("タグを編集")
+                        }
                     }
                     // 込み入ったルールは、書き出して手元の道具に直してもらうほうが早い
                     RuleTransferControls()

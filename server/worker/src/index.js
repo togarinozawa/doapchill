@@ -65,8 +65,18 @@ export default {
       return cors(json({ ok: true, service: 'dopachiru-sync' }));
     }
 
+    // 短い合言葉を引き換える口。**合言葉を持っていない端末が叩く**ので、
+    // ここだけは認証の前に置く。詳しくは claimInvite を見ること
+    if (path === '/invite/claim' && request.method === 'POST') {
+      return cors(await claimInvite(request, env));
+    }
+
     if (!authorized(request, env)) {
       return cors(json({ error: 'unauthorized' }, 401));
+    }
+
+    if (path === '/invite/new' && request.method === 'POST') {
+      return cors(await newInvite(env));
     }
 
     try {
@@ -102,6 +112,66 @@ function timingSafeEqual(a, b) {
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
+}
+
+// ---- 短い合言葉(招待コード) -----------------------------------------------
+//
+// 本物の合言葉は48文字ある。端末を増やすたびにこれを打ち込むのは現実的でないので、
+// **すでに繋がっている端末**が短いコードを1つ登録し、新しい端末はそれと引き換えに
+// 本物を受け取る。QR と同じことを、カメラも権限も使わずにやる。
+//
+// 危ないのは、引き換えの口が合言葉なしで叩けること。3つで抑えている。
+//
+//  1. 短命。2分で死ぬ
+//  2. 使い切り。引き換えた瞬間に消える
+//  3. 紛らわしい字を抜いた32文字から8文字 = 約1兆通り。2分では総当たりできない
+//
+// それでも「合言葉そのものを配る口」であることに変わりはないので、
+// 窓を開けるのは**すでに繋がっている端末から頼まれたときだけ**にしてある。
+
+/** 紛らわしい字(0/O/1/I/L)を抜いてある。口頭でも打ち間違えない。 */
+const INVITE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const INVITE_TTL_MS = 2 * 60 * 1000;
+
+function newCode() {
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  return [...bytes].map((b) => INVITE_ALPHABET[b % INVITE_ALPHABET.length]).join('');
+}
+
+async function newInvite(env) {
+  const code = newCode();
+  const expires = Date.now() + INVITE_TTL_MS;
+  await env.DB.batch([
+    // 古いものを掃除してから入れる。溜めても使い道が無い
+    env.DB.prepare('DELETE FROM dopachiru_invites WHERE expires_at < ?').bind(Date.now()),
+    env.DB.prepare(
+      'INSERT INTO dopachiru_invites (user_id, code, expires_at) VALUES (?1, ?2, ?3)',
+    ).bind(USER_ID, code, expires),
+  ]);
+  return json({ code, expiresAt: expires, ttlSeconds: Math.floor(INVITE_TTL_MS / 1000) });
+}
+
+/**
+ * コードと引き換えに本物の合言葉を渡す。
+ *
+ * **引き換えは1回だけ。** 先に消してから渡すので、同じコードで2台は繋がらない。
+ * D1 の DELETE ... RETURNING が使えるので、読んでから消すまでの隙間が無い。
+ */
+async function claimInvite(request, env) {
+  const body = await readJson(request);
+  const code = String(body.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (code.length < 6) return json({ error: 'bad_code' }, 400);
+
+  const row = await env.DB.prepare(
+    'DELETE FROM dopachiru_invites WHERE user_id = ?1 AND code = ?2 AND expires_at > ?3' +
+      ' RETURNING code',
+  )
+    .bind(USER_ID, code, Date.now())
+    .first();
+
+  // 見つからないのと期限切れを区別しない。区別すると総当たりの手掛かりになる
+  if (!row) return json({ error: 'not_found' }, 404);
+  return json({ token: env.DOPA_TOKEN || '' });
 }
 
 // ---- 疎通 -----------------------------------------------------------------

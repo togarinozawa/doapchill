@@ -49,5 +49,17 @@ CREATE TABLE IF NOT EXISTS dopachiru_usage (
 CREATE INDEX IF NOT EXISTS idx_dopachiru_usage_date
   ON dopachiru_usage (user_id, date);
 
+-- 短い合言葉(招待コード)。
+--
+-- 本物の合言葉は48文字あり、端末を増やすたびに打ち込むのは現実的でない。
+-- すでに繋がっている端末が短いコードを登録し、新しい端末が引き換える。
+-- **短命かつ使い切り**なのが安全の要なので、期限は必ず見ること。
+CREATE TABLE IF NOT EXISTS dopachiru_invites (
+  user_id    INTEGER NOT NULL DEFAULT 1,
+  code       TEXT    NOT NULL,
+  expires_at INTEGER NOT NULL,              -- ミリ秒。2分で死ぬ
+  PRIMARY KEY (user_id, code)
+);
+
 -- 版数の行が無ければ作る
 INSERT OR IGNORE INTO dopachiru_meta (user_id, rev) VALUES (1, 0);

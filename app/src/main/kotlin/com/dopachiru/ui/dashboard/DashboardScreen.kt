@@ -654,6 +654,10 @@ private fun FocusCard(viewModel: DashboardViewModel) {
         }
     }
 
+    // 始めるのは集中タブの仕事。ここは**走っているときの状態表示だけ**にする ──
+    // 同じボタンが2か所にあると、どちらが本物か分からなくなる
+    if (focus == null) return
+
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Text("集中する", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)

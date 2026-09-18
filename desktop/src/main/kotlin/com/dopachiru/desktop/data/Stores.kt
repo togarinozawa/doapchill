@@ -67,6 +67,19 @@ data class DesktopSettings(
      */
     val deviceName: String = "",
 
+    /**
+     * 開発者向けの操作を出すか。既定は出さない。
+     *
+     * ここに隠すのは**縛りを丸ごと無効にできるもの**だけ ── 一時停止と、
+     * プロセスの一時停止([BlockStrength.SUSPEND])。
+     *
+     * 隠す理由は、手の届くところに全部切れるスイッチがあると、
+     * 詰まったときにまずそれを押してしまうから。実際、
+     * 「オーバーレイが出ない」の正体は SUSPEND を選んだままだったこと。
+     * 押せる場所にあるだけで、意図せず選ばれる。
+     */
+    val developerMode: Boolean = false,
+
     /** 予約をいまから何分先からしか取れないか。直前予約を封じる待ち。 */
     val reservationLeadMinutes: Int = com.dopachiru.core.model.ReservationRules.MIN_LEAD_MINUTES,
 
