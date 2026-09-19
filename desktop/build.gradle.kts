@@ -9,7 +9,7 @@ plugins {
 }
 
 /** Windows 版の版番号。持ち運び版の名前と MSI の両方で使う。 */
-val desktopVersion = "1.14.0"
+val desktopVersion = "1.15.0"
 
 kotlin {
     jvmToolchain(21)
@@ -117,6 +117,14 @@ tasks.register<Zip>("packagePortable") {
     // 版を名前に入れる。入れないと、どれを渡したのか後から辿れない
     archiveFileName.set("dopachiru-windows-$desktopVersion.zip")
     destinationDirectory.set(rootProject.layout.projectDirectory.dir("dist"))
+}
+
+/** 入っているアプリの一覧が実機で取れるかを見る。`gradlew :desktop:installedAppsSmoke` */
+tasks.register<JavaExec>("installedAppsSmoke") {
+    group = "verification"
+    description = "スタートメニューから実行ファイル名を拾えているか目で見る"
+    mainClass.set("com.dopachiru.desktop.tools.InstalledAppsSmokeKt")
+    classpath = sourceSets["main"].runtimeClasspath
 }
 
 /** Win32 まわりが実機で動くかを確かめる。`gradlew :desktop:win32Smoke` */

@@ -68,7 +68,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dopachiru.core.action.ActionRegistry
+import com.dopachiru.core.action.types.BlockAction
+import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.ConditionTree
+import com.dopachiru.core.param.Params
 import com.dopachiru.core.model.DeviceScope
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Rule
@@ -80,6 +83,7 @@ import com.dopachiru.core.model.Target
 import com.dopachiru.desktop.DesktopRuntime
 import com.dopachiru.desktop.platform.BlockStrength
 import com.dopachiru.desktop.platform.ForegroundApp
+import com.dopachiru.desktop.platform.InstalledApps
 import com.dopachiru.desktop.platform.ProtectedProcesses
 import com.dopachiru.desktop.platform.WindowsAutoStart
 import com.dopachiru.desktop.platform.RunningApps
@@ -126,9 +130,20 @@ private fun RulesTab() {
     var presetProcesses by remember { mutableStateOf(emptySet<String>()) }
     var showAppPicker by remember { mutableStateOf(false) }
 
+    // ゼロから組むときの下書き。null なら編集していない
+    var drafting by remember { mutableStateOf<Rule?>(null) }
+    val settings by DesktopRuntime.settings.collectAsState()
+
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        OutlinedButton(onClick = { pickingPreset = true }, modifier = Modifier.fillMaxWidth()) {
-            Text("雛形から足す")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { pickingPreset = true }, modifier = Modifier.weight(1f)) {
+                Text("雛形から足す")
+            }
+            // 雛形からしか作れないのは Windows 側だけの制限だった。
+            // 中身(RuleEditor)は最初から全部書けるので、入口を1つ足すだけで済む
+            OutlinedButton(onClick = { drafting = blankRule() }, modifier = Modifier.weight(1f)) {
+                Text("ゼロから組む")
+            }
         }
         Spacer(Modifier.height(12.dp))
 
@@ -220,7 +235,35 @@ private fun RulesTab() {
             onDismiss = { showAppPicker = false },
         )
     }
+
+    drafting?.let { draft ->
+        RuleEditorDialog(
+            rule = draft,
+            policy = settings.pointPolicy,
+            onSave = { built ->
+                // 新規は関門を通さない。縛りを増やす方向に摩擦をかける理由が無い
+                DesktopRuntime.addRule(built)
+                drafting = null
+            },
+            onDismiss = { drafting = null },
+        )
+    }
 }
+
+/**
+ * ゼロから組むときの下書き。
+ *
+ * 対象も条件も空。**空の対象は何にも当たらない**ので、保存しても事故にはならない
+ * (当たらないルールが1本増えるだけ)。既定の措置だけ「使えなくする」に寄せてある。
+ */
+private fun blankRule(): Rule = Rule(
+    id = 0L,
+    name = "新しいルール",
+    target = Target(),
+    condition = ConditionNode.AllOf(emptyList()),
+    actionId = BlockAction.id,
+    actionParams = Params.defaultsOf(BlockAction.params),
+)
 
 @Composable
 private fun RuleCard(rule: Rule) {
@@ -1654,10 +1697,34 @@ internal fun AppPickerDialog(
     onToggle: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    // Windows には「インストール済みアプリ」の統一された一覧が無いので、
-    // いま窓を持って動いているものから選ばせる。
+    // 入っているアプリはスタートメニューから、取りこぼしはいま動いているものから。
+    // どちらか一方だけだと必ず足りない ── スタートメニューに出ないアプリもあれば、
+    // いま閉じているアプリもある
+    var installed by remember { mutableStateOf(emptyList<InstalledApps.Entry>()) }
+    var loading by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        // 何百個も .lnk を開くので、画面を止めない
+        installed = withContext(Dispatchers.IO) { InstalledApps.all() }
+        loading = false
+    }
     val running = remember { RunningApps.visible() }
+    var query by remember { mutableStateOf("") }
     var manual by remember { mutableStateOf("") }
+
+    // 動いているものを先に、次に入っているもの。選択済みは必ず残す
+    val rows = remember(installed, running, selected) {
+        val byProcess = LinkedHashMap<String, String>()
+        running.forEach { byProcess.putIfAbsent(it.processName, it.label) }
+        installed.forEach { byProcess.putIfAbsent(it.processName, it.label) }
+        selected.forEach { byProcess.putIfAbsent(it, it) }
+        byProcess.map { (process, label) -> process to label }
+    }
+    val shown = remember(rows, query) {
+        val q = query.trim().lowercase()
+        if (q.isBlank()) rows else rows.filter {
+            it.first.contains(q) || it.second.lowercase().contains(q)
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1665,44 +1732,45 @@ internal fun AppPickerDialog(
         text = {
             Column {
                 Text(
-                    "いま起動しているアプリから選びます。閉じているアプリは、" +
-                        "実行ファイル名を直接足してください。",
+                    "スタートメニューに出るアプリと、いま動いているアプリから選べます。" +
+                        "どちらにも無いものは、実行ファイル名を直接足してください。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(8.dp))
-                Text("${selected.size} 個選択中", style = MaterialTheme.typography.labelSmall)
+
+                androidx.compose.material3.OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = { Text("探す") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    if (loading) "${selected.size} 個選択中 ・ 一覧を読んでいます…"
+                    else "${selected.size} 個選択中 ・ ${shown.size} 件",
+                    style = MaterialTheme.typography.labelSmall,
+                )
                 Spacer(Modifier.height(4.dp))
 
                 LazyColumn(Modifier.heightIn(max = 360.dp)) {
-                    items(running, key = { it.processName }) { app ->
+                    items(shown, key = { it.first }) { (process, label) ->
                         Row(
                             Modifier.fillMaxWidth().padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Checkbox(
-                                checked = app.processName in selected,
-                                onCheckedChange = { onToggle(app.processName) },
+                                checked = process in selected,
+                                onCheckedChange = { onToggle(process) },
                             )
                             Column(Modifier.weight(1f)) {
-                                Text(app.label, style = MaterialTheme.typography.bodyMedium)
+                                Text(label, style = MaterialTheme.typography.bodyMedium)
                                 Text(
-                                    app.processName,
+                                    process + if (running.any { it.processName == process }) " ・ 動作中" else "",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                            }
-                        }
-                    }
-                    if (selected.any { s -> running.none { it.processName == s } }) {
-                        item {
-                            Spacer(Modifier.height(8.dp))
-                            Text("いま動いていない選択中のもの", style = MaterialTheme.typography.labelSmall)
-                        }
-                        items(selected.filter { s -> running.none { it.processName == s } }) { process ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(checked = true, onCheckedChange = { onToggle(process) })
-                                Text(process, style = MaterialTheme.typography.bodyMedium)
                             }
                         }
                     }
@@ -1717,7 +1785,6 @@ internal fun AppPickerDialog(
                         singleLine = true,
                         modifier = Modifier.weight(1f),
                     )
-                    Spacer(Modifier.height(8.dp))
                     TextButton(
                         enabled = manual.isNotBlank(),
                         onClick = {
@@ -1729,6 +1796,14 @@ internal fun AppPickerDialog(
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } },
+        dismissButton = {
+            // 入れ直した直後は一覧に出ない。作り直す道を残しておく
+            TextButton(onClick = {
+                loading = true
+                installed = emptyList()
+                query = ""
+            }) { Text("読み直す") }
+        },
     )
 }
 
