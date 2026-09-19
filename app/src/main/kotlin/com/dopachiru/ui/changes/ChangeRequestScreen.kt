@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -24,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -34,6 +36,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dopachiru.core.gate.ChangeKind
 import com.dopachiru.core.gate.ChangeStatus
 import com.dopachiru.core.gate.Gate
+import com.dopachiru.ui.settings.GuardSection
 import com.dopachiru.data.PendingChange
 import com.dopachiru.runtime.DopaRuntime
 import com.dopachiru.ui.minigame.ArithmeticGame
@@ -97,13 +100,42 @@ fun ChangeRequestScreen(viewModel: ChangeRequestViewModel = viewModel()) {
     val history = changes.filter { it.entity.status != ChangeStatus.PENDING.name }
 
     var activeGate by remember { mutableStateOf<Pair<Long, Gate>?>(null) }
+    // 関門そのものをここから設定できるようにしてある。申請が詰まっているのを
+    // 見ているそのときが、どう設定したかを確かめたい瞬間なので
+    var showGuard by remember { mutableStateOf(false) }
 
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            Text("申請中", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("申請中", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                TextButton(onClick = { showGuard = !showGuard }) {
+                    Text(if (showGuard) "関門の設定を閉じる" else "関門の設定")
+                }
+            }
+        }
+
+        if (showGuard) {
+            item {
+                Column {
+                    Text(
+                        "ここで決めた関門が、これからの変更にかかります。" +
+                            "**いま待っている申請には効きません** ── 起票した時点の関門で通ります。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    GuardSection(viewModel = androidx.lifecycle.viewmodel.compose.viewModel())
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider()
+                }
+            }
         }
 
         if (pending.isEmpty()) {

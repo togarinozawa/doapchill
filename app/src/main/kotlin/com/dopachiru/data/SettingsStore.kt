@@ -16,6 +16,7 @@ import com.dopachiru.core.model.FocusSchedule
 import com.dopachiru.core.model.FocusSchedules
 import com.dopachiru.core.model.FocusSettings
 import com.dopachiru.core.model.Reservation
+import com.dopachiru.core.model.ReservationPolicy
 import com.dopachiru.core.model.ReservationRules
 import com.dopachiru.core.points.PointPolicy
 import com.dopachiru.core.sync.DeviceInfo
@@ -63,6 +64,7 @@ class SettingsStore(private val context: Context) {
         val commandsJson = stringPreferencesKey("commands_json")
         val focusSchedulesJson = stringPreferencesKey("focus_schedules_json")
         val focusScheduleRunsJson = stringPreferencesKey("focus_schedule_runs_json")
+        val reservationPoliciesJson = stringPreferencesKey("reservation_policies_json")
         val reservationLeadMinutes = intPreferencesKey("reservation_lead_minutes")
     }
 
@@ -287,6 +289,28 @@ class SettingsStore(private val context: Context) {
             runs,
         )
         context.dataStore.edit { it[Keys.focusScheduleRunsJson] = encoded }
+    }
+
+    /**
+     * 予約できる枠の型。
+     *
+     * 端末ごとに持つ(同期しない) ── 予約を取るのは型がある端末で、
+     * 取れた枠のほうは端末をまたいで配られる。型まで配ると、
+     * PC に無いアプリの型がスマホに並ぶことになる。
+     */
+    val reservationPolicies: Flow<List<ReservationPolicy>> = context.dataStore.data.map { prefs ->
+        val raw = prefs[Keys.reservationPoliciesJson] ?: return@map emptyList()
+        runCatching {
+            DopaCore.json.decodeFromString(ListSerializer(ReservationPolicy.serializer()), raw)
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun setReservationPolicies(list: List<ReservationPolicy>) {
+        val encoded = DopaCore.json.encodeToString(
+            ListSerializer(ReservationPolicy.serializer()),
+            list,
+        )
+        context.dataStore.edit { it[Keys.reservationPoliciesJson] = encoded }
     }
 
     /** 予約をいまから何分先からしか取れないか。直前予約を封じる待ち。 */

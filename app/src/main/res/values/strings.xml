@@ -22,4 +22,5 @@
     <string name="widget_focus_pick">選ぶ</string>
     <string name="widget_focus_open">ドパチルを開く</string>
     <string name="widget_focus_stop">切り上げる(本体を開きます)</string>
+    <string name="widget_focus_extend_warning">足したら戻せません(切り上げには手間とポイント)</string>
 </resources>

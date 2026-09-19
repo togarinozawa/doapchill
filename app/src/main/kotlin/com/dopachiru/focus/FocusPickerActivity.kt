@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.dopachiru.core.model.Focus
 import com.dopachiru.runtime.DopaRuntime
+import com.dopachiru.ui.focus.ExtendFocusRow
 import com.dopachiru.ui.theme.DopaTheme
 
 /**
@@ -180,11 +181,8 @@ private fun RunningPanel(
     )
     Spacer(Modifier.height(12.dp))
 
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Focus.EXTEND_CHOICES.forEach { minutes ->
-            OutlinedButton(onClick = { onExtend(minutes) }) { Text("+$minutes") }
-        }
-    }
+    // 誤タップで伸びると、切り上げに手間とポイントが要る。2段階にしてある
+    ExtendFocusRow(onExtend = onExtend)
 
     Spacer(Modifier.height(8.dp))
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {

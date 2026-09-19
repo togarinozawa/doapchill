@@ -39,6 +39,14 @@ data class Reservation(
     val note: String = "",
 
     /**
+     * どの型([ReservationPolicy])から取った枠か。空なら型より前に取ったもの。
+     *
+     * 間隔と1日の回数を数えるときの鍵。型を消して作り直しても古い枠が残るので、
+     * 数えるときは対象の重なりも見る([ReservationRules.bookedUnder])。
+     */
+    val policyId: String = "",
+
+    /**
      * どの端末の枠か(deviceId の集合)。空ならどの端末でも。
      *
      * **スマホから PC の枠を取る**のがこれの主な使い道。冷静なうちに決めるという
@@ -83,21 +91,4 @@ object Reservations {
     /** 終わった予約を落とす。 */
     fun prune(all: List<Reservation>, nowSec: Long): List<Reservation> =
         all.filterNot { it.isPastAt(nowSec) }
-}
-
-/** 予約の決まりごと。 */
-object ReservationRules {
-    /**
-     * いまからこれだけ先の時刻からしか予約できない(既定)。
-     *
-     * 直前予約を封じるための最短の待ち。ここを 0 にすると「今すぐ予約」ができて、
-     * 冷静な決定という予約の意味が消える。端末ごとに設定から変えられる。
-     */
-    const val MIN_LEAD_MINUTES = 60
-
-    /** 予約の最短の長さ。 */
-    const val MIN_DURATION_MINUTES = 5
-
-    /** 予約の最長の長さ。これ以上はルールで決めるべきもの。 */
-    const val MAX_DURATION_MINUTES = 8 * 60
 }

@@ -1,6 +1,9 @@
 package com.dopachiru.data
 
+import com.dopachiru.core.model.BookingCheck
 import com.dopachiru.core.model.Reservation
+import com.dopachiru.core.model.ReservationPolicy
+import com.dopachiru.core.model.ReservationRules
 import com.dopachiru.core.model.Reservations
 import com.dopachiru.core.model.Target
 import kotlinx.coroutines.CoroutineScope
@@ -73,6 +76,7 @@ class ReservationRepository(
         minLeadMinutes: Int,
         note: String = "",
         devices: Set<String> = emptySet(),
+        policyId: String = "",
     ): Reservation? {
         val now = nowSec()
         if (startEpochSec < now + minLeadMinutes * 60L) return null
@@ -84,6 +88,7 @@ class ReservationRepository(
             endEpochSec = endEpochSec,
             note = note,
             devices = devices,
+            policyId = policyId,
         )
         val next = Reservations.prune(cache, now) + reservation
         cache = next
@@ -94,6 +99,42 @@ class ReservationRepository(
             onChanged(reservation.uid, false)
         }
         return reservation
+    }
+
+    /**
+     * 型から枠を取る。**判定は core([ReservationRules.check])に任せる。**
+     *
+     * 断った理由まで返すのは、「取れません」とだけ言われても何を直せば
+     * いいのか分からないため。
+     */
+    fun bookUnder(
+        policy: ReservationPolicy,
+        startEpochSec: Long,
+        endEpochSec: Long,
+        devices: Set<String> = emptySet(),
+    ): BookingCheck {
+        val now = nowSec()
+        val existing = ReservationRules.bookedUnder(policy, cache, now)
+        val verdict = ReservationRules.check(policy, existing, startEpochSec, endEpochSec, now)
+        if (verdict is BookingCheck.Refused) return verdict
+
+        val reservation = Reservation(
+            uid = UUID.randomUUID().toString(),
+            target = policy.target,
+            startEpochSec = startEpochSec,
+            endEpochSec = endEpochSec,
+            note = policy.label,
+            devices = devices,
+            policyId = policy.id,
+        )
+        val next = Reservations.prune(cache, now) + reservation
+        cache = next
+        _flow.value = next
+        scope.launch {
+            store.setReservations(next)
+            onChanged(reservation.uid, false)
+        }
+        return BookingCheck.Ok
     }
 
     /** 予約を取り消す。まだ始まっていないものだけでなく、いま有効なものも消せる。 */

@@ -49,6 +49,7 @@ import com.dopachiru.data.GrowthStage
 import com.dopachiru.data.db.BlockLogEntity
 import com.dopachiru.data.db.DayStatEntity
 import com.dopachiru.runtime.DopaRuntime
+import com.dopachiru.ui.focus.ExtendFocusRow
 import com.dopachiru.ui.rules.InstalledApps
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -678,13 +679,10 @@ private fun FocusCard(viewModel: DashboardViewModel) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Focus.EXTEND_CHOICES.forEach { add ->
-                        TextButton(onClick = { DopaRuntime.extendFocus(add); viewModel.refreshFocus() }) {
-                            Text("+${add}分")
-                        }
-                    }
-                }
+                ExtendFocusRow(onExtend = { add ->
+                    DopaRuntime.extendFocus(add)
+                    viewModel.refreshFocus()
+                })
                 return@Column
             }
 

@@ -142,11 +142,7 @@ private fun RunningCard(focus: Lockout) {
             }
 
             Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Focus.EXTEND_CHOICES.forEach { add ->
-                    TextButton(onClick = { DopaRuntime.extendFocus(add) }) { Text("+${add}分") }
-                }
-            }
+            ExtendFocusRow(onExtend = { add -> DopaRuntime.extendFocus(add) })
             Spacer(Modifier.height(4.dp))
             Text(
                 // 切り上げはここに置かない。1タップで消せるなら決めたことになっていない

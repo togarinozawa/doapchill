@@ -18,9 +18,11 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -342,8 +344,11 @@ fun ReleaseEffortGate(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(16.dp))
-                Button(
-                    onClick = {},
+                // **Button を使わない。** Material の Button は内側に自前の
+                // clickable を持っていて、そちらが押下を食う ── 外から
+                // pointerInput を足しても onPress が来ず、長押しが効かなかった。
+                // 押下だけを見たいので、当たり判定は自分で持つ
+                Surface(
                     modifier = Modifier
                         .fillMaxWidth()
                         .pointerInput(Unit) {
@@ -356,10 +361,20 @@ fun ReleaseEffortGate(
                             )
                         },
                     shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.primary,
                 ) {
                     Text(
-                        if (holding) "${(HOLD_SECONDS - held) / 10 + 1}…" else "長押しして使う",
-                        modifier = Modifier.padding(vertical = 6.dp),
+                        if (holding) "あと${remainingHoldSeconds(held)}…" else "長押しして使う",
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp),
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                    )
+                }
+                if (holding) {
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { held.toFloat() / HOLD_SECONDS },
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 }
             }
@@ -374,6 +389,13 @@ fun ReleaseEffortGate(
 
 /** 長押しの必要時間。100ms 刻みで数えるので 30 = 3秒。 */
 private const val HOLD_SECONDS = 30
+
+/**
+ * 残り秒。**切り上げる** ── 切り捨てると、押した瞬間に「あと2」から始まって
+ * 3秒待たされる。数字と実際の待ちが食い違うと、壊れているように見える。
+ */
+private fun remainingHoldSeconds(held: Int): Int =
+    ((HOLD_SECONDS - held) + 9) / 10
 
 /**
  * 数秒待たせてから、必ず通す画面。

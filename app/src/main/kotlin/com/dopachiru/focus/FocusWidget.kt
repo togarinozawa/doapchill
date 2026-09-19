@@ -1,11 +1,13 @@
 package com.dopachiru.focus
 
+import android.app.AlarmManager
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.SystemClock
 import android.view.View
 import android.widget.RemoteViews
@@ -63,8 +65,26 @@ class FocusWidget : AppWidgetProvider() {
                 if (DopaRuntime.activeFocus() == null) DopaRuntime.startFocus(minutes)
             }
 
+            // 1回目は構えるだけ。2回目で足す ── ホーム画面のボタンは
+            // いちばん誤タップしやすいのに、足したぶんは切り上げないと戻せない
+            ACTION_ARM -> {
+                armedMinutes = intent.getIntExtra(EXTRA_MINUTES, 5)
+                armedAtMs = System.currentTimeMillis()
+                refresh(context)
+            }
+
+            ACTION_DISARM -> {
+                armedMinutes = 0
+                refresh(context)
+            }
+
+            // 集中が明ける時刻に鳴る目覚まし。Chronometer は0で止まらないので、
+            // ここで描き直さないと残り時間がマイナスに突き抜けていく
+            ACTION_REFRESH -> refresh(context)
+
             ACTION_EXTEND -> act(context) {
                 DopaRuntime.extendFocus(intent.getIntExtra(EXTRA_MINUTES, 5))
+                armedMinutes = 0
             }
         }
     }
@@ -92,8 +112,27 @@ class FocusWidget : AppWidgetProvider() {
 
     companion object {
         private const val ACTION_START = "com.dopachiru.widget.START"
+        private const val ACTION_ARM = "com.dopachiru.widget.ARM"
+        private const val ACTION_DISARM = "com.dopachiru.widget.DISARM"
         private const val ACTION_EXTEND = "com.dopachiru.widget.EXTEND"
+        private const val ACTION_REFRESH = "com.dopachiru.widget.REFRESH"
         private const val EXTRA_MINUTES = "minutes"
+
+        /**
+         * いま構えている「足す長さ」。0 なら構えていない。
+         *
+         * ウィジェットは状態を持てないので、ここ(プロセス)に置く。息が止まれば
+         * 消えるが、**消えて困るものではない** ── 構えが解けるだけで、
+         * 勝手に足されるより安全な向きに倒れる。
+         */
+        @Volatile
+        private var armedMinutes: Int = 0
+
+        @Volatile
+        private var armedAtMs: Long = 0L
+
+        /** 構えたまま放っておいたら解く。押すつもりが無かった可能性のほうが高い。 */
+        private const val ARM_TIMEOUT_MS = 30_000L
 
         /** 走っていないときに並べる長さ。最後の1枠は「選ぶ」に使う。 */
         private val CHOICES = listOf(15, 25, 45, 60, 90)
@@ -127,10 +166,50 @@ class FocusWidget : AppWidgetProvider() {
 
         private fun render(context: Context, manager: AppWidgetManager, ids: IntArray) {
             DopaRuntime.init(context)
+            // 残りが尽きているものは「走っていない」として描く。
+            // activeFocus は秒で見ているが、ここは描画の直前なので念のため
             val focus = DopaRuntime.activeFocus()
+                ?.takeIf { it.untilEpochSec * 1000L > System.currentTimeMillis() }
             val views = RemoteViews(context.packageName, R.layout.widget_focus)
             if (focus != null) running(context, views, focus) else idle(context, views)
             ids.forEach { manager.updateAppWidget(it, views) }
+            scheduleEndRefresh(context, focus?.untilEpochSec)
+        }
+
+        /**
+         * 集中が明ける時刻に、描き直しの目覚ましを仕掛ける。
+         *
+         * `Chronometer` は勝手に進んでくれるので普段は手がかからないが、
+         * **0 で止まらない**。放っておくと「-1:23」のようにマイナスへ突き抜ける。
+         * 常駐の刻みでも直るが、それは画面が点いているあいだだけで、しかも
+         * 最大1分遅れる ── 明けた瞬間に直したい。
+         *
+         * 正確な目覚ましは Android 12 以降で許可が要るので、**取れなければ
+         * 普通の目覚ましに落とす**。多少ずれても、マイナスのまま放置よりはよい。
+         */
+        private fun scheduleEndRefresh(context: Context, untilEpochSec: Long?) {
+            val alarms = context.getSystemService(AlarmManager::class.java) ?: return
+            val pending = PendingIntent.getBroadcast(
+                context,
+                ACTION_REFRESH.hashCode(),
+                Intent(context, FocusWidget::class.java).setAction(ACTION_REFRESH),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            if (untilEpochSec == null) {
+                runCatching { alarms.cancel(pending) }
+                return
+            }
+            // 1秒だけ後ろに置く。ぴったりだと、まだ生きていると判定されうる
+            val at = untilEpochSec * 1000L + 1000L
+            runCatching {
+                val exact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+                    alarms.canScheduleExactAlarms()
+                if (exact) {
+                    alarms.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pending)
+                } else {
+                    alarms.set(AlarmManager.RTC, at, pending)
+                }
+            }
         }
 
         // ---- 走っていないとき ------------------------------------------
@@ -183,11 +262,38 @@ class FocusWidget : AppWidgetProvider() {
             // 「最初の一歩」が入っていればそれを出す。塞いだだけでは行き先が無い
             views.setTextViewText(R.id.widget_note, focus.reason)
 
+            // 構えたまま時間が経っていたら解く
+            if (armedMinutes > 0 && System.currentTimeMillis() - armedAtMs > ARM_TIMEOUT_MS) {
+                armedMinutes = 0
+            }
+            val armed = armedMinutes
+
+            if (armed > 0) {
+                // 構えている。押すのは「足す」の1つだけにして、押し間違いを潰す
+                views.setViewVisibility(BUTTONS[0], View.VISIBLE)
+                views.setTextViewText(BUTTONS[0], "+${armed}分 足す")
+                views.setOnClickPendingIntent(BUTTONS[0], extendIntent(context, armed))
+
+                views.setViewVisibility(BUTTONS[1], View.VISIBLE)
+                views.setTextViewText(BUTTONS[1], "やめる")
+                views.setOnClickPendingIntent(BUTTONS[1], disarmIntent(context))
+
+                for (index in 2 until BUTTONS.size) {
+                    views.setViewVisibility(BUTTONS[index], View.GONE)
+                }
+                views.setTextViewText(
+                    R.id.widget_open,
+                    context.getString(R.string.widget_focus_extend_warning),
+                )
+                views.setOnClickPendingIntent(R.id.widget_open, disarmIntent(context))
+                return
+            }
+
             EXTENSIONS.forEachIndexed { index, minutes ->
                 val id = BUTTONS[index]
                 views.setViewVisibility(id, View.VISIBLE)
                 views.setTextViewText(id, "+${minutes}分")
-                views.setOnClickPendingIntent(id, extendIntent(context, minutes))
+                views.setOnClickPendingIntent(id, armIntent(context, minutes))
             }
             // 余った枠は消す。空の箱が並ぶより、無いほうが読める
             for (index in EXTENSIONS.size until BUTTONS.size) {
@@ -208,6 +314,12 @@ class FocusWidget : AppWidgetProvider() {
 
         private fun extendIntent(context: Context, minutes: Int): PendingIntent =
             broadcast(context, ACTION_EXTEND, minutes)
+
+        private fun armIntent(context: Context, minutes: Int): PendingIntent =
+            broadcast(context, ACTION_ARM, minutes)
+
+        private fun disarmIntent(context: Context): PendingIntent =
+            broadcast(context, ACTION_DISARM, 0)
 
         /**
          * 分ごとに別の [PendingIntent] にする必要があるので、要求コードに分数を混ぜる。

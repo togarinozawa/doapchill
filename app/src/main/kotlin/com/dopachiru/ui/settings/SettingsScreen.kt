@@ -402,8 +402,15 @@ private fun RequiredSection() {
     }
 }
 
+/**
+ * 変更に摩擦をかける関門の設定。
+ *
+ * 設定タブだけでなく、**変更タブからも触れる**ようにしてある ── 申請が
+ * 詰まっているのを見ている、まさにそのときが「関門をどう設定したか」を
+ * 確かめたい瞬間で、別のタブまで探しに行かせる理由が無い。
+ */
 @Composable
-private fun GuardSection(viewModel: SettingsViewModel) {
+internal fun GuardSection(viewModel: SettingsViewModel) {
     val gates by viewModel.gates.collectAsState()
     val hasPassword by viewModel.hasPassword.collectAsState()
     val selfDefense by viewModel.selfDefense.collectAsState()
