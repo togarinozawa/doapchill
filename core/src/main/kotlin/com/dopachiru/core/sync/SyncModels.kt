@@ -192,3 +192,27 @@ data class SyncSettings(
 /** 中身を見ない包みを作るための小道具。 */
 fun envelopeOf(uid: String, updatedAt: Long, payload: JsonElement, deleted: Boolean = false): Envelope =
     Envelope(uid, updatedAt, deleted, payload as? JsonObject ?: JsonObject(emptyMap()))
+
+/** 端末を名簿に載せてもらうときに名乗るもの。 */
+@Serializable
+data class EnrollRequest(
+    val deviceId: String,
+    /** 人が読む名前。**見慣れない名前が増えたことに気づくため**にある。 */
+    val name: String = "",
+    /** `android` か `windows`。名簿を見たときの手掛かり。 */
+    val platform: String = "",
+)
+
+/** 名簿に載った結果。[token] はこの端末ぶんの合言葉。 */
+@Serializable
+data class EnrollResponse(val token: String = "", val deviceId: String = "")
+
+/**
+ * 繋ぎ先の既定。
+ *
+ * ここに書いてあるのは**住所だけ**です。合言葉は入っていません
+ * (リポジトリは公開なので、置いた時点で配ったことになる)。
+ */
+object SyncDefaults {
+    const val BASE_URL: String = "https://dopa.togar.dev"
+}

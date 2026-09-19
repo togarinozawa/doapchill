@@ -1,5 +1,6 @@
 package com.dopachiru.core.sync
 
+import com.dopachiru.core.update.LatestRelease
 import kotlinx.serialization.json.Json
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -71,6 +72,37 @@ class SyncApi(
      */
     fun health(): Outcome<Unit> = request("GET", "/health", null, withToken = false) { }
 
+    /**
+     * 配っている中でいちばん新しい版を聞く。**合言葉は要りません。**
+     *
+     * 版を知るのに合言葉が要ると、まだ繋いでいない端末が置き去りになります。
+     * 返ってくるのは「どこに何があるか」だけで、落とすのは
+     * [com.dopachiru.core.update.Downloader] の仕事。
+     */
+    fun latest(): Outcome<LatestRelease> = request(
+        "GET",
+        "/version",
+        null,
+        withToken = false,
+    ) { JSON.decodeFromString(LatestRelease.serializer(), it) }
+
+    /**
+     * この端末を名簿に載せて、**この端末ぶんの合言葉**を受け取る。
+     *
+     * まだ合言葉を持っていない端末が叩くので、認証は通しません。代わりに
+     * アプリに焼いてある入口の鍵を見出しに載せます。鍵は配っているアプリの中に
+     * あるので、**中を開けた人は止められません** ── 引き受けているのはそこまでで、
+     * 代わりに配るものを端末ごとに分けて、1台だけ止められるようにしてあります。
+     */
+    fun enroll(enrollKey: String, deviceId: String, name: String, platform: String): Outcome<EnrollResponse> =
+        request(
+            "POST",
+            "/enroll",
+            JSON.encodeToString(EnrollRequest.serializer(), EnrollRequest(deviceId, name, platform)),
+            withToken = false,
+            headers = mapOf("X-Dopa-Enroll" to enrollKey),
+        ) { JSON.decodeFromString(EnrollResponse.serializer(), it) }
+
     // ---- 短い合言葉で繋ぐ ------------------------------------------------
 
     /**
@@ -105,6 +137,7 @@ class SyncApi(
         path: String,
         body: String?,
         withToken: Boolean = true,
+        headers: Map<String, String> = emptyMap(),
         parse: (String) -> T,
     ): Outcome<T> {
         // HTTP の見出しに非 ASCII は載りません。ここで弾かないと、
@@ -113,6 +146,10 @@ class SyncApi(
         if (withToken && !token.all { it.code in 0x21..0x7E }) {
             return Outcome.Rejected(0, "合言葉に使える文字は英数字と記号だけです")
         }
+        // 足す見出しも同じ理由で ASCII だけ。化けたまま送ると 401 の原因が見えない
+        if (headers.values.any { value -> !value.all { it.code in 0x21..0x7E } }) {
+            return Outcome.Rejected(0, "鍵に使える文字は英数字と記号だけです")
+        }
 
         val connection = try {
             (URL(base + path).openConnection() as HttpURLConnection).apply {
@@ -120,6 +157,7 @@ class SyncApi(
                 connectTimeout = connectTimeoutMs
                 readTimeout = readTimeoutMs
                 if (withToken) setRequestProperty("Authorization", "Bearer $token")
+                headers.forEach { (name, value) -> setRequestProperty(name, value) }
                 setRequestProperty("Accept", "application/json")
                 if (body != null) {
                     doOutput = true

@@ -63,3 +63,28 @@ CREATE TABLE IF NOT EXISTS dopachiru_invites (
 
 -- 版数の行が無ければ作る
 INSERT OR IGNORE INTO dopachiru_meta (user_id, rev) VALUES (1, 0);
+
+-- 端末ごとの合言葉。
+--
+-- 端末に本物の合言葉(DOPA_TOKEN)を焼き込むと、**公開している APK から抜ける**。
+-- 抜かれたときに打つ手が「合言葉を変えて全端末を繋ぎ直す」しか無いのは重い。
+-- 端末ごとに別の合言葉を配れば、怪しい行を1つ止めるだけで済む。
+--
+-- 名前は端末が自分で名乗るので、信用できるのは「見慣れない名前が増えた」まで。
+-- そこから先(止める)を手で打てるようにするのがこの表の役目。
+--
+--   UPDATE dopachiru_device_tokens SET revoked = 1 WHERE name = '見慣れない名前';
+CREATE TABLE IF NOT EXISTS dopachiru_device_tokens (
+  user_id      INTEGER NOT NULL DEFAULT 1,
+  token        TEXT    NOT NULL,
+  device_id    TEXT    NOT NULL,
+  name         TEXT    NOT NULL DEFAULT '',
+  platform     TEXT    NOT NULL DEFAULT '',
+  created_at   INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL DEFAULT 0,
+  revoked      INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, token)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dopachiru_device_tokens_device
+  ON dopachiru_device_tokens (user_id, device_id);

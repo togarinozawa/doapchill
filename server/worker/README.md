@@ -29,6 +29,7 @@ D1 の実体は SQLite なので、[schema.sql](schema.sql) は Express + better
 | 予備のアドレス | `https://dopachiru-sync.snnnsnn3777.workers.dev` |
 | D1 | `dopachiru`(APAC) |
 | 合言葉 | Workers の secret `DOPA_TOKEN`。手元の控えは `.dopa-token`(gitignore 済み) |
+| 入口の鍵 | Workers の secret `ENROLL_KEY`。手元の控えは `local.properties` の `dopa.enrollKey`(gitignore 済み) |
 
 もともと `dopa.togar.dev` には中身の無いトンネルを指す DNS レコードが載っていました。
 Cloudflare は外で管理されているレコードを勝手に上書きしないので、
@@ -69,6 +70,8 @@ npx wrangler dev --local --var DOPA_TOKEN:testtoken1234567890
 | | |
 |---|---|
 | `GET /health` | 疎通のみ。**合言葉が要りません** |
+| `GET /version` | 配っている中でいちばん新しい版。**合言葉が要りません** |
+| `POST /enroll` | 端末を名簿に載せ、その端末ぶんの合言葉を配る。**合言葉の代わりに入口の鍵** |
 | `GET /ping` | 認証つきの疎通。`rev` を返す |
 | `POST /sync` | 送信と受信を1往復で |
 | `POST /usage` | 自分の端末ぶんの実績を差し替え |
@@ -76,6 +79,47 @@ npx wrangler dev --local --var DOPA_TOKEN:testtoken1234567890
 
 `/health` だけ合言葉を要らなくしてあるのは、**繋がらないのか弾かれたのかを
 端末側で区別できないと切り分けができない**ためです。
+
+## 端末は自動で繋がります
+
+入れた直後から同期が効くように、アプリは起動時に `/enroll` を叩いて
+**その端末ぶんの合言葉**を受け取ります。48文字を端末ごとに写す作業は要りません。
+
+### 何を引き換えにしているか
+
+**入口の鍵は配っているアプリの中にあります。** APK も MSI も公開の場に置いてあるので、
+中を開けた人は `/enroll` を叩けます。防いでいるのは「住所を知っているだけの人」まで。
+
+引き受けたうえで、次の2つで受けています。
+
+1. 配るのは**端末ごとに別の合言葉**。怪しい1台だけ止められる
+2. 名乗った名前が名簿に出る。**見慣れない名前が増えれば気づける**
+
+気づいてから止めるまでのあいだ、相手はルールと1日ごとの使用時間を読めます。
+どの瞬間に何を見ていたかは出ません(元から送っていない)。
+
+### 止めかた
+
+```bash
+# いま繋がっている端末を並べる
+npx wrangler d1 execute dopachiru --remote --command "SELECT device_id, name, platform, last_seen_at FROM dopachiru_device_tokens WHERE revoked = 0"
+
+# 1台だけ締め出す
+npx wrangler d1 execute dopachiru --remote --command "UPDATE dopachiru_device_tokens SET revoked = 1 WHERE name = '見慣れない名前'"
+```
+
+入口ごと閉じるなら `npx wrangler secret delete ENROLL_KEY`。
+**閉じても、すでに配った合言葉は生きたまま**なので、手持ちの端末は繋ぎ直しになりません。
+
+## 新しい版を配る口
+
+`GET /version` は GitHub のリリースを見に行き、10分だけ持っておきます。
+端末は GitHub ではなくここを見ます ── **後から引っ込められる**ようにするためです。
+出した版に致命的な不具合があったら、`src/index.js` の `PINNED` に一つ前を書いて
+deploy すれば、まだ落としていない端末はそこで止まります。
+
+版はリリースに付けたファイル名(`dopachiru-0.25.0.apk`)から読みます。
+どこにも版を書き写さないので、**書き写し忘れて「最新です」と嘘をつく**ことがありません。
 
 ## 設計で意図的にそうしてあるところ
 
@@ -110,3 +154,11 @@ D1 に対話的なトランザクションが無いので、各行の `rev` は�
 - `since` を進めると差分がゼロになる
 - 日本語が壊れずに往復する
 - 実績が端末ごとに分かれて返る(30分 + 20分 が 50分として読める)
+
+自動で繋ぐところと版の口は、**本番(dopa.togar.dev)で**通して見てあります(2026-09-19)。
+
+- 鍵なし・違う鍵の `/enroll` は 401
+- 正しい鍵で合言葉が返り、その合言葉で `/ping` が 200
+- 同じ `deviceId` で叩き直すと**同じ合言葉**が返る(名簿が増えない)
+- `revoked = 1` を立てると、その合言葉は 401、繋ぎ直しは 403
+- `/version` が APK と MSI の両方を、リリースのファイル名から読んで返す

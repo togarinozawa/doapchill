@@ -71,7 +71,19 @@ export default {
       return cors(await claimInvite(request, env));
     }
 
-    if (!authorized(request, env)) {
+    // 新しい版があるかを答える口。**繋いでいない端末も叩く**ので認証の前。
+    // 版を知るのに合言葉が要ると、まだ繋いでいない端末が置き去りになる
+    if (path === '/version' && request.method === 'GET') {
+      return cors(await latestVersions(request, env));
+    }
+
+    // 端末を名簿に載せて、その端末ぶんの合言葉を配る口。**合言葉の前に置く**
+    // ── まだ持っていない端末が叩くため。詳しくは enroll を見ること
+    if (path === '/enroll' && request.method === 'POST') {
+      return cors(await enroll(request, env));
+    }
+
+    if (!(await authorized(request, env))) {
       return cors(json({ error: 'unauthorized' }, 401));
     }
 
@@ -100,11 +112,29 @@ export default {
  * 長さの違いで漏れないよう固定時間で比べます。合言葉を設定していなければ
  * **全部断る** ── 空と空が一致して素通しになるほうが危ない。
  */
-function authorized(request, env) {
-  const expected = env.DOPA_TOKEN || '';
-  if (!expected) return false;
+async function authorized(request, env) {
   const given = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
-  return timingSafeEqual(expected, given);
+  if (!given) return false;
+
+  const expected = env.DOPA_TOKEN || '';
+  if (expected && timingSafeEqual(expected, given)) return true;
+
+  // 端末ごとに配った合言葉。**止められる**のが元の合言葉との違い。
+  // 見慣れない名前が名簿に出たら、その行の revoked を立てれば締め出せる
+  const row = await env.DB.prepare(
+    'SELECT device_id FROM dopachiru_device_tokens WHERE user_id = ? AND token = ? AND revoked = 0',
+  )
+    .bind(USER_ID, given)
+    .first();
+  if (!row) return false;
+
+  // 最後に来た時刻。使われていない行を見分けるため(消す判断は手で)
+  await env.DB.prepare(
+    'UPDATE dopachiru_device_tokens SET last_seen_at = ? WHERE user_id = ? AND token = ?',
+  )
+    .bind(Date.now(), USER_ID, given)
+    .run();
+  return true;
 }
 
 function timingSafeEqual(a, b) {
@@ -356,6 +386,181 @@ async function getUsage(url, env) {
   return json({
     days: [...byDate.entries()].map(([date, byDevice]) => ({ date, byDevice })),
   });
+}
+
+// ---- 新しい版 -------------------------------------------------------------
+
+/**
+ * 配っている中でいちばん新しい版を答える。
+ *
+ * ## なぜ GitHub を端末から直に見させないのか
+ *
+ * 端末が見に来る先を1か所にしておくと、**後から引っ込められる**。
+ * 出してしまった版に致命的な不具合があったとき、[PINNED] に一つ前を書いて
+ * deploy すれば、まだ落としていない端末はそこで止まる。GitHub を直に
+ * 見せていると、消すまで配り続けることになる。
+ *
+ * ## 版はファイル名から読む
+ *
+ * どこにも版を書き写さないため。書き写す場所を作ると、リリースのたびに
+ * そこを直す作業が増え、**忘れたときに「最新です」と嘘をつく**。
+ * `dopachiru-0.24.0.apk` から 0.24.0 を読めば、書き写す場所は無くなる。
+ */
+const REPO = 'togarinozawa/doapchill';
+
+/** 版ごとのファイル名の形。ここから版を読む。 */
+const ASSETS = {
+  android: /^dopachiru-(\d+(?:\.\d+)*)\.apk$/,
+  windows: /^dopachiru-windows-(\d+(?:\.\d+)*)\.msi$/,
+};
+
+/**
+ * ここに版を書くと、**それより新しいものを配らない**。
+ * 出した版を引っ込めたいときに使う。ふだんは空。
+ *
+ * 例: `{ android: '0.23.0' }` と書くと 0.24.0 は出てこなくなる。
+ */
+const PINNED = {};
+
+/** GitHub に聞き直す間隔。押すたびに聞きに行くと、時間あたりの上限に当たる。 */
+const VERSION_TTL_SEC = 600;
+
+async function latestVersions(request, env) {
+  const cache = caches.default;
+  const key = new Request(new URL('/version', request.url).toString(), { method: 'GET' });
+  const hit = await cache.match(key);
+  if (hit) return new Response(hit.body, hit);
+
+  let releases;
+  try {
+    const res = await fetch(
+      'https://api.github.com/repos/' + REPO + '/releases?per_page=10',
+      {
+        headers: {
+          // GitHub は見出しが無いと 403 を返す
+          'user-agent': 'dopachiru-sync',
+          accept: 'application/vnd.github+json',
+        },
+      },
+    );
+    if (!res.ok) return json({ error: 'upstream', status: res.status }, 502);
+    releases = await res.json();
+  } catch (err) {
+    console.error('dopachiru-sync /version', err && err.message);
+    return json({ error: 'upstream' }, 502);
+  }
+
+  const body = { android: null, windows: null, notes: '', publishedAt: '' };
+  if (Array.isArray(releases)) {
+    // 新しいほうから見て、最初に見つかったものを採る。**platform ごとに別々に探す**
+    // ── APK だけ出した版があると、MSI が道連れで見えなくなるため
+    for (const release of releases) {
+      if (!release || release.draft || release.prerelease) continue;
+      for (const [platform, pattern] of Object.entries(ASSETS)) {
+        if (body[platform]) continue;
+        const asset = (release.assets || []).find((a) => pattern.test(a.name || ''));
+        if (!asset) continue;
+        const version = asset.name.match(pattern)[1];
+        if (PINNED[platform] && compareVersions(version, PINNED[platform]) > 0) continue;
+        body[platform] = {
+          version,
+          fileName: asset.name,
+          url: asset.browser_download_url,
+          sizeBytes: asset.size || 0,
+        };
+        if (!body.notes) {
+          body.notes = String(release.body || '').slice(0, 2000);
+          body.publishedAt = release.published_at || '';
+        }
+      }
+      if (body.android && body.windows) break;
+    }
+  }
+
+  const response = json(body);
+  response.headers.set('cache-control', 'public, max-age=' + VERSION_TTL_SEC);
+  await cache.put(key, response.clone());
+  return response;
+}
+
+/** `1.2.10` と `1.2.9` を数として比べる。文字として比べると 10 < 9 になる。 */
+function compareVersions(a, b) {
+  const left = String(a).split('.').map(Number);
+  const right = String(b).split('.').map(Number);
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const diff = (left[i] || 0) - (right[i] || 0);
+    if (diff) return diff > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+// ---- 端末を載せる ---------------------------------------------------------
+
+/**
+ * 端末を名簿に載せて、その端末ぶんの合言葉を配る。
+ *
+ * ## なぜ自動で繋げるのか
+ *
+ * 使うのが一人なので、端末を足すたびに合言葉を写す手間のほうが重い。
+ * 入れた直後から同期が効いているほうが、実際に使う形に近い。
+ *
+ * ## その代わり、何が緩むのか
+ *
+ * **入口の鍵([ENROLL_KEY])は配っているアプリの中にあります。** 公開している
+ * APK から抜けるので、抜いた人はここを叩けます。防いでいるのは
+ * 「住所を知っているだけの人」までで、**中を開けた人は止められません**。
+ *
+ * 引き受けているのはそこまでで、代わりに次の2つを用意してあります。
+ *
+ *  1. 配る合言葉は**端末ごとに別**。怪しい行1つを止めれば済む
+ *  2. 名乗った名前が名簿に出る。見慣れない名前が増えれば気づける
+ *
+ * 気づいたら止めます:
+ *
+ *     wrangler d1 execute dopachiru --remote  *       --command "UPDATE dopachiru_device_tokens SET revoked = 1 WHERE name = '見慣れない名前'"
+ *
+ * 入口ごと閉じるなら `wrangler secret delete ENROLL_KEY`。
+ * 閉じても、すでに配った合言葉は生きたままです(繋ぎ直しは起きない)。
+ */
+async function enroll(request, env) {
+  const key = env.ENROLL_KEY || '';
+  // 鍵を置いていなければ**閉じている**。空と空が一致して素通しになるほうが危ない
+  if (!key) return json({ error: 'enroll_closed' }, 403);
+
+  const given = request.headers.get('x-dopa-enroll') || '';
+  if (!timingSafeEqual(key, given)) return json({ error: 'unauthorized' }, 401);
+
+  const body = await readJson(request);
+  const deviceId = String(body.deviceId || '').slice(0, 64);
+  if (!deviceId) return json({ error: 'device_id_required' }, 400);
+  const name = String(body.name || '').slice(0, 64);
+  const platform = String(body.platform || '').slice(0, 32);
+
+  // すでに載っている端末なら、同じ合言葉を返す。**入れ直すたびに行が増えると、
+  // 名簿が使い物にならなくなる** ── 見慣れない名前に気づけるのが要なので
+  const existing = await env.DB.prepare(
+    'SELECT token, revoked FROM dopachiru_device_tokens WHERE user_id = ? AND device_id = ? ORDER BY created_at DESC LIMIT 1',
+  )
+    .bind(USER_ID, deviceId)
+    .first();
+  if (existing) {
+    if (existing.revoked) return json({ error: 'revoked' }, 403);
+    return json({ token: existing.token, deviceId });
+  }
+
+  const token = newToken();
+  await env.DB.prepare(
+    'INSERT INTO dopachiru_device_tokens (user_id, token, device_id, name, platform, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+  )
+    .bind(USER_ID, token, deviceId, name, platform, Date.now())
+    .run();
+  return json({ token, deviceId });
+}
+
+/** 端末ごとの合言葉。元の合言葉と同じ長さ(48文字)にしてある。 */
+function newToken() {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 // ---- 小物 -----------------------------------------------------------------

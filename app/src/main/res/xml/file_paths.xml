@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  インストーラに渡せる場所。cache の下の updates だけを見せる。
+
+  広く見せると、渡すつもりのないファイルまで渡せる口になる。
+  落とした APK 以外を出す用が無いので、1行で足りる。
+-->
+<paths>
+    <cache-path
+        name="updates"
+        path="updates/" />
+</paths>

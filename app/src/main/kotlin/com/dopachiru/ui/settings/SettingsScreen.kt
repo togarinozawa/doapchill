@@ -44,6 +44,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -91,6 +93,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import com.dopachiru.core.sync.SyncSettings
 import com.dopachiru.data.SyncManager
 import com.dopachiru.runtime.DopaRuntime
+import com.dopachiru.update.AppUpdater
 import com.dopachiru.service.DopaAccessibilityService
 import com.dopachiru.core.DopaFeatures
 import com.dopachiru.core.points.PointPolicy
@@ -776,6 +779,8 @@ private fun AboutSection(onOpenDevTools: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(16.dp))
+        UpdateCard()
+        Spacer(Modifier.height(16.dp))
         // ここを長押しすると開発ツールへの入口が出る。
         // ふだん目に入らないところに置いてあるだけで、隠しているわけではない。
         //
@@ -803,6 +808,161 @@ private fun AboutSection(onOpenDevTools: () -> Unit) {
 }
 
 // ------------------------------------------------------------------
+
+/**
+ * 新しい版を入れ替える。
+ *
+ * ## なぜ押したときだけ聞きに行くのか
+ *
+ * 裏で毎日見に行くほうが親切ではあります。ただ、このアプリは
+ * **取り締まりがネットに依存していない**ことを前提にしていて、
+ * そこは「機内モードにしても何も変わらない」という形で守りたい。
+ * 更新のために常時の通信を足すと、その形が崩れます。
+ * 版を確かめたいのは「そういえば」と思ったときだけなので、ボタンで足ります。
+ *
+ * ## 落とすのと入れるのを分ける
+ *
+ * 落とし終わってからインストーラを開きます。まとめて一発にすると、
+ * 回線が細いときに**何も起きていないように見える時間**が生まれ、
+ * その間に押し直されます。
+ */
+@Composable
+private fun UpdateCard() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val state by AppUpdater.state.collectAsState()
+
+    Card {
+        Column(Modifier.padding(16.dp)) {
+            Text("アップデート", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "押したときだけサーバーに聞きます。ふだんは通信しません。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+
+            when (val current = state) {
+                is AppUpdater.State.Idle -> {
+                    Button(onClick = { scope.launch { AppUpdater.check(context) } }) {
+                        Text("アップデートを確認")
+                    }
+                }
+
+                is AppUpdater.State.Checking -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Text("聞いています…", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+
+                is AppUpdater.State.UpToDate -> {
+                    Text(
+                        "いまの " + current.current + " が最新です。",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(onClick = { scope.launch { AppUpdater.check(context) } }) {
+                        Text("もう一度確認")
+                    }
+                }
+
+                is AppUpdater.State.Available -> {
+                    Text(
+                        current.build.version + " が出ています",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    val size = current.build.sizeLabel()
+                    if (size.isNotBlank()) {
+                        Text(
+                            size,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (current.notes.isNotBlank()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            current.notes.trim().lines().take(8).joinToString(System.lineSeparator()),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { scope.launch { AppUpdater.download(context, current.build) } }) {
+                            Text("ダウンロード")
+                        }
+                        TextButton(onClick = { AppUpdater.reset() }) { Text("あとで") }
+                    }
+                }
+
+                is AppUpdater.State.Downloading -> {
+                    Text(
+                        current.build.version + " を落としています " + current.percent + "%",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { current.percent / 100f },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = { AppUpdater.cancel() }) { Text("やめる") }
+                }
+
+                is AppUpdater.State.Ready -> {
+                    Text(
+                        current.build.version + " を落とし終わりました",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        // 無音では入れられないので、ここだけは手で押してもらう。
+                        // 「押したのに何も起きない」と思わせないために先に書いておく
+                        "「インストール」を押すと入れ替わります。ルールも記録も残ります。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { AppUpdater.install(context, current.file) }) {
+                            Text("インストール")
+                        }
+                        TextButton(onClick = { AppUpdater.cleanUp(context); AppUpdater.reset() }) {
+                            Text("捨てる")
+                        }
+                    }
+                    if (!AppUpdater.canInstall(context)) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "「不明なアプリのインストール」を許していないので、" +
+                                "最初の1回だけ設定画面に飛びます。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                is AppUpdater.State.Failed -> {
+                    Text(
+                        current.message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(onClick = { scope.launch { AppUpdater.check(context) } }) {
+                        Text("もう一度")
+                    }
+                }
+            }
+        }
+    }
+}
 
 /**
  * 入っている版。`0.8.0 (14)` の形。

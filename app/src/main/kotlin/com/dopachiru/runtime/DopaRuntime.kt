@@ -29,7 +29,10 @@ import com.dopachiru.core.model.Rule
 import com.dopachiru.core.param.Params
 import com.dopachiru.core.points.PointPolicy
 import com.dopachiru.core.points.PointReason
+import android.os.Build
+import com.dopachiru.BuildConfig
 import com.dopachiru.core.sync.DeviceInfo
+import com.dopachiru.core.sync.Enrollment
 import com.dopachiru.core.sync.SyncApi
 import com.dopachiru.core.sync.SyncKinds
 import com.dopachiru.core.time.ResetPolicy
@@ -231,6 +234,7 @@ object DopaRuntime {
                 recomputeRuleScope()
             }
         }
+        enrollIfNeeded()
         scope.launch { rules.tagsByPackage.collect { tagCache = it } }
         scope.launch {
             settings.gates.collect {
@@ -245,6 +249,47 @@ object DopaRuntime {
         scope.launch { settings.focusSchedules.collect { focusSchedules = it } }
         scope.launch { settings.focusScheduleRuns.collect { scheduleRuns = it } }
         scope.launch { settings.passUntilEpochSec.collect { passUntilSec = it } }
+    }
+
+    /**
+     * まだ繋いでいなければ、自分で名簿に載りにいく。
+     *
+     * ## なぜ手で合言葉を入れさせないのか
+     *
+     * 使うのが一人だからです。端末を足すたびに48文字を写すより、入れた直後から
+     * 同じルールが載っているほうが、実際に使う形に近い。
+     *
+     * ## 何を引き換えにしているか
+     *
+     * 入口の鍵は APK の中にあり、APK は公開の場に置いてあります。**中を開けた人は
+     * ここを叩けます。** 代わりにサーバーが配るのは端末ごとに別の合言葉なので、
+     * 名簿に見慣れない名前が出たら、その1台だけ止められます。[Enrollment]
+     *
+     * ## 失敗しても黙ります
+     *
+     * 圏外で起動しただけで画面に赤字が出るのは行儀が悪い。次の起動でまた試します。
+     * **繋がらなくても制限は効いたまま**なので、急ぐ理由もありません。
+     */
+    private fun enrollIfNeeded() {
+        val key = BuildConfig.ENROLL_KEY
+        scope.launch {
+            val current = settings.syncSettings.first()
+            if (!Enrollment.needed(current, key)) return@launch
+
+            val name = settings.deviceName.first().ifBlank { Build.MODEL.orEmpty().ifBlank { "Android" } }
+            // deviceId は実績の見出しでもあるので、一度決めたら変えない
+            val deviceId = current.deviceId.ifBlank {
+                "android-" + UUID.randomUUID().toString().take(8)
+            }
+
+            val result = withContext(Dispatchers.IO) {
+                Enrollment.run(current, key, deviceId, name, "android")
+            }
+            if (result is Enrollment.Result.Ok) {
+                settings.setSyncSettings(result.settings)
+                if (settings.deviceName.first().isBlank()) settings.setDeviceName(name)
+            }
+        }
     }
 
     /** この端末の deviceId。同期を設定していなければ空。 */

@@ -45,6 +45,7 @@ import java.awt.Frame
 import java.io.File
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -81,6 +82,7 @@ import com.dopachiru.core.preset.RulePreset
 import com.dopachiru.core.preset.RulePresets
 import com.dopachiru.core.model.Target
 import com.dopachiru.desktop.DesktopRuntime
+import com.dopachiru.desktop.update.DesktopUpdater
 import com.dopachiru.desktop.platform.BlockStrength
 import com.dopachiru.desktop.platform.ForegroundApp
 import com.dopachiru.desktop.platform.InstalledApps
@@ -1575,11 +1577,134 @@ private fun AboutSection() {
     Spacer(Modifier.height(20.dp))
     HorizontalDivider()
     Spacer(Modifier.height(12.dp))
+    UpdateSection()
+    Spacer(Modifier.height(16.dp))
     Text(
         "ドパチル " + desktopVersion(),
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+}
+
+/**
+ * 新しい版を入れ替える。
+ *
+ * ## なぜ押したときだけ聞きに行くのか
+ *
+ * このアプリは**取り締まりがネットに依存していない**ことを前提にしていて、
+ * そこは「機内モードにしても何も変わらない」という形で守りたい。
+ * 更新のために常時の通信を足すと、その形が崩れます。
+ *
+ * ## 落とすのと入れるのを分ける
+ *
+ * 落とし終えてからインストーラを開きます。まとめて一発にすると、
+ * 回線が細いときに何も起きていないように見える時間が生まれます。
+ */
+@Composable
+private fun UpdateSection() {
+    val state by DesktopUpdater.state.collectAsState()
+
+    Text("アップデート", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "押したときだけサーバーに聞きます。ふだんは通信しません。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(12.dp))
+
+    when (val current = state) {
+        is DesktopUpdater.State.Idle ->
+            Button(onClick = { DesktopUpdater.check() }) { Text("アップデートを確認") }
+
+        is DesktopUpdater.State.Checking ->
+            Text("聞いています…", style = MaterialTheme.typography.bodyMedium)
+
+        is DesktopUpdater.State.UpToDate -> {
+            Text("いまの " + current.current + " が最新です。", style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = { DesktopUpdater.check() }) { Text("もう一度確認") }
+        }
+
+        is DesktopUpdater.State.Available -> {
+            Text(
+                current.build.version + " が出ています",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            val size = current.build.sizeLabel()
+            if (size.isNotBlank()) {
+                Text(
+                    size,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (current.notes.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    current.notes.trim().lines().take(8).joinToString(System.lineSeparator()),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { DesktopUpdater.download(current.build) }) { Text("ダウンロード") }
+                TextButton(onClick = { DesktopUpdater.reset() }) { Text("あとで") }
+            }
+        }
+
+        is DesktopUpdater.State.Downloading -> {
+            Text(
+                current.build.version + " を落としています " + current.percent + "%",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(Modifier.height(8.dp))
+            LinearProgressIndicator(
+                progress = { current.percent / 100f },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = { DesktopUpdater.cancel() }) { Text("やめる") }
+        }
+
+        is DesktopUpdater.State.Ready -> {
+            Text(
+                current.build.version + " を落とし終わりました",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                // 自分で自分を閉じてから渡すと、断ったときに
+                // 「閉じただけで何も入っていない」になる
+                "インストーラが開きます。ドパチルは自分で閉じてください。" +
+                    "ルールも記録も残ります。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { DesktopUpdater.openInstaller(current.file) }) {
+                    Text("インストーラを開く")
+                }
+                TextButton(onClick = { DesktopUpdater.cleanUp(); DesktopUpdater.reset() }) {
+                    Text("捨てる")
+                }
+            }
+        }
+
+        is DesktopUpdater.State.Failed -> {
+            Text(
+                current.message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = { DesktopUpdater.check() }) { Text("もう一度") }
+        }
+    }
 }
 
 /**

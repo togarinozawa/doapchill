@@ -43,6 +43,13 @@
     -->
     <!-- <uses-permission android:name="android.permission.READ_CALENDAR" /> -->
 
+    <!--
+      新しい版を自分で入れ替えるため。設定の「アップデートを確認」を
+      押したときだけ働く ── 取り締まりはこれが無くても成り立つ。
+      無音で入れることはできないので、最後の「インストール」は必ず手で押す。
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
@@ -195,6 +202,21 @@
             </intent-filter>
         </receiver>
 
-    </application>
+    
+        <!--
+          落とした APK をインストーラに渡すための口。
+          Android 7 以降、file:// の URI を他のアプリに渡すと落ちる。
+          見せるのは cache/updates の下だけ。
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+</application>
 
 </manifest>

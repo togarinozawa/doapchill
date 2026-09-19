@@ -58,9 +58,12 @@ import com.dopachiru.desktop.platform.WindowsAutoStart
 import com.dopachiru.desktop.platform.WindowControl
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.util.UUID
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import com.dopachiru.core.sync.DeviceInfo
+import com.dopachiru.core.sync.Enrollment
 import com.dopachiru.core.sync.SyncApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -420,8 +423,42 @@ object DesktopRuntime {
 
         // 立ち上げ直後に1回。PC を開いた瞬間に、寝ているあいだの頼みごとが届く
         scope.launch {
+            enrollIfNeeded()
             val sync = _settings.value.sync
             if (sync.enabled && sync.isConfigured) runCatching { syncNow() }
+        }
+    }
+
+    /**
+     * まだ繋いでいなければ、自分で名簿に載りにいく。
+     *
+     * 入口の鍵は持ち物として同梱されていて、配っているものから読めます。
+     * 引き換えに、サーバーが配るのは端末ごとに別の合言葉なので、
+     * 名簿に見慣れない名前が出たら1台だけ止められます。[Enrollment]
+     *
+     * 失敗しても黙ります ── 立ち上げのたびに試すので、
+     * 回線が来てから繋がれば十分。**繋がらなくても制限は効いたまま**です。
+     */
+    private suspend fun enrollIfNeeded() {
+        val key = EnrollKey.value
+        val current = _settings.value.sync
+        if (!Enrollment.needed(current, key)) return
+
+        val name = _settings.value.deviceName.ifBlank {
+            System.getenv("COMPUTERNAME").orEmpty().ifBlank { "Windows" }
+        }
+        // deviceId は実績の見出しでもあるので、一度決めたら変えない
+        val deviceId = current.deviceId.ifBlank {
+            "windows-" + UUID.randomUUID().toString().take(8)
+        }
+
+        val result = withContext(Dispatchers.IO) {
+            Enrollment.run(current, key, deviceId, name, "windows")
+        }
+        if (result is Enrollment.Result.Ok) {
+            updateSettings {
+                it.copy(sync = result.settings, deviceName = it.deviceName.ifBlank { name })
+            }
         }
     }
 
