@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -18,6 +19,9 @@ object PowerSaveCondition : ConditionType {
     override val id = "power_save"
     override val displayName = "省電力モード"
     override val description = "端末が省電力モードのあいだ(または解除されているあいだ)に成立する。"
+
+    override val group = ConditionGroup.TUNING
+    override val example = "端末が省電力モードのあいだだけ強める"
 
     override val params = listOf(
         ParamSpec.BoolParam(

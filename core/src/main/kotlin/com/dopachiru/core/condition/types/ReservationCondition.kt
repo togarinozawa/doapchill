@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -21,6 +22,9 @@ object ReservationCondition : ConditionType {
     override val displayName = "予約した時間の外"
     override val description =
         "先に取った予約の時間帯だけ開けるようにする。予約の外では成立する(＝塞ぐ)。予約は少し先にしか取れない。"
+
+    override val group = ConditionGroup.TIME
+    override val example = "先に取った予約の枠の外。予約した時間しか開けなくなる"
 
     override val params: List<ParamSpec> = emptyList()
 

@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -29,6 +30,9 @@ object CooldownCondition : ConditionType {
     override val displayName = "前回の使用から間をあける"
     override val description =
         "前に使い終わってから指定した時間が経つまで成立する。そのあいだ開けなくして、使う間隔を空けさせる。"
+
+    override val group = ConditionGroup.TRIGGER
+    override val example = "前に使い終わってから3時間たつまで開かせない"
 
     override val params = listOf(
         ParamSpec.IntParam(KEY_HOURS, "あける時間", default = 3, min = 0, max = 48, unit = "時間"),

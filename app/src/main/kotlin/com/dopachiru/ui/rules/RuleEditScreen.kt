@@ -60,6 +60,7 @@ import com.dopachiru.core.gate.ChangeKind
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.ConditionTree
 import com.dopachiru.core.model.Consequence
+import com.dopachiru.core.model.RuleOverlap
 import com.dopachiru.core.sync.DeviceInfo
 import com.dopachiru.core.model.RuleCheck
 import com.dopachiru.core.model.Rule
@@ -117,6 +118,9 @@ data class RuleEditState(
     val knownDevices: List<DeviceInfo> = emptyList(),
     /** この端末の deviceId。名簿に「この端末」と出すため。 */
     val myDeviceId: String = "",
+
+    /** 手元のルール全部。同じアプリを狙う他のルールを出すために要る。 */
+    val allRules: List<Rule> = emptyList(),
     /** いま何番目の段にいるか。0=何を 1=いつ 2=どうする */
     val step: Int = 0,
     val loaded: Boolean = false,
@@ -159,6 +163,7 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
             val policy = DopaRuntime.settings.pointPolicy.first()
             val roster = DopaRuntime.devices.first()
             val me = DopaRuntime.myDeviceId
+            val everything = DopaRuntime.rules.getAll()
             val rule = if (ruleId == 0L) null else DopaRuntime.rules.getById(ruleId)
             if (rule == null) {
                 _state.update {
@@ -167,6 +172,7 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
                         pointPolicy = policy,
                         knownDevices = roster,
                         myDeviceId = me,
+                        allRules = everything,
                         loaded = true,
                     )
                 }
@@ -191,6 +197,7 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
                 devices = rule.devices,
                 knownDevices = roster,
                 myDeviceId = me,
+                allRules = everything,
                 mode = when {
                     rule.target.matchAll -> TargetMode.ALL
                     rule.target.sites.isNotEmpty() && rule.target.packages.isEmpty() -> TargetMode.SITES
@@ -808,6 +815,85 @@ private fun ConditionStep(state: RuleEditState, viewModel: RuleEditViewModel) {
 
 // ---- 3. どうする -------------------------------------------------------
 
+/**
+ * 同じアプリを狙っている他のルール。
+ *
+ * ## なぜ出すのか
+ *
+ * 「同じアプリでも条件ごとにアクションを変えたい」は**もともとできる**。
+ * ルールを2本書けば、両方成立したときは強いほうが採られる。
+ *
+ * ところが画面のどこにもそう書いていないので、できると気づけない ──
+ * 1本に全部を詰め込もうとして行き詰まる。足りないのは機能ではなく、
+ * 「いま何本がこのアプリを見ているか」が見えることだった。
+ *
+ * ついでに**どれが勝つか**も出す。弱いほうも一緒に効くと思い込んだまま
+ * 組まれるのがいちばん困る ── 効くのは1本だけ。
+ */
+@Composable
+private fun SiblingRulesCard(state: RuleEditState, labelOf: (String) -> String) {
+    val me = remember(state.id, state.target, state.actionId) {
+        Rule(
+            id = state.id,
+            name = state.name,
+            target = state.target,
+            condition = state.condition,
+            actionId = state.actionId,
+            actionParams = state.actionParams,
+        )
+    }
+    val siblings = remember(me, state.allRules) { RuleOverlap.siblingsOf(me, state.allRules) }
+    if (siblings.isEmpty()) return
+
+    val winner = remember(siblings, me) { RuleOverlap.winnerAmong(siblings + me) }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp)) {
+            Text(
+                "同じアプリを見ているルールが、ほかに${siblings.size}本あります",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "条件ごとに違う動作をさせたいときは、1本に詰め込まずルールを分けます。" +
+                    "同時に成立したら、いちばん強いものが1つだけ効きます。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            siblings.take(4).forEach { other ->
+                Text(
+                    "・" + other.name + " — " + describeRule(other) +
+                        if (!other.enabled) "(止めてあります)" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (siblings.size > 4) {
+                Text(
+                    "ほか${siblings.size - 4}本",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (winner != null) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    if (winner.id == state.id && state.id != 0L) {
+                        "全部が同時に成立したら、いま編集しているこれが効きます。"
+                    } else {
+                        "全部が同時に成立したら「${winner.name}」が効きます。"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+    }
+    Spacer(Modifier.height(20.dp))
+}
+
 @Composable
 private fun ActionStep(
     state: RuleEditState,
@@ -817,6 +903,8 @@ private fun ActionStep(
 ) {
     val plan = ActionPlan.from(state.actionId, state.actionParams)
     val breakable = RuleCheck.isBreakable(state.actionId, state.actionParams)
+
+    SiblingRulesCard(state, labelOf)
 
     Text("条件を満たしたら", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
     Spacer(Modifier.height(12.dp))

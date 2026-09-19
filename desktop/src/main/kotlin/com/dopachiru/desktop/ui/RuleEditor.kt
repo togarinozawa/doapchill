@@ -21,6 +21,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -39,6 +40,7 @@ import com.dopachiru.core.action.types.BlockAction
 import com.dopachiru.core.action.types.DelayAction
 import com.dopachiru.core.action.types.LockoutAction
 import com.dopachiru.core.action.types.WarnAction
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionRegistry
 import com.dopachiru.core.model.ActionPlan
 import com.dopachiru.core.model.MainAction
@@ -49,6 +51,7 @@ import com.dopachiru.core.model.LockScope
 import com.dopachiru.core.model.NodePath
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.model.RuleCheck
+import com.dopachiru.core.model.RuleOverlap
 import com.dopachiru.core.model.Target
 import com.dopachiru.core.param.Params
 import com.dopachiru.core.points.PointPolicy
@@ -150,6 +153,51 @@ fun RuleEditorDialog(
                 Spacer(Modifier.height(20.dp))
                 HorizontalDivider()
                 Spacer(Modifier.height(20.dp))
+
+                // 同じアプリを見ている他のルール。**もともと複数書ける**のに、
+                // 画面のどこにもそう書いていないので気づけなかった
+                val everything = DesktopRuntime.ruleFile.collectAsState().value.rules
+                val siblings = RuleOverlap.siblingsOf(draft, everything)
+                if (siblings.isNotEmpty()) {
+                    val winner = RuleOverlap.winnerAmong(siblings + draft)
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(
+                                "同じアプリを見ているルールが、ほかに${siblings.size}本あります",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                "条件ごとに違う動作をさせたいときは、1本に詰め込まずルールを分けます。" +
+                                    "同時に成立したら、いちばん強いものが1つだけ効きます。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            siblings.take(4).forEach { other ->
+                                Text(
+                                    "・" + other.name +
+                                        if (!other.enabled) "(止めてあります)" else "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (winner != null) {
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    if (winner.uid == draft.uid && draft.uid.isNotBlank()) {
+                                        "全部が同時に成立したら、いま編集しているこれが効きます。"
+                                    } else {
+                                        "全部が同時に成立したら「${winner.name}」が効きます。"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                }
 
                 Text("条件を満たしたら", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(8.dp))
@@ -365,42 +413,147 @@ fun ConditionTreeEditor(
     )
 
     pickerTarget?.let { path ->
+        // 仲間分けと探し方は Android と同じ約束。core の ConditionRegistry が
+        // 束ね方も探し方も持っているので、ここは並べるだけ
+        var query by remember(path) { mutableStateOf("") }
+        var opened by remember(path) { mutableStateOf<ConditionGroup?>(null) }
+        val searching = query.isNotBlank()
+        val hits = if (searching) ConditionRegistry.search(query) else emptyList()
+        val groups = remember { ConditionRegistry.byGroup() }
+
+        fun pick(type: com.dopachiru.core.condition.ConditionType) {
+            onChange(
+                ConditionTree.addChild(
+                    root,
+                    path,
+                    ConditionNode.Leaf(type.id, Params.defaultsOf(type.params)),
+                )
+            )
+            pickerTarget = null
+        }
+
         AlertDialog(
             onDismissRequest = { pickerTarget = null },
-            title = { Text("条件を選ぶ") },
+            title = { Text(if (searching) "条件を探す" else opened?.label ?: "どういう条件にしますか") },
             text = {
-                LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                    // 凍結した条件は出さない。保存済みのルールでは引き続き引ける
-                    items(ConditionRegistry.selectable(), key = { it.id }) { type ->
-                        Card(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            onClick = {
-                                onChange(
-                                    ConditionTree.addChild(
-                                        root,
-                                        path,
-                                        ConditionNode.Leaf(type.id, Params.defaultsOf(type.params)),
-                                    )
-                                )
-                                pickerTarget = null
-                            },
-                        ) {
-                            Column(Modifier.padding(12.dp)) {
-                                Text(type.displayName, style = MaterialTheme.typography.titleSmall)
-                                Text(
-                                    type.description,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                Column {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        label = { Text("探す(「平日」「ショート」など)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+
+                    LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                        when {
+                            searching -> {
+                                if (hits.isEmpty()) {
+                                    item {
+                                        Text(
+                                            "当たるものがありません。言い回しを変えてみてください。",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                                items(hits, key = { it.id }) { type ->
+                                    ConditionRow(type, showGroup = true) { pick(type) }
+                                }
+                            }
+
+                            opened == null -> {
+                                items(groups, key = { it.first.name }) { (group, types) ->
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                        onClick = { opened = group },
+                                    ) {
+                                        Column(Modifier.padding(14.dp)) {
+                                            Text(
+                                                group.label,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                            )
+                                            Text(
+                                                group.summary,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                            Spacer(Modifier.height(4.dp))
+                                            Text(
+                                                "${types.size}種類",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            else -> {
+                                val types = groups.firstOrNull { it.first == opened }?.second.orEmpty()
+                                items(types, key = { it.id }) { type ->
+                                    ConditionRow(type, showGroup = false) { pick(type) }
+                                }
                             }
                         }
                     }
                 }
             },
             confirmButton = { TextButton(onClick = { pickerTarget = null }) { Text("やめる") } },
+            dismissButton = {
+                if (opened != null && !searching) {
+                    TextButton(onClick = { opened = null }) { Text("ほかの種類") }
+                }
+            },
         )
     }
 }
+
+/** 条件1つぶん。名前・説明・**実際に書ける例**の3行。 */
+@Composable
+private fun ConditionRow(
+    type: com.dopachiru.core.condition.ConditionType,
+    showGroup: Boolean,
+    onClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        onClick = onClick,
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    type.displayName,
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                if (showGroup) {
+                    Text(
+                        type.group.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Text(
+                type.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (type.example.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "例: " + type.example,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+    }
+}
+
 
 @Composable
 private fun GroupCard(

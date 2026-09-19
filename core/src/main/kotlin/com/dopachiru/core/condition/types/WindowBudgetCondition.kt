@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -40,6 +41,9 @@ object WindowBudgetCondition : ConditionType {
     override val description =
         "最初に触った時刻から数えて一定時間の窓を張り、その中の持ち時間を使い切ったら成立する。" +
             "閉じても窓は消えないので、ギリギリで閉じて数え直させる手が効かない。"
+
+    override val group = ConditionGroup.USAGE
+    override val example = "使い始めて1時間のうち15分を使い切ったら。閉じても窓は消えない"
 
     override val params = listOf(
         ParamSpec.DurationParam(

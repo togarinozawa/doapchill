@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -15,6 +16,9 @@ object TimeRangeCondition : ConditionType {
     override val id = "time_range"
     override val displayName = "時間帯"
     override val description = "指定した時刻の範囲内で成立する。終了が開始より前なら日をまたぐ範囲として扱う(例 22:00〜06:00)。"
+
+    override val group = ConditionGroup.TIME
+    override val example = "夜22時から朝6時のあいだ"
 
     override val params = listOf(
         ParamSpec.TimeOfDayParam(KEY_START, "開始", default = 22 * 60),

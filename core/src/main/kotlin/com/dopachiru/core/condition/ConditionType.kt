@@ -27,6 +27,23 @@ interface ConditionType {
     /** 条件を選ぶときに出す説明。 */
     val description: String
 
+    /**
+     * 仲間分け。選ぶ画面はこれで束ねる。
+     *
+     * 既定を [ConditionGroup.TUNING] にしないのは、分類を忘れた条件が
+     * 「単体では使わない」棚に紛れると気づけないため。目立つ [ConditionGroup.ALWAYS]
+     * に落として、付け忘れが画面で見えるようにしてある。
+     */
+    val group: ConditionGroup get() = ConditionGroup.ALWAYS
+
+    /**
+     * 具体例を1行。選ぶ画面で名前の下に出す。
+     *
+     * 名前と説明だけでは「で、これは何に使うの」が埋まらない。
+     * **実際に書ける文**を見せるのがいちばん早い。
+     */
+    val example: String get() = ""
+
     /** この条件が必要とするパラメータ。 */
     val params: List<ParamSpec>
 

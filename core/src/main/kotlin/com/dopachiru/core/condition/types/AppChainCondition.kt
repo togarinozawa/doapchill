@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -25,6 +26,9 @@ object AppChainCondition : ConditionType {
     override val displayName = "直前に使っていたアプリ"
     override val description =
         "選んだアプリから流れてきたときだけ成立する。「LINE のあと X を開く」のような連鎖を狙い撃つ。"
+
+    override val group = ConditionGroup.TRIGGER
+    override val example = "LINE を見た流れで X を開いたとき"
 
     override val params = listOf(
         ParamSpec.PackagesParam(

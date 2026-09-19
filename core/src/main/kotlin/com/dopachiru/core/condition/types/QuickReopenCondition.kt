@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -22,6 +23,9 @@ object QuickReopenCondition : ConditionType {
     override val displayName = "閉じてすぐ開き直した"
     override val description =
         "前に閉じてから短い時間で開き直したときに成立する。目的の無い確認行動を捉える。"
+
+    override val group = ConditionGroup.TRIGGER
+    override val example = "閉じて5分以内に開き直したとき。無自覚な2回目だけ止める"
 
     override val params = listOf(
         ParamSpec.IntParam(

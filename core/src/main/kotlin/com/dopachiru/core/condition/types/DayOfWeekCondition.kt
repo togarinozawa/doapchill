@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -15,6 +16,9 @@ object DayOfWeekCondition : ConditionType {
     override val id = "day_of_week"
     override val displayName = "曜日"
     override val description = "選んだ曜日のあいだだけ成立する。"
+
+    override val group = ConditionGroup.TIME
+    override val example = "平日だけ / 土日だけ"
 
     override val params = listOf(
         ParamSpec.DayOfWeekParam(KEY_DAYS, "対象の曜日", default = ALL_DAYS),

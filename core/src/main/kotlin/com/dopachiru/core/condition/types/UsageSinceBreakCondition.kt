@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -34,6 +35,9 @@ object UsageSinceBreakCondition : ConditionType {
     override val description =
         "対象をまとめて何分使ったかを見る。しばらく離れたら数え直す。" +
             "「20分使ったら10分休む」を作るための条件。"
+
+    override val group = ConditionGroup.USAGE
+    override val example = "まとめて20分使ったら。10分離れれば数え直し"
 
     override val params = listOf(
         ParamSpec.DurationParam(

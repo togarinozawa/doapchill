@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -24,6 +25,9 @@ object StudyPrepCondition : ConditionType {
     override val id = "study_prep"
     override val displayName = "学習予定の直前"
     override val description = "次の学習予定が始まる少し前のあいだ成立する。長さは設定で変えられる。"
+
+    override val group = ConditionGroup.TIME
+    override val example = "学習予定が始まる30分前から(助走の時間)"
 
     override val params = emptyList<ParamSpec>()
 

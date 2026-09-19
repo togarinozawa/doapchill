@@ -1,6 +1,7 @@
 package com.dopachiru.core.condition.types
 
 import com.dopachiru.core.DopaFeatures
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -21,6 +22,9 @@ object CalendarBusyCondition : ConditionType {
     override val id = "calendar_busy"
     override val displayName = "カレンダー予定"
     override val description = "予定の最中(または予定が無いあいだ)に成立する。予定名で絞り込める。"
+
+    override val group = ConditionGroup.TIME
+    override val example = "カレンダーに予定が入っているあいだ"
 
     override val params = listOf(
         ParamSpec.TextParam(

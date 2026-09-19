@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -29,6 +30,9 @@ object ChanceCondition : ConditionType {
     override val displayName = "確率で"
     override val description =
         "決めた確率でだけ成立する。毎回だと慣れる・嫌われる介入を、たまにだけ出すために使う。"
+
+    override val group = ConditionGroup.TUNING
+    override val example = "3回に1回だけ出す。毎回かけると慣れて効かなくなる"
 
     override val params = listOf(
         ParamSpec.IntParam(

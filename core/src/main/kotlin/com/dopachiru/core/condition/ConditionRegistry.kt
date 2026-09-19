@@ -29,6 +29,34 @@ object ConditionRegistry {
      */
     fun selectable(): List<ConditionType> = types.values.filter { it.available }
 
+    /**
+     * 仲間ごとに束ねた、いま選べる条件。選ぶ画面はこれを並べる。
+     *
+     * 空の仲間は落とす ── 見出しだけあって中身が無い棚は、探すのを邪魔するだけ。
+     */
+    fun byGroup(): List<Pair<ConditionGroup, List<ConditionType>>> =
+        ConditionGroup.ORDER.mapNotNull { group ->
+            selectable().filter { it.group == group }.takeIf { it.isNotEmpty() }?.let { group to it }
+        }
+
+    /**
+     * 名前・説明・例・IDから探す。
+     *
+     * ID も見るのは、**説明で使っている言葉を思い出せないとき**に
+     * `window_budget` のような手がかりで辿れるようにするため。
+     * 空の問い合わせは全部返す(絞っていない、という意味)。
+     */
+    fun search(query: String): List<ConditionType> {
+        val q = query.trim().lowercase()
+        if (q.isEmpty()) return selectable()
+        return selectable().filter {
+            it.displayName.lowercase().contains(q) ||
+                it.description.lowercase().contains(q) ||
+                it.example.lowercase().contains(q) ||
+                it.id.contains(q)
+        }
+    }
+
     /** テスト用。 */
     fun clear() = types.clear()
 }

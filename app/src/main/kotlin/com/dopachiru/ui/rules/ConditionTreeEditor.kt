@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -26,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionRegistry
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.ConditionTree
@@ -273,37 +275,157 @@ private fun NegateRow(
     )
 }
 
+/**
+ * 条件を選ぶ画面。
+ *
+ * ## まず仲間、そのあと中身
+ *
+ * 20種類を平らに並べていたのをやめた。名前だけ20個見せられても、
+ * 何を選べばいいのかは文字から読み取れない ──「やりたいことはできるはずなのに、
+ * やり方が複雑に見える」の大半がここだった。
+ *
+ * 一度に見る数を減らすのが狙いで、選択肢そのものは1つも減らしていない。
+ * 探す欄に何か打てば、仲間をまたいで一気に絞る(仲間分けが邪魔になる瞬間があるので、
+ * **飛び越える道**を必ず残す)。
+ *
+ * ## 例を必ず出す
+ *
+ * 名前と説明だけでは「で、これは何に使うの」が埋まらない。実際に書ける文を
+ * 1行添えてある([ConditionType.example])。
+ */
 @Composable
 private fun ConditionPickerDialog(
     onPick: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var query by remember { mutableStateOf("") }
+    // 開いた直後は仲間だけを見せる。選ぶと中身が開く
+    var opened by remember { mutableStateOf<ConditionGroup?>(null) }
+
+    val searching = query.isNotBlank()
+    val hits = remember(query) { if (searching) ConditionRegistry.search(query) else emptyList() }
+    val groups = remember { ConditionRegistry.byGroup() }
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("条件を選ぶ") },
+        title = { Text(if (searching) "条件を探す" else opened?.label ?: "どういう条件にしますか") },
         text = {
-            LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                // 凍結した条件は出さない。保存済みのルールでは引き続き引ける
-                items(ConditionRegistry.selectable(), key = { it.id }) { type ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        onClick = { onPick(type.id) },
-                    ) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text(type.displayName, style = MaterialTheme.typography.titleSmall)
-                            Spacer(Modifier.height(2.dp))
-                            Text(
-                                type.description,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+            Column {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = { Text("探す(「平日」「ショート」など)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+
+                LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                    when {
+                        searching -> {
+                            if (hits.isEmpty()) {
+                                item {
+                                    Text(
+                                        "当たるものがありません。言い回しを変えてみてください。",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            items(hits, key = { it.id }) { type ->
+                                ConditionRow(type, showGroup = true) { onPick(type.id) }
+                            }
+                        }
+
+                        opened == null -> {
+                            items(groups, key = { it.first.name }) { (group, types) ->
+                                Card(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    onClick = { opened = group },
+                                ) {
+                                    Column(Modifier.padding(14.dp)) {
+                                        Text(
+                                            group.label,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
+                                        Spacer(Modifier.height(2.dp))
+                                        Text(
+                                            group.summary,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            "${types.size}種類",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        else -> {
+                            val types = groups.firstOrNull { it.first == opened }?.second.orEmpty()
+                            items(types, key = { it.id }) { type ->
+                                ConditionRow(type, showGroup = false) { onPick(type.id) }
+                            }
                         }
                     }
                 }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("やめる") } },
+        dismissButton = {
+            // 中身を開いているときだけ、棚の一覧へ戻れるように
+            if (opened != null && !searching) {
+                TextButton(onClick = { opened = null }) { Text("ほかの種類") }
+            }
+        },
     )
+}
+
+/** 条件1つぶん。名前・説明・**実際に書ける例**の3行。 */
+@Composable
+private fun ConditionRow(
+    type: com.dopachiru.core.condition.ConditionType,
+    showGroup: Boolean,
+    onClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        onClick = onClick,
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    type.displayName,
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                if (showGroup) {
+                    Text(
+                        type.group.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                type.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (type.example.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "例: " + type.example,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+    }
 }

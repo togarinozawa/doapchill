@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -18,6 +19,9 @@ object DeclaredBudgetCondition : ConditionType {
     override val id = "declared_budget"
     override val displayName = "宣言した時間の超過"
     override val description = "開く前に自分で申告した持ち時間を使い切っていたら成立する。"
+
+    override val group = ConditionGroup.TUNING
+    override val example = "開くときに自分で申告した時間を使い切ったら"
 
     override val params = listOf(
         ParamSpec.BoolParam(

@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -13,6 +14,9 @@ object ContinuousUsageCondition : ConditionType {
     override val id = "continuous_usage"
     override val displayName = "連続使用時間"
     override val description = "アプリを開きっぱなしにしている時間が指定を超えたら成立する。いったん離れるとリセットされる。"
+
+    override val group = ConditionGroup.USAGE
+    override val example = "開きっぱなしで30分たったら。一度離れると0に戻る"
 
     override val params = listOf(
         ParamSpec.DurationParam(KEY_MINUTES, "連続使用が", default = 30, min = 1, max = 8 * 60),

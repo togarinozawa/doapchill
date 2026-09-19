@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -15,6 +16,9 @@ object TotalUsageCondition : ConditionType {
     override val id = "total_usage"
     override val displayName = "合計使用時間"
     override val description = "期間内の合計使用時間が指定を超えたら成立する。リセット時刻と周期を変えられる。"
+
+    override val group = ConditionGroup.USAGE
+    override val example = "今日の合計が1時間を超えたら"
 
     override val params = listOf(
         ParamSpec.DurationParam(KEY_MINUTES, "合計使用が", default = 60, min = 1, max = 24 * 60),

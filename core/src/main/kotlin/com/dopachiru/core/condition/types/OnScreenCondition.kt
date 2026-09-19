@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.model.ScreenSignals
@@ -23,6 +24,9 @@ object OnScreenCondition : ConditionType {
     override val displayName = "特定の画面のとき"
     override val description =
         "ショート・リール・おすすめタブなど、アプリの中の特定の画面だけを狙う。取れないときは素通しになる。"
+
+    override val group = ConditionGroup.TRIGGER
+    override val example = "YouTube のショートの画面に入った瞬間だけ"
 
     override val params = listOf(
         ParamSpec.EnumParam(

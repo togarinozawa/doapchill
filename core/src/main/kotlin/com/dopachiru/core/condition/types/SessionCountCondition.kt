@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -15,6 +16,9 @@ object SessionCountCondition : ConditionType {
     override val id = "session_count"
     override val displayName = "セッション回数"
     override val description = "期間内にアプリを開いた回数が指定を超えたら成立する。だらだら開き直す癖に効く。"
+
+    override val group = ConditionGroup.USAGE
+    override val example = "今日もう10回開いていたら"
 
     override val params = listOf(
         ParamSpec.IntParam(KEY_COUNT, "開いた回数が", default = 5, min = 1, max = 200, unit = "回"),

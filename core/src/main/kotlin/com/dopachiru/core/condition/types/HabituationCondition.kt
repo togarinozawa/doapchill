@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -30,6 +31,9 @@ object HabituationCondition : ConditionType {
     override val displayName = "このルールに慣れてきたら"
     override val description =
         "このルールを最近何回も押し切っているときだけ成立する。効かなくなってから強める段取りに使う。"
+
+    override val group = ConditionGroup.TUNING
+    override val example = "このルールを最近3回押し切っていたら(効かなくなってきた合図)"
 
     override val params = listOf(
         ParamSpec.IntParam(

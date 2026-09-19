@@ -1,5 +1,6 @@
 package com.dopachiru.core.condition.types
 
+import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionType
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
@@ -21,6 +22,9 @@ object StudySessionCondition : ConditionType {
     override val id = "study_session"
     override val displayName = "学習予定"
     override val description = "連携アプリが入れた学習予定の最中(または予定が無いあいだ)に成立する。"
+
+    override val group = ConditionGroup.TIME
+    override val example = "連携アプリから来た学習予定の最中"
 
     override val params = listOf(
         ParamSpec.BoolParam(
