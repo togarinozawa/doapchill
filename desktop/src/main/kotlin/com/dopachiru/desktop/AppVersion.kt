@@ -10,5 +10,5 @@ package com.dopachiru.desktop
  * jpackage の版はビルドの都合で生成物にしか入らず、実行時には読めません。
  */
 object AppVersion {
-    const val CURRENT = "1.16.0"
+    const val CURRENT = "1.17.0"
 }

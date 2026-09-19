@@ -1057,6 +1057,15 @@ private fun RuleTransferSection() {
                 .onSuccess { plan = it; message = "" }
                 .onFailure { message = it.message ?: "読めませんでした" }
         }) { Text("読み込む") }
+
+        // 使用状況 → Claude → .rules → 読み込む、の輪。書き出しの隣に置く
+        OutlinedButton(onClick = {
+            val path = chooseFile(save = true) ?: return@OutlinedButton
+            message = runCatching {
+                File(path).writeText(DesktopRuntime.exportUsage(), Charsets.UTF_8)
+                "書き出しました: " + path + " ── 個人の記録なので渡す先に気をつけて"
+            }.getOrElse { "書き出せませんでした: " + (it.message ?: "") }
+        }) { Text("使用状況") }
     }
 
     if (message.isNotBlank()) {

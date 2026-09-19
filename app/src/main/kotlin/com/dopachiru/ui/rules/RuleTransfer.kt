@@ -27,6 +27,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dopachiru.core.gate.ChangeKind
 import com.dopachiru.core.io.ImportPlan
+import com.dopachiru.core.io.UsageReport
+import com.dopachiru.core.io.UsageSpan
 import com.dopachiru.core.io.RuleBundleIo
 import com.dopachiru.runtime.DopaRuntime
 import kotlinx.coroutines.Dispatchers
@@ -37,7 +39,16 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDateTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+
+/**
+ * 使用実績を何日ぶん書き出すか。
+ *
+ * 記録そのものは90日残っているが、14日にしてある ── 古い癖まで混ぜると、
+ * 「いまの自分」ではなく「半年前の自分」に合わせたルールが返ってくる。
+ */
+const val USAGE_REPORT_DAYS = 14
 
 /**
  * ルールの持ち出しと取り込み。
@@ -63,6 +74,45 @@ class RuleTransferViewModel(app: Application) : AndroidViewModel(app) {
 
     fun dismiss() {
         _stage.value = Stage.Idle
+    }
+
+    /**
+     * 使用実績を Markdown で書き出す。
+     *
+     * ルールの書き出しと同じ口に置いてあるのは、**そこが輪になっている**から
+     * ── 使用状況を書き出す → Claude に渡す → 返ってきたものを読み込む。
+     * 記録タブに置くと、戻ってくる先が別のタブになる。
+     */
+    fun exportUsage(context: Context, uri: Uri, days: Int = USAGE_REPORT_DAYS) {
+        viewModelScope.launch {
+            val now = LocalDateTime.now()
+            val fromSec = now.atZone(ZoneId.systemDefault()).toEpochSecond() - days * 24L * 3600
+            val sessions = DopaRuntime.db.usageDao().allSince(fromSec)
+            val text = UsageReport.build(
+                spans = sessions.map { UsageSpan(it.packageName, it.startEpochSec, it.endEpochSec) },
+                labelOf = { InstalledApps.labelOf(context, it) },
+                rules = DopaRuntime.rules.getAll(),
+                tags = DopaRuntime.rules.currentTagsByPackage(),
+                now = now,
+                days = days,
+                deviceName = DopaRuntime.settings.deviceName.first(),
+            )
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openOutputStream(uri)?.use {
+                        it.write(text.toByteArray(Charsets.UTF_8))
+                    } != null
+                }.getOrDefault(false)
+            }
+            _stage.value = if (ok) {
+                Stage.Done(
+                    "直近${days}日ぶんを書き出しました。これを Claude に渡すと、" +
+                        "時間帯の山から条件を組んでもらえます。返ってきた .rules は「読み込む」から。",
+                )
+            } else {
+                Stage.Failed("書き出せませんでした。")
+            }
+        }
     }
 
     fun export(context: Context, uri: Uri) {
@@ -166,13 +216,24 @@ fun RuleTransferControls(viewModel: RuleTransferViewModel = viewModel()) {
         ActivityResultContracts.OpenDocument(),
     ) { uri -> if (uri != null) viewModel.preview(context, uri) }
 
+    val usageLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/markdown"),
+    ) { uri -> if (uri != null) viewModel.exportUsage(context, uri) }
+
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         TextButton(onClick = { exportLauncher.launch(defaultFileName()) }) { Text("書き出す") }
         // JSON を text/* で出す端末があるので、両方受ける
         TextButton(
             onClick = { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) },
         ) { Text("読み込む") }
+        TextButton(onClick = { usageLauncher.launch(usageFileName()) }) { Text("使用状況") }
     }
+    Text(
+        "「使用状況」は直近" + USAGE_REPORT_DAYS + "日の記録を Markdown で書き出します。" +
+            "Claude に渡すとルール案が作れます ── **個人の記録なので渡す先に気をつけて**。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 
     when (val s = stage) {
         is RuleTransferViewModel.Stage.Idle -> Unit
@@ -254,4 +315,9 @@ private fun ImportPreviewDialog(plan: ImportPlan, onConfirm: () -> Unit, onDismi
 private fun defaultFileName(): String {
     val stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmm"))
     return "dopachiru-rules-$stamp.json"
+}
+
+private fun usageFileName(): String {
+    val stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmm"))
+    return "dopachiru-usage-$stamp.md"
 }

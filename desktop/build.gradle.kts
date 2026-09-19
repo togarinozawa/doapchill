@@ -9,7 +9,7 @@ plugins {
 }
 
 /** Windows 版の版番号。持ち運び版の名前と MSI の両方で使う。 */
-val desktopVersion = "1.16.0"
+val desktopVersion = "1.17.0"
 
 kotlin {
     jvmToolchain(21)
@@ -124,6 +124,14 @@ tasks.register<JavaExec>("installedAppsSmoke") {
     group = "verification"
     description = "スタートメニューから実行ファイル名を拾えているか目で見る"
     mainClass.set("com.dopachiru.desktop.tools.InstalledAppsSmokeKt")
+    classpath = sourceSets["main"].runtimeClasspath
+}
+
+/** 使用状況の書き出しが1枚の紙として読めるかを見る。`gradlew :desktop:usageReportSmoke` */
+tasks.register<JavaExec>("usageReportSmoke") {
+    group = "verification"
+    description = "作り物の記録を流し込んで、書き出しの見た目を目で見る"
+    mainClass.set("com.dopachiru.desktop.tools.UsageReportSmokeKt")
     classpath = sourceSets["main"].runtimeClasspath
 }
 

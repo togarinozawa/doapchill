@@ -18,6 +18,8 @@ import com.dopachiru.core.engine.RuleEngine
 import com.dopachiru.core.engine.WindowUsage
 import com.dopachiru.core.io.ImportPlan
 import com.dopachiru.core.io.RuleBundleIo
+import com.dopachiru.core.io.UsageReport
+import com.dopachiru.core.io.UsageSpan
 import com.dopachiru.core.action.types.IntentionAction
 import com.dopachiru.core.action.types.LockoutAction
 import com.dopachiru.core.action.types.RadioAction
@@ -917,6 +919,26 @@ object DesktopRuntime {
     // ---- 持ち出しと取り込み --------------------------------------------
 
     /** いまのルールを1つの JSON にする。条件やアクションの目録も添える。 */
+    /**
+     * 使用実績を Markdown で書き出す。
+     *
+     * Windows の記録は48時間ぶんしかメモリに無いので、**Android より短い期間**しか
+     * 出せない。それでも時間帯の山は出るので、作業時間の癖を見るには足りる。
+     */
+    fun exportUsage(days: Int = USAGE_REPORT_DAYS): String {
+        val file = _ruleFile.value
+        return UsageReport.build(
+            spans = ledger.snapshotForStorage()
+                .map { UsageSpan(it.processName, it.startSec, it.endSec) },
+            labelOf = { ForegroundApp.labelFor(it) },
+            rules = file.rules,
+            tags = file.tags,
+            now = LocalDateTime.now(),
+            days = days,
+            deviceName = _settings.value.deviceName,
+        )
+    }
+
     fun exportRules(): String {
         val file = _ruleFile.value
         return RuleBundleIo.export(
@@ -1960,5 +1982,13 @@ object DesktopRuntime {
      * 「いま PC を閉め出して」が5分後に効くのでは頼む気にならないので短くしてあります。
      * Cloudflare の無料枠(1日10万読み)に対して、1分ごとでも1日1440回。桁が2つ違います。
      */
+    /**
+     * 使用実績を何日ぶん書き出すか。
+     *
+     * 記録そのものが48時間ぶんしか無いので、それ以上を指定しても増えない。
+     * 2日にしてあるのは、空の行を並べないため。
+     */
+    const val USAGE_REPORT_DAYS = 2
+
     private const val SYNC_EVERY_MS = 60_000L
 }
