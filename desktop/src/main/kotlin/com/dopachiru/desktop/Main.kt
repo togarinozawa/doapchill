@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -175,6 +176,33 @@ fun main(args: Array<String>) = application {
 
         is Presentation.Delay -> OverlayWindow {
             DelayScreen(delay = current, onDone = { DesktopRuntime.passDelay() })
+        }
+
+        // 覚え書きを重ねて1枚に。どれも何も遮らないので、隅に置くだけ。
+        // 高さは枚数ぶん伸ばす ── 足りないと下のものが切れて、
+        // 「出したのに見えない」になる
+        is Presentation.Notes -> Window(
+            onCloseRequest = {},
+            title = "ドパチル",
+            undecorated = true,
+            transparent = true,
+            alwaysOnTop = true,
+            focusable = false,
+            resizable = false,
+            state = rememberWindowState(
+                size = DpSize(360.dp, (64 * current.items.size).dp),
+                position = WindowPosition(Alignment.TopEnd),
+            ),
+        ) {
+            Column {
+                current.items.forEach { item ->
+                    when (item) {
+                        is Presentation.Timer -> SessionTimerScreen(item)
+                        is Presentation.Intention -> IntentionChip(item)
+                        else -> Unit
+                    }
+                }
+            }
         }
 
         // 何も遮らないので、小さな枠で隅に置くだけ。操作は下に届く

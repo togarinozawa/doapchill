@@ -58,6 +58,8 @@ import com.dopachiru.core.action.types.WarnAction
 import com.dopachiru.core.model.ActionPlan
 import com.dopachiru.core.model.MainAction
 import com.dopachiru.core.gate.ChangeKind
+import com.dopachiru.core.model.ActionSpec
+import com.dopachiru.core.model.Clause
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.ConditionTree
 import com.dopachiru.core.model.RuleLinks
@@ -120,6 +122,12 @@ data class RuleEditState(
     val knownDevices: List<DeviceInfo> = emptyList(),
     /** この端末の deviceId。名簿に「この端末」と出すため。 */
     val myDeviceId: String = "",
+
+    /** 1組目に重ねる覚え書き(経過表示・目的のチップ)。 */
+    val extraActions: List<ActionSpec> = emptyList(),
+
+    /** 2組目以降の「条件 → こうする」。1組目は [condition] と [actionId]。 */
+    val extraClauses: List<Clause> = emptyList(),
 
     /** 手元のルール全部。同じアプリを狙う他のルールを出すために要る。 */
     val allRules: List<Rule> = emptyList(),
@@ -191,6 +199,8 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
                 exceptTags = rule.target.exceptTags,
                 exceptSites = rule.target.exceptSites,
                 condition = rule.condition,
+                extraActions = rule.extraActions,
+                extraClauses = rule.extraClauses,
                 actionId = rule.actionId,
                 actionParams = rule.actionParams,
                 consequence = rule.consequence,
@@ -273,6 +283,10 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setCondition(condition: ConditionNode) = _state.update { it.copy(condition = condition) }
 
+    fun setExtraActions(actions: List<ActionSpec>) = _state.update { it.copy(extraActions = actions) }
+
+    fun setExtraClauses(clauses: List<Clause>) = _state.update { it.copy(extraClauses = clauses) }
+
     /**
      * 「ほかの端末で効いているあいだ、この端末でも効かせる」。
      *
@@ -326,6 +340,8 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
                 enabled = true,
                 target = current.target,
                 condition = current.condition,
+                extraActions = current.extraActions,
+                extraClauses = current.extraClauses,
                 actionId = current.actionId,
                 actionParams = current.actionParams,
                 consequence = current.consequence,
@@ -412,7 +428,11 @@ fun RuleEditScreen(
             when (state.step) {
                 0 -> TargetStep(state, viewModel, labelOf)
                 1 -> ConditionStep(state, viewModel)
-                else -> ActionStep(state, viewModel, ruleId, labelOf)
+                else -> {
+                    ActionStep(state, viewModel, ruleId, labelOf)
+                    Spacer(Modifier.height(24.dp))
+                    ClausesSection(state, viewModel)
+                }
             }
             Spacer(Modifier.height(24.dp))
         }
@@ -1187,6 +1207,31 @@ private fun ActionStep(
         }
     }
 }
+
+/**
+ * 1組目に重ねる覚え書きと、2組目以降。
+ *
+ * 「どうする」の段の下に置いてある ── 1組しか要らない人が、組の話に
+ * 出くわさずに済むように。
+ */
+@Composable
+private fun ClausesSection(state: RuleEditState, viewModel: RuleEditViewModel) {
+    HorizontalDivider()
+    Spacer(Modifier.height(20.dp))
+
+    StackedActionsRow(
+        actions = state.extraActions,
+        onChange = viewModel::setExtraActions,
+    )
+
+    Spacer(Modifier.height(24.dp))
+    ExtraClausesSection(
+        clauses = state.extraClauses,
+        onChange = viewModel::setExtraClauses,
+    )
+    Spacer(Modifier.height(16.dp))
+}
+
 
 // ---- 部品 --------------------------------------------------------------
 

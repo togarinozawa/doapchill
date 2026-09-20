@@ -59,7 +59,7 @@ fun ParamEditor(
     if (specs.isEmpty()) return
 
     Column(modifier = modifier.fillMaxWidth()) {
-        specs.forEach { spec ->
+        visibleSpecs(specs, params).forEach { spec ->
             ParamField(spec, params) { key, value -> onChange(params.with(key to value)) }
             Spacer(Modifier.height(16.dp))
         }
@@ -367,3 +367,16 @@ private fun RuleRefPicker(selected: String, onChange: (String) -> Unit) {
         }
     }
 }
+
+/**
+ * いま出す欄だけ。
+ *
+ * 「どこで数え直すか」で選ばなかったぶんの欄を畳む。隠れていても値は
+ * 保存されたままなので、選び直せばそのまま戻る ── 消すと、切り替えるたびに
+ * 打ち直しになる。
+ */
+private fun visibleSpecs(specs: List<ParamSpec>, params: Params): List<ParamSpec> =
+    specs.filter { spec ->
+        val rule = spec.visibleWhen ?: return@filter true
+        params.string(rule.key, "") in rule.values
+    }

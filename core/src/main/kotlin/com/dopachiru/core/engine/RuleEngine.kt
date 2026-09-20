@@ -3,6 +3,7 @@ package com.dopachiru.core.engine
 import com.dopachiru.core.action.ActionRegistry
 import com.dopachiru.core.action.ActionType
 import com.dopachiru.core.condition.ConditionRegistry
+import com.dopachiru.core.model.ActionSpec
 import com.dopachiru.core.model.Clauses
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.Lockout
@@ -26,6 +27,14 @@ sealed interface Decision {
          * 何が効いたのかを画面に出すのと、数える財布を組ごとに分けるのに要る。
          */
         val clauseId: Int = Clauses.FIRST_ID,
+
+        /**
+         * 一緒に出しておく覚え書き(経過表示・目的のチップ)。
+         *
+         * **成立している組ぜんぶから集めます。** 1組目が「閉じる」で2組目が
+         * 「経過表示」なら、両方が効く ── 覆いが引っ込んだあとに経過が残る。
+         */
+        val overlays: List<ActionSpec> = emptyList(),
     ) : Decision
 
     /**
@@ -105,6 +114,7 @@ class RuleEngine {
         tagsOf: (String) -> Set<String>,
     ): Decision {
         var best: Decision.Act? = null
+        val notes = LinkedHashMap<String, ActionSpec>()
         val tags by lazy { tagsOf(ctx.packageName) }
 
         for (rule in rules) {
@@ -112,18 +122,45 @@ class RuleEngine {
             if (!rule.target.matches(ctx.packageName, tags, ctx.url)) continue
 
             for (clause in rule.clauses) {
-                val spec = clause.mainAction ?: continue
                 // どのルールのどの組を見ているかを条件に伝える。確率の抽選や
                 // 慣れの判定が独立していないと、隣の結果を巻き込む
                 if (!evaluate(clause.condition, ctx.forClause(rule, clause))) continue
 
-                val action = ActionRegistry[spec.actionId] ?: continue
-                if (best == null || action.severity > best.action.severity) {
-                    best = Decision.Act(rule, action, spec.params, clause.id)
+                for ((index, spec) in clause.actions.withIndex()) {
+                    val action = ActionRegistry[spec.actionId] ?: continue
+                    if (action.stackable) {
+                        // 覚え書きは重なる。同じものを2組が出しても1枚にまとめる
+                        notes.putIfAbsent(spec.actionId, spec)
+                        continue
+                    }
+                    // 覆うものは先頭だけ。2つ目以降に置いても、裏に隠れて見えない
+                    if (index != 0) continue
+                    if (best == null || action.severity > best.action.severity) {
+                        best = Decision.Act(rule, action, spec.params, clause.id)
+                    }
                 }
             }
         }
-        return best ?: Decision.Allow
+
+        val stacked = notes.values.toList()
+        return when {
+            best != null -> best.copy(overlays = stacked)
+            // 覚え書きしか無いときは、いちばん軽いものを主に立てる。
+            // 主が無いと何も出せない
+            stacked.isNotEmpty() -> {
+                val head = stacked.first()
+                val action = ActionRegistry[head.actionId] ?: return Decision.Allow
+                Decision.Act(
+                    rule = rules.first { rule ->
+                        rule.clauses.any { it.actions.any { a -> a.actionId == head.actionId } }
+                    },
+                    action = action,
+                    params = head.params,
+                    overlays = stacked.drop(1),
+                )
+            }
+            else -> Decision.Allow
+        }
     }
 
     /** 条件の木を評価する。未登録の条件IDは「成立しない」として扱う。 */

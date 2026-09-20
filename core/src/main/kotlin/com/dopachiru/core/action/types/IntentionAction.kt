@@ -34,6 +34,9 @@ object IntentionAction : ActionType {
     /** 経過時間表示(5)より上、警告(10)より下。何も遮らない。 */
     override val severity = 8
 
+    // 画面を覆わないので、ほかの措置と一緒に出しておける
+    override val stackable = true
+
     override val params = listOf(
         ParamSpec.TextParam(
             KEY_PROMPT,

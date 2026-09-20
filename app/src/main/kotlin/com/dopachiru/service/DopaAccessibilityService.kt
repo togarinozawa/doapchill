@@ -37,6 +37,7 @@ import com.dopachiru.core.action.types.RadioAction
 import com.dopachiru.core.action.types.TimerAction
 import com.dopachiru.core.action.types.WarnAction
 import com.dopachiru.core.engine.Decision
+import com.dopachiru.core.model.ActionSpec
 import com.dopachiru.core.time.ResetPolicy
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Rule
@@ -330,7 +331,12 @@ class DopaAccessibilityService : AccessibilityService() {
         // 予定が始まる前に押し切っておいて、そのまま持ち込むのを防ぐ。
         if (!DopaRuntime.studyInSession() &&
             System.currentTimeMillis() < (overrideUntil[pkg] ?: 0L)
-        ) return
+        ) {
+            // 覆いは出さないが、**覚え書きは出す** ── 押し切ったあとこそ、
+            // 経過や書いた目的が見えていてほしい
+            showNotes(pkg, (decision as? Decision.Act)?.overlays.orEmpty())
+            return
+        }
 
         when (decision) {
             is Decision.Allow -> if (overlay.currentKey?.startsWith("$pkg|") == true) overlay.hide()
@@ -437,30 +443,127 @@ class DopaAccessibilityService : AccessibilityService() {
      * その回に一度書けば、同じセッションのあいだは書かせ直さない
      * ([intentions] にセッション種で覚える)。書いた文は札にして出す。
      */
+    /**
+     * 画面を覆わない覚え書きを、まとめて1枚に出す。
+     *
+     * 覆いは一度に1枚しか出せないので、**重なるのはここだけ**です。
+     * 経過表示と目的のチップを並べて出す、が実際の使い道。
+     *
+     * 目的をまだ書いていなければ、先に書いてもらいます ── 書かせるところは
+     * 覆う仕事なので、重ねるほうには乗りません。書いたあとはチップになって
+     * ほかの覚え書きと並びます。
+     */
+    private fun showNotes(pkg: String, specs: List<ActionSpec>) {
+        val mine = overlay.currentKey?.startsWith("$pkg|") == true
+        if (specs.isEmpty()) {
+            if (mine && overlay.currentKey?.contains("|notes|") == true) overlay.hide()
+            return
+        }
+
+        val seed = DopaRuntime.sessionSeed()
+        val sessionKey = "$pkg|$seed"
+        val snapshot by lazy { DopaRuntime.usage.snapshotFor(pkg, DopaRuntime.now()) }
+
+        // 目的が空なら、まず書いてもらう。書かせる画面は覆うので重ねない
+        val intention = specs.firstOrNull { it.actionId == IntentionAction.id }
+        if (intention != null && intentions[sessionKey] == null) {
+            showIntentionPrompt(pkg, intention.params, seed, sessionKey)
+            return
+        }
+
+        val items = ArrayList<Note>()
+        for (spec in specs) {
+            when (spec.actionId) {
+                TimerAction.id -> {
+                    val minutes = snapshot.currentSessionMinutes
+                    if (minutes < spec.params.int(TimerAction.KEY_AFTER_MINUTES, 0)) continue
+                    val today = if (spec.params.bool(TimerAction.KEY_SHOW_TODAY, true)) {
+                        snapshot.usageMinutesIn(ResetPolicy())
+                    } else {
+                        null
+                    }
+                    items += Note.Elapsed(minutes, today)
+                }
+
+                IntentionAction.id -> {
+                    val text = intentions[sessionKey] ?: continue
+                    val minutes = if (spec.params.bool(IntentionAction.KEY_SHOW_TIMER, true)) {
+                        snapshot.currentSessionMinutes
+                    } else {
+                        null
+                    }
+                    items += Note.Intention(text, minutes)
+                }
+            }
+        }
+
+        if (items.isEmpty()) {
+            if (mine && overlay.currentKey?.contains("|notes|") == true) overlay.hide()
+            return
+        }
+
+        // 中身が変わるたびに鍵が変わる = 描き直される
+        val key = "$pkg|notes|$seed|" + items.joinToString("/") { it.stamp }
+        if (overlay.currentKey == key) return
+        overlay.show(key, OverlayMode.PASS_THROUGH) {
+            androidx.compose.foundation.layout.Column {
+                items.forEach { note ->
+                    when (note) {
+                        is Note.Elapsed -> SessionTimerScreen(note.minutes, note.today)
+                        is Note.Intention -> IntentionChip(note.text, note.minutes)
+                    }
+                }
+            }
+        }
+    }
+
+    /** 覚え書き1枚ぶん。鍵を作るために、中身から文字列を出せるようにしてある。 */
+    private sealed interface Note {
+        val stamp: String
+
+        data class Elapsed(val minutes: Int, val today: Int?) : Note {
+            override val stamp get() = "t$minutes-$today"
+        }
+
+        data class Intention(val text: String, val minutes: Int?) : Note {
+            override val stamp get() = "i${text.hashCode()}-$minutes"
+        }
+    }
+
+    /** 目的を書いてもらう覆い。[showIntention] と [showNotes] の両方から使う。 */
+    private fun showIntentionPrompt(
+        pkg: String,
+        params: com.dopachiru.core.param.Params,
+        seed: Long,
+        sessionKey: String,
+    ) {
+        val prompt = params.string(IntentionAction.KEY_PROMPT).ifBlank { "何をしに開いた?" }
+        val suggestions = params.string(IntentionAction.KEY_SUGGESTIONS)
+            .split("\n").map { it.trim() }.filter { it.isNotBlank() }
+        val label = appLabel(pkg)
+        val key = "$pkg|intention-input|$seed"
+        if (overlay.currentKey == key) return
+        overlay.show(key, OverlayMode.BLOCKING) {
+            IntentionInputScreen(
+                appLabel = label,
+                prompt = prompt,
+                suggestions = suggestions,
+                onSet = { text ->
+                    intentions[sessionKey] = text
+                    overlay.hide()
+                    requestImmediateEvaluation()
+                },
+            )
+        }
+    }
+
     private fun showIntention(pkg: String, act: Decision.Act) {
         val seed = DopaRuntime.sessionSeed()
         val sessionKey = "$pkg|$seed"
         val existing = intentions[sessionKey]
 
         if (existing == null) {
-            val prompt = act.params.string(IntentionAction.KEY_PROMPT).ifBlank { "何をしに開いた?" }
-            val suggestions = act.params.string(IntentionAction.KEY_SUGGESTIONS)
-                .split("\n").map { it.trim() }.filter { it.isNotBlank() }
-            val label = appLabel(pkg)
-            val key = "$pkg|intention-input|$seed"
-            if (overlay.currentKey == key) return
-            overlay.show(key, OverlayMode.BLOCKING) {
-                IntentionInputScreen(
-                    appLabel = label,
-                    prompt = prompt,
-                    suggestions = suggestions,
-                    onSet = { text ->
-                        intentions[sessionKey] = text
-                        overlay.hide()
-                        requestImmediateEvaluation()
-                    },
-                )
-            }
+            showIntentionPrompt(pkg, act.params, seed, sessionKey)
             return
         }
 
@@ -497,6 +600,13 @@ class DopaAccessibilityService : AccessibilityService() {
     }
 
     private fun present(pkg: String, act: Decision.Act) {
+        // 主も覚え書きなら、重ねて1枚に出す。覆うものは重ねられない ──
+        // 覆いの裏に隠れて見えないので、重ねても嘘になる
+        if (act.action.stackable) {
+            showNotes(pkg, listOf(ActionSpec(act.action.id, act.params)) + act.overlays)
+            return
+        }
+
         when (act.action.id) {
             BlockAction.id -> withPrewarn(pkg, act) {
                 showBlock(

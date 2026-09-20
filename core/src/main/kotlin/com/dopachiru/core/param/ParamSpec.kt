@@ -19,6 +19,20 @@ sealed interface ParamSpec {
     /** ラベルの下に出す補足。空なら出さない。 */
     val help: String
 
+    /**
+     * この欄を出す条件。`null` ならいつでも出す。
+     *
+     * 「どこで数え直すか」で選ばなかったぶんの欄を畳むためにある。
+     * 関係ない欄が3つ並んでいると、**どれを触ればいいのか分からない**。
+     *
+     * 判定には関わりません ── 隠れていても値は保存されたままで、
+     * 選び直せばそのまま戻ります(消すと、切り替えるたびに打ち直しになる)。
+     */
+    val visibleWhen: Visibility? get() = null
+
+    /** [visibleWhen] の中身。[key] の値が [values] のどれかなら出す。 */
+    data class Visibility(val key: String, val values: Set<String>)
+
     /** 整数。使用回数や閾値など。 */
     data class IntParam(
         override val key: String,
@@ -28,6 +42,7 @@ sealed interface ParamSpec {
         val max: Int = 9_999,
         val unit: String = "",
         override val help: String = "",
+        override val visibleWhen: Visibility? = null,
     ) : ParamSpec
 
     /** 一日の中の時刻。0..1439 の「その日の何分目か」で保持する。 */
@@ -36,6 +51,7 @@ sealed interface ParamSpec {
         override val label: String,
         val default: Int,
         override val help: String = "",
+        override val visibleWhen: Visibility? = null,
     ) : ParamSpec
 
     /** 経過時間。分で保持する。 */
@@ -46,6 +62,7 @@ sealed interface ParamSpec {
         val min: Int = 1,
         val max: Int = 24 * 60,
         override val help: String = "",
+        override val visibleWhen: Visibility? = null,
     ) : ParamSpec
 
     data class BoolParam(
@@ -53,6 +70,7 @@ sealed interface ParamSpec {
         override val label: String,
         val default: Boolean,
         override val help: String = "",
+        override val visibleWhen: Visibility? = null,
     ) : ParamSpec
 
     /** 曜日の集合。java.time.DayOfWeek の value(月=1 .. 日=7)を保持する。 */
@@ -61,6 +79,7 @@ sealed interface ParamSpec {
         override val label: String,
         val default: Set<Int> = setOf(1, 2, 3, 4, 5, 6, 7),
         override val help: String = "",
+        override val visibleWhen: Visibility? = null,
     ) : ParamSpec
 
     data class TextParam(
@@ -69,6 +88,7 @@ sealed interface ParamSpec {
         val default: String = "",
         val multiline: Boolean = false,
         override val help: String = "",
+        override val visibleWhen: Visibility? = null,
     ) : ParamSpec
 
     /**
@@ -82,6 +102,7 @@ sealed interface ParamSpec {
         override val label: String,
         val default: Set<String> = emptySet(),
         override val help: String = "",
+        override val visibleWhen: Visibility? = null,
     ) : ParamSpec
 
     /**
@@ -97,6 +118,7 @@ sealed interface ParamSpec {
         override val label: String,
         val default: String = "",
         override val help: String = "",
+        override val visibleWhen: Visibility? = null,
     ) : ParamSpec
 
     /** 選択肢から1つ。value が保存され、label が表示される。 */
@@ -106,6 +128,7 @@ sealed interface ParamSpec {
         val options: List<Option>,
         val default: String,
         override val help: String = "",
+        override val visibleWhen: Visibility? = null,
     ) : ParamSpec {
         data class Option(val value: String, val label: String)
     }
@@ -116,5 +139,6 @@ sealed interface ParamSpec {
         override val label: String,
         val default: ResetPolicy = ResetPolicy(),
         override val help: String = "",
+        override val visibleWhen: Visibility? = null,
     ) : ParamSpec
 }

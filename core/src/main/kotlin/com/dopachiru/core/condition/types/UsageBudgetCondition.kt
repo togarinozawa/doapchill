@@ -84,24 +84,27 @@ object UsageBudgetCondition : ConditionType {
         ),
         ParamSpec.DurationParam(
             KEY_AWAY_MINUTES,
-            "(連続で離れたら)離れる時間",
+            "離れる時間",
             default = 30,
             min = 1,
             max = 12 * 60,
             help = "対象をどれも触らない時間がこれだけ続いたら、そこから数え直す",
+            visibleWhen = ParamSpec.Visibility(KEY_RESET, setOf(BudgetReset.AWAY.name)),
         ),
         ParamSpec.DurationParam(
             KEY_WINDOW_MINUTES,
-            "(窓)窓の幅",
+            "窓の幅",
             default = 180,
             min = 5,
             max = 24 * 60,
             help = "使っていい分より長くすること。差が休憩になる(窓3時間・持ち2時間 なら1時間休み)",
+            visibleWhen = ParamSpec.Visibility(KEY_RESET, setOf(BudgetReset.WINDOW.name)),
         ),
         ParamSpec.ResetPolicyParam(
             KEY_PERIOD,
-            "(区切り)区切りかた",
+            "区切りかた",
             default = ResetPolicy(),
+            visibleWhen = ParamSpec.Visibility(KEY_RESET, setOf(BudgetReset.PERIOD.name)),
         ),
     )
 

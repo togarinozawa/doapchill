@@ -52,6 +52,13 @@ import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.LockScope
 import com.dopachiru.core.model.NodePath
 import com.dopachiru.core.model.Rule
+import com.dopachiru.core.action.types.DeclareAction
+import com.dopachiru.core.action.types.IntentionAction
+import com.dopachiru.core.action.types.RadioAction
+import com.dopachiru.core.action.types.TimerAction
+import com.dopachiru.core.model.ActionSpec
+import com.dopachiru.core.model.Clause
+import com.dopachiru.core.model.Clauses
 import com.dopachiru.core.model.RuleLinks
 import com.dopachiru.core.model.RuleCheck
 import com.dopachiru.core.model.RuleOverlap
@@ -380,6 +387,15 @@ fun RuleEditorDialog(
                         )
                     }
                 }
+
+                // 重ねる覚え書きと、2組目以降
+                Spacer(Modifier.height(20.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(20.dp))
+                StackedActionsRow(draft.extraActions) { draft = draft.copy(extraActions = it) }
+
+                Spacer(Modifier.height(20.dp))
+                ExtraClausesSection(draft.extraClauses) { draft = draft.copy(extraClauses = it) }
 
                 // 保存はできるが書いたとおりには効かない組み合わせを知らせる
                 RuleCheck.warnings(
@@ -954,3 +970,143 @@ private fun PointRow(
         }
     }
 }
+
+// ---- 重ねる覚え書きと、2組目以降 ---------------------------------------
+
+/** 2組目以降で選べる主の措置。既定値で足せるものだけ。 */
+private val MAIN_CHOICES = listOf(
+    BlockAction.id to "閉じる",
+    DelayAction.id to "少し待たせる",
+    WarnAction.id to "警告だけ",
+    RadioAction.id to "音だけにする",
+    DeclareAction.id to "開く前に宣言させる",
+)
+
+/** 重ねられる覚え書き。画面を覆わないものだけ。 */
+private val NOTE_CHOICES = listOf(
+    TimerAction.id to "経過時間を出す",
+    IntentionAction.id to "目的を書かせる",
+)
+
+/**
+ * 重ねる覚え書き。主の措置と一緒に出しっぱなしになる。
+ *
+ * 覆うもの(閉じる・音だけ)と一緒に選んだときは、覆いが引っ込んだあとに残る
+ * ── 覆いの裏に隠れて見えないので、同時には出さない。
+ */
+@Composable
+internal fun StackedActionsRow(actions: List<ActionSpec>, onChange: (List<ActionSpec>) -> Unit) {
+    Text("一緒に出しておく", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "画面を覆わないものだけ重ねられます。覆うものと一緒に選ぶと、覆いが引っ込んだあとに残ります。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(6.dp))
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        NOTE_CHOICES.forEach { (id, label) ->
+            val on = actions.any { it.actionId == id }
+            FilterChip(
+                selected = on,
+                onClick = {
+                    onChange(
+                        if (on) actions.filterNot { it.actionId == id }
+                        else actions + ActionSpec(id, defaultParamsOf(id)),
+                    )
+                },
+                label = { Text(label) },
+            )
+        }
+    }
+}
+
+/** 2組目以降の一覧と、足す・消す。 */
+@Composable
+internal fun ExtraClausesSection(clauses: List<Clause>, onChange: (List<Clause>) -> Unit) {
+    Text("ほかの組", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "同じアプリに、別の条件で別のことをさせたいときに足します。" +
+            "複数が同時に成立したら、いちばん強いものだけが出ます。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(12.dp))
+
+    clauses.forEach { clause ->
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("組 " + clause.id, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                    TextButton(
+                        // 番号は使い回さない。消した組の番号を再利用すると、
+                        // 消す前に数えていた持ち時間を新しい組が引き継ぐ
+                        onClick = { onChange(clauses.filterNot { it.id == clause.id }) },
+                    ) { Text("消す", color = MaterialTheme.colorScheme.error) }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Text("いつ", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+                ConditionTreeEditor(
+                    root = clause.condition,
+                    onChange = { next ->
+                        onChange(clauses.map { if (it.id == clause.id) it.copy(condition = next) else it })
+                    },
+                )
+
+                Spacer(Modifier.height(12.dp))
+                Text("どうする", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(6.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MAIN_CHOICES.forEach { (id, label) ->
+                        FilterChip(
+                            selected = clause.mainAction?.actionId == id,
+                            onClick = {
+                                val next = clause.copy(
+                                    actions = listOf(ActionSpec(id, defaultParamsOf(id))) + clause.overlays,
+                                )
+                                onChange(clauses.map { if (it.id == clause.id) next else it })
+                            },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+
+                val main = clause.mainAction
+                val type = main?.let { ActionRegistry[it.actionId] }
+                if (main != null && type != null && type.params.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    ParamEditor(
+                        specs = type.params,
+                        params = main.params,
+                        onChange = { next ->
+                            val updated = clause.copy(
+                                actions = listOf(main.copy(params = next)) + clause.overlays,
+                            )
+                            onChange(clauses.map { if (it.id == clause.id) updated else it })
+                        },
+                    )
+                }
+
+                Spacer(Modifier.height(12.dp))
+                StackedActionsRow(clause.overlays) { notes ->
+                    val head = clause.mainAction
+                    val updated = clause.copy(actions = listOfNotNull(head) + notes)
+                    onChange(clauses.map { if (it.id == clause.id) updated else it })
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+    }
+
+    OutlinedButton(
+        onClick = {
+            val id = Clauses.nextId(clauses + Clause(Clauses.FIRST_ID))
+            onChange(clauses + Clause(id, actions = listOf(ActionSpec(BlockAction.id, defaultParamsOf(BlockAction.id)))))
+        },
+    ) { Text("組を足す") }
+}
+
+private fun defaultParamsOf(actionId: String): Params =
+    Params.defaultsOf(ActionRegistry[actionId]?.params ?: emptyList())

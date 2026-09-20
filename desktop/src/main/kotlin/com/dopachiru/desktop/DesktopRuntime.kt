@@ -35,6 +35,7 @@ import com.dopachiru.core.model.Focus
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Lockouts
 import com.dopachiru.core.model.Reservation
+import com.dopachiru.core.model.ActionSpec
 import com.dopachiru.core.model.Reservations
 import com.dopachiru.core.model.RuleLinks
 import com.dopachiru.core.model.RuleMigrations
@@ -176,6 +177,14 @@ sealed interface Presentation {
         val prompt: String,
         val suggestions: List<String>,
     ) : Presentation
+
+    /**
+     * 画面を覆わない覚え書きを、まとめて1枚に。
+     *
+     * 覆うもの(閉じる・待たせる・音だけ)は一度に1つしか出せません ──
+     * 覆いの裏に隠れて見えないので、重ねても嘘になる。重なるのはここだけ。
+     */
+    data class Notes(override val key: String, val items: List<Presentation>) : Presentation
 
     /** 書いた目的を隅に出し続ける札。操作は止めない。 */
     data class Intention(
@@ -564,6 +573,91 @@ object DesktopRuntime {
         screenSignals = emptySet(),
         overrideCountOf = { ruleId -> overrideCounts[ruleId] ?: 0 },
     )
+
+    /** 目的を書いてもらう覆い。普通の枝と、覚え書きの両方から使う。 */
+    private fun showIntentionInput(fg: ForegroundApp, params: com.dopachiru.core.param.Params) {
+        val seed = ledger.currentSessionSeed()
+        val key = fg.processName + "|intention-input|" + seed
+        if (_presentation.value?.key == key) return
+        _presentation.value = Presentation.IntentionInput(
+            key = key,
+            processName = fg.processName,
+            label = fg.label,
+            prompt = params.string(IntentionAction.KEY_PROMPT).ifBlank { "何をしに開いた?" },
+            suggestions = params.string(IntentionAction.KEY_SUGGESTIONS)
+                .split("\n").map { it.trim() }.filter { it.isNotBlank() },
+        )
+        // 入力は押さえる(書くまで下を触らせない)
+        heldApp = fg
+    }
+
+    /** 重ねられる措置の id。when の枝で使うので集合にしてある。 */
+    private val stackableIds: Set<String> = setOf(TimerAction.id, IntentionAction.id)
+
+    /**
+     * 画面を覆わない覚え書きを、まとめて1枚に出す。
+     *
+     * 目的をまだ書いていなければ、先に書いてもらう ── 書かせるところは
+     * 覆う仕事なので、重ねるほうには乗らない。書いたあとはチップになって
+     * ほかの覚え書きと並ぶ。
+     */
+    private fun showNotes(fg: ForegroundApp, specs: List<ActionSpec>) {
+        if (specs.isEmpty()) {
+            if (_presentation.value is Presentation.Notes) _presentation.value = null
+            return
+        }
+
+        val snapshot = ledger.snapshotFor(fg.processName)
+        val items = ArrayList<Presentation>()
+
+        for (spec in specs) {
+            when (spec.actionId) {
+                TimerAction.id -> {
+                    val minutes = snapshot.currentSessionMinutes
+                    if (minutes < spec.params.int(TimerAction.KEY_AFTER_MINUTES, 0)) continue
+                    val today = if (spec.params.bool(TimerAction.KEY_SHOW_TODAY, true)) {
+                        snapshot.usageMinutesIn(ResetPolicy())
+                    } else {
+                        null
+                    }
+                    items += Presentation.Timer("note-timer", minutes, today)
+                }
+
+                IntentionAction.id -> {
+                    val existing = intentions[fg.processName + "|" + ledger.currentSessionSeed()]
+                    if (existing == null) {
+                        // 書かせる覆いが先。重ねるのはそのあと
+                        showIntentionInput(fg, spec.params)
+                        return
+                    }
+                    val minutes = if (spec.params.bool(IntentionAction.KEY_SHOW_TIMER, true)) {
+                        snapshot.currentSessionMinutes
+                    } else {
+                        null
+                    }
+                    items += Presentation.Intention("note-intention", existing, minutes)
+                }
+            }
+        }
+
+        if (items.isEmpty()) {
+            if (_presentation.value is Presentation.Notes) _presentation.value = null
+            return
+        }
+
+        // 中身が変わるたびに鍵が変わる = 描き直される
+        val key = fg.processName + "|notes|" + items.joinToString("/") { item ->
+            when (item) {
+                is Presentation.Timer -> "t" + item.minutes + "-" + item.todayMinutes
+                is Presentation.Intention -> "i" + item.text.hashCode() + "-" + item.minutes
+                else -> ""
+            }
+        }
+        if (_presentation.value?.key == key) return
+        // 何も止めないので heldApp は取らない
+        if (heldApp != null) releaseHold()
+        _presentation.value = Presentation.Notes(key, items)
+    }
 
     private fun nowSec(): Long = System.currentTimeMillis() / 1000
 
@@ -1719,8 +1813,8 @@ object DesktopRuntime {
             return
         }
 
-        if (now < (overrideUntil[fg.processName] ?: 0L)) return
-        if (now < (dismissedUntil[fg.processName] ?: 0L)) return
+        val inGrace = now < (overrideUntil[fg.processName] ?: 0L) ||
+            now < (dismissedUntil[fg.processName] ?: 0L)
 
         val context = evalContext(fg.processName, url, file, nowSec)
 
@@ -1729,7 +1823,16 @@ object DesktopRuntime {
         val me = myDeviceId()
         val mine = file.rules.filter { it.appliesToDevice(me) }
 
-        when (val decision = engine.decide(mine, context) { file.tags[it] ?: emptySet() }) {
+        val verdict = engine.decide(mine, context) { file.tags[it] ?: emptySet() }
+
+        // 押し切ったあと・閉じたあとの猶予。覆いは出さないが、**覚え書きは出す**
+        // ── 押し切ったあとこそ、経過や書いた目的が見えていてほしい
+        if (inGrace) {
+            showNotes(fg, (verdict as? Decision.Act)?.overlays.orEmpty())
+            return
+        }
+
+        when (val decision = verdict) {
             is Decision.Allow -> {
                 if (_presentation.value != null) {
                     _presentation.value = null
@@ -1878,6 +1981,12 @@ object DesktopRuntime {
                 )
             }
 
+            // 主も覚え書きなら、重ねて1枚に。覆うものは重ねられない
+            in stackableIds -> showNotes(
+                fg,
+                listOf(ActionSpec(act.action.id, act.params)) + act.overlays,
+            )
+
             RadioAction.id -> {
                 // ブラウザは拡張にページの中でやってもらう。全画面で覆うと検索欄まで
                 // 覆われて、資料として鳴らすという用途そのものが潰れる
@@ -1931,18 +2040,7 @@ object DesktopRuntime {
                 val sessionKey = "${fg.processName}|$seed"
                 val existing = intentions[sessionKey]
                 if (existing == null) {
-                    val key = "${fg.processName}|intention-input|$seed"
-                    if (_presentation.value?.key == key) return
-                    _presentation.value = Presentation.IntentionInput(
-                        key = key,
-                        processName = fg.processName,
-                        label = fg.label,
-                        prompt = act.params.string(IntentionAction.KEY_PROMPT).ifBlank { "何をしに開いた?" },
-                        suggestions = act.params.string(IntentionAction.KEY_SUGGESTIONS)
-                            .split("\n").map { it.trim() }.filter { it.isNotBlank() },
-                    )
-                    // 入力は押さえる(書くまで下を触らせない)
-                    heldApp = fg
+                    showIntentionInput(fg, act.params)
                 } else {
                     val minutes = if (act.params.bool(IntentionAction.KEY_SHOW_TIMER, true)) {
                         ledger.snapshotFor(fg.processName).currentSessionMinutes

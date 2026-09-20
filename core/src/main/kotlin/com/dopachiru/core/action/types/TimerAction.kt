@@ -31,6 +31,9 @@ object TimerAction : ActionType {
     /** 警告(10)より下。何も遮らないので、他が成立していればそちらが勝つ。 */
     override val severity = 5
 
+    // 画面を覆わないので、ほかの措置と一緒に出しておける
+    override val stackable = true
+
     override val params = listOf(
         ParamSpec.IntParam(
             KEY_AFTER_MINUTES,
