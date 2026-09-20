@@ -118,6 +118,17 @@ data class EvalContext(
     val windowUsageOf: (ruleId: Long, windowMinutes: Int) -> WindowUsage = { _, _ -> WindowUsage.NONE },
 
     /**
+     * 「使いすぎたら」が数えるぶん。3つのリセットのしかたを1つの口にまとめてある。
+     *
+     * 対象の解決(タグからアプリを引く)も実測の持ちかたも端末側の都合なので、
+     * ここでは関数として受け取る。計算そのものは端末に置かず
+     * [UsageBudgets] に1つだけ ── 端末ごとに書くと必ず食い違う。
+     *
+     * 渡されなければ 0。数えられない端末では条件が成立しないだけで済む。
+     */
+    val budgetUsageOf: (BudgetQuery) -> WindowUsage = { WindowUsage.NONE },
+
+    /**
      * そのルールの対象アプリを、前回いつまで使っていたか ── いまから何分前に
      * 最後の使用が終わったか。まだ一度も使っていなければ null。
      *

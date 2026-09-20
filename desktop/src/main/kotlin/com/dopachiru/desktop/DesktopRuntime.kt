@@ -13,6 +13,8 @@ import com.dopachiru.core.action.types.DelayAction
 import com.dopachiru.core.action.types.TimerAction
 import com.dopachiru.core.action.types.WarnAction
 import com.dopachiru.core.engine.Decision
+import com.dopachiru.core.engine.CountBy
+import com.dopachiru.core.engine.UsageBudgets
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.engine.RuleEngine
 import com.dopachiru.core.engine.WindowUsage
@@ -35,6 +37,7 @@ import com.dopachiru.core.model.Lockouts
 import com.dopachiru.core.model.Reservation
 import com.dopachiru.core.model.Reservations
 import com.dopachiru.core.model.RuleLinks
+import com.dopachiru.core.model.RuleMigrations
 import com.dopachiru.core.model.Rules
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.param.Params
@@ -404,7 +407,10 @@ object DesktopRuntime {
     fun start() {
         DopaCore.registerAll()
         _settings.value = Stores.settings.load()
-        _ruleFile.value = Stores.rules.load()
+        // 古い形のルールはここで読み替える。書き戻すのは次に保存したとき
+        _ruleFile.value = Stores.rules.load().let { file ->
+            file.copy(rules = RuleMigrations.upgradeAll(file.rules))
+        }
         // その場で決めた枠のうち、期限が来たものを落とす。
         // 起動時にやるのは、寝ているあいだに明けるのがふつうだから
         pruneExpiredRules()
@@ -528,6 +534,22 @@ object DesktopRuntime {
                 myDeviceId = myDeviceId(),
                 deviceId = deviceId,
             )
+        },
+        // 「使いすぎたら」。対象を決めて区間を集めるところまでが端末の仕事で、
+        // 数え方は core の UsageBudgets に1つだけ置いてある
+        budgetUsageOf = { query ->
+            val matches: (String) -> Boolean = when (query.countBy) {
+                CountBy.APP -> { name -> name == query.packageName }
+                CountBy.GROUP -> {
+                    val rule = file.rules.firstOrNull { it.id == query.ruleId }
+                    if (rule == null) {
+                        { false }
+                    } else {
+                        { name -> rule.target.matches(name, file.tags[name] ?: emptySet()) }
+                    }
+                }
+            }
+            UsageBudgets.compute(query, ledger.spansOf(matches, nowSec), LocalDateTime.now(), nowSec)
         },
         withinReservation = Reservations.covers(
             _reservations.value,

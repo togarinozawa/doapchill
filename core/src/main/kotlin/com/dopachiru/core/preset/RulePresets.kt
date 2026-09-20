@@ -24,6 +24,9 @@ import com.dopachiru.core.condition.types.TimeRangeCondition
 import com.dopachiru.core.condition.types.TotalUsageCondition
 import com.dopachiru.core.condition.types.OnScreenCondition
 import com.dopachiru.core.condition.types.ReservationCondition
+import com.dopachiru.core.condition.types.UsageBudgetCondition
+import com.dopachiru.core.engine.BudgetReset
+import com.dopachiru.core.engine.CountBy
 import com.dopachiru.core.condition.types.UsageSinceBreakCondition
 import com.dopachiru.core.condition.types.WindowBudgetCondition
 import com.dopachiru.core.model.ConditionNode
@@ -303,10 +306,10 @@ object RulePresets {
                 name = "1日30分まで",
                 packages = packages,
                 conditions = listOf(
-                    leaf(
-                        TotalUsageCondition.id,
-                        TotalUsageCondition.KEY_MINUTES to 30,
-                        TotalUsageCondition.KEY_PERIOD to ResetPolicy(24 * 60, 4 * 60),
+                    budget(
+                        minutes = 30,
+                        reset = BudgetReset.PERIOD,
+                        period = ResetPolicy(24 * 60, 4 * 60),
                     ),
                 ),
                 actionId = BlockAction.id,
@@ -407,10 +410,10 @@ object RulePresets {
                 condition = ConditionNode.AnyOf(
                     listOf(
                         leaf(ContinuousUsageCondition.id, ContinuousUsageCondition.KEY_MINUTES to 15),
-                        leaf(
-                            TotalUsageCondition.id,
-                            TotalUsageCondition.KEY_MINUTES to 60,
-                            TotalUsageCondition.KEY_PERIOD to ResetPolicy(24 * 60, 4 * 60),
+                        budget(
+                            minutes = 60,
+                            reset = BudgetReset.PERIOD,
+                            period = ResetPolicy(24 * 60, 4 * 60),
                         ),
                     )
                 ),
@@ -621,11 +624,7 @@ object RulePresets {
                 name = "20分使ったら10分休む",
                 packages = packages,
                 conditions = listOf(
-                    leaf(
-                        UsageSinceBreakCondition.id,
-                        UsageSinceBreakCondition.KEY_MINUTES to 20,
-                        UsageSinceBreakCondition.KEY_BREAK_MINUTES to 10,
-                    ),
+                    budget(minutes = 20, reset = BudgetReset.AWAY, awayMinutes = 10),
                 ),
                 actionId = LockoutAction.id,
                 actionParams = Params.of(
@@ -651,11 +650,7 @@ object RulePresets {
                 name = "1時間のうち15分まで",
                 packages = packages,
                 conditions = listOf(
-                    leaf(
-                        WindowBudgetCondition.id,
-                        WindowBudgetCondition.KEY_WINDOW_MINUTES to 60,
-                        WindowBudgetCondition.KEY_BUDGET_MINUTES to 15,
-                    ),
+                    budget(minutes = 15, reset = BudgetReset.WINDOW, windowMinutes = 60),
                 ),
                 // 閉め出しではなく完全封印を使う。窓が明けるまで条件が立ったままなので、
                 // 開き直しても同じ壁が立つ。時間は条件のほうが持っている
@@ -845,7 +840,32 @@ object RulePresets {
         },
     )
 
-    private fun leaf(typeId: String, vararg params: Pair<String, Any?>): ConditionNode.Leaf =
+    /**
+ * 「使いすぎたら」の葉。
+ *
+ * 雛形は**対象ぜんぶで1つの財布**にしてあります ── 「1日30分まで」で
+ * アプリを3つ選んだら、合わせて30分のつもりのはずなので。
+ * (保存済みのルールを読み替えるときは元の挙動を写すので、そちらとは違います。)
+ */
+private fun budget(
+    minutes: Int,
+    reset: BudgetReset,
+    awayMinutes: Int = 30,
+    windowMinutes: Int = 180,
+    period: ResetPolicy = ResetPolicy(),
+): ConditionNode.Leaf = ConditionNode.Leaf(
+    UsageBudgetCondition.id,
+    Params.of(
+        UsageBudgetCondition.KEY_BUDGET_MINUTES to minutes,
+        UsageBudgetCondition.KEY_COUNT_BY to CountBy.GROUP.name,
+        UsageBudgetCondition.KEY_RESET to reset.name,
+        UsageBudgetCondition.KEY_AWAY_MINUTES to awayMinutes,
+        UsageBudgetCondition.KEY_WINDOW_MINUTES to windowMinutes,
+        UsageBudgetCondition.KEY_PERIOD to period,
+    ),
+)
+
+private fun leaf(typeId: String, vararg params: Pair<String, Any?>): ConditionNode.Leaf =
         ConditionNode.Leaf(typeId, Params.of(*params))
 
     private fun rule(

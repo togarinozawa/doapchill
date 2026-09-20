@@ -169,8 +169,10 @@ object RuleBundleIo {
             "condition を children が空の allOf にすると無条件、つまり常に成立する。",
             "timeOfDay と minutes は分で書く。23:00 は 1380、6:00 は 360。",
             "consequence は破ったときの報い。lockScope は NONE・APP・RULE_TARGET・EVERYTHING のどれか。",
-            "「n分使ったらm分使えなくする」は条件 usage_since_break とアクション lockout の組。" +
-                "条件の breakMinutes とアクションの minutes を同じ m にする(ずれると明けた直後にまた閉まる)。",
+            "「n分使ったらm分休む」は条件 usage_budget ひとつで書く。budgetMinutes=n、" +
+                "reset=WINDOW、windowMinutes=n+m(窓の残りが休憩になる)。" +
+                "離れたら数え直したいなら reset=AWAY と awayMinutes=m。" +
+                "1日の上限なら reset=PERIOD と period。閉める長さを別に書く必要はない。",
             "uid を空にすると新しいルールとして増える。既存を書き換えたいときは uid を残す。",
         ),
     )

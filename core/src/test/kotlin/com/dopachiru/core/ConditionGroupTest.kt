@@ -2,11 +2,13 @@ package com.dopachiru.core
 
 import com.dopachiru.core.condition.ConditionGroup
 import com.dopachiru.core.condition.ConditionRegistry
+import com.dopachiru.core.condition.types.UsageBudgetCondition
 import com.dopachiru.core.condition.types.UsageSinceBreakCondition
 import com.dopachiru.core.condition.types.WindowBudgetCondition
 import org.junit.Before
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -56,18 +58,27 @@ class ConditionGroupTest {
     }
 
     @Test
-    fun `芯になる2つは同じ棚に並ぶ`() {
-        // 出し抜ける版と出し抜けない版を、見比べて選べる位置に置きたい
+    fun `芯は使いすぎの棚にある`() {
+        // 「n分使ったらm分休む」がこの道具の芯。3つに分かれていたのを1つにまとめた
         val usage = ConditionRegistry.byGroup().first { it.first == ConditionGroup.USAGE }.second
-        assertTrue(usage.any { it.id == UsageSinceBreakCondition.id })
-        assertTrue(usage.any { it.id == WindowBudgetCondition.id })
+        assertTrue(usage.any { it.id == UsageBudgetCondition.id })
+    }
+
+    @Test
+    fun `まとめた3つはもう選べない`() {
+        // 実装は残す(移行していない保存を読むため)が、選ぶ画面には出さない。
+        // 同じことができる条件が4つ並ぶと、何を選べばいいのか分からなくなる
+        val selectable = ConditionRegistry.selectable().map { it.id }
+        assertFalse(UsageSinceBreakCondition.id in selectable)
+        assertFalse(WindowBudgetCondition.id in selectable)
+        assertFalse("total_usage" in selectable)
     }
 
     // ---- 探す ----------------------------------------------------------
 
     @Test
     fun `名前で探せる`() {
-        assertTrue(ConditionRegistry.search("持ち時間").any { it.id == WindowBudgetCondition.id })
+        assertTrue(ConditionRegistry.search("使いすぎ").any { it.id == UsageBudgetCondition.id })
     }
 
     @Test
@@ -79,7 +90,7 @@ class ConditionGroupTest {
 
     @Test
     fun `IDでも探せる`() {
-        assertTrue(ConditionRegistry.search("window_budget").any { it.id == WindowBudgetCondition.id })
+        assertTrue(ConditionRegistry.search("usage_budget").any { it.id == UsageBudgetCondition.id })
     }
 
     @Test

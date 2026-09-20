@@ -18,6 +18,14 @@ object TotalUsageCondition : ConditionType {
     override val description = "期間内の合計使用時間が指定を超えたら成立する。リセット時刻と周期を変えられる。"
 
     override val group = ConditionGroup.USAGE
+    /**
+     * 新しくは選べません。[UsageBudgetCondition] にまとまりました。
+     *
+     * 実装を残してあるのは、**まだ移行していない保存を読むため**です。
+     * 消すと、読み込みの途中で落ちた端末のルールが「知らない条件」になって
+     * 成立しなくなります(= 黙って縛りが外れる)。
+     */
+    override val available = false
     override val example = "今日の合計が1時間を超えたら"
 
     override val params = listOf(

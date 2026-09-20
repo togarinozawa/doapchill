@@ -1,7 +1,8 @@
 package com.dopachiru.core
 
 import com.dopachiru.core.action.types.BlockAction
-import com.dopachiru.core.condition.types.WindowBudgetCondition
+import com.dopachiru.core.condition.types.UsageBudgetCondition
+import com.dopachiru.core.engine.BudgetReset
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.OneShotLimit
 import com.dopachiru.core.model.Rule
@@ -34,10 +35,11 @@ class OneShotLimitTest {
     fun `使う時間と休む時間の合計が窓になる`() {
         val rule = OneShotLimit.build(youtube, useMinutes = 120, restMinutes = 60)
         val leaf = rule.condition as ConditionNode.Leaf
-        assertEquals(WindowBudgetCondition.id, leaf.typeId)
+        assertEquals(UsageBudgetCondition.id, leaf.typeId)
+        assertEquals(BudgetReset.WINDOW.name, leaf.params.string(UsageBudgetCondition.KEY_RESET, ""))
         // 窓が「使う + 休む」でないと、休憩が始まる前に窓が明けて休憩が消える
-        assertEquals(180, leaf.params.int(WindowBudgetCondition.KEY_WINDOW_MINUTES, 0))
-        assertEquals(120, leaf.params.int(WindowBudgetCondition.KEY_BUDGET_MINUTES, 0))
+        assertEquals(180, leaf.params.int(UsageBudgetCondition.KEY_WINDOW_MINUTES, 0))
+        assertEquals(120, leaf.params.int(UsageBudgetCondition.KEY_BUDGET_MINUTES, 0))
     }
 
     @Test
@@ -50,10 +52,10 @@ class OneShotLimitTest {
     fun `無茶な数字は丸める`() {
         val tiny = OneShotLimit.build(youtube, useMinutes = 0, restMinutes = 0)
         val leaf = tiny.condition as ConditionNode.Leaf
-        assertEquals(OneShotLimit.MIN_USE_MINUTES, leaf.params.int(WindowBudgetCondition.KEY_BUDGET_MINUTES, 0))
+        assertEquals(OneShotLimit.MIN_USE_MINUTES, leaf.params.int(UsageBudgetCondition.KEY_BUDGET_MINUTES, 0))
         assertEquals(
             OneShotLimit.MIN_USE_MINUTES + OneShotLimit.MIN_REST_MINUTES,
-            leaf.params.int(WindowBudgetCondition.KEY_WINDOW_MINUTES, 0),
+            leaf.params.int(UsageBudgetCondition.KEY_WINDOW_MINUTES, 0),
         )
     }
 

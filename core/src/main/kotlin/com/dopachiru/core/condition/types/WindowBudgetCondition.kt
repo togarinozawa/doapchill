@@ -43,6 +43,14 @@ object WindowBudgetCondition : ConditionType {
             "閉じても窓は消えないので、ギリギリで閉じて数え直させる手が効かない。"
 
     override val group = ConditionGroup.USAGE
+    /**
+     * 新しくは選べません。[UsageBudgetCondition] にまとまりました。
+     *
+     * 実装を残してあるのは、**まだ移行していない保存を読むため**です。
+     * 消すと、読み込みの途中で落ちた端末のルールが「知らない条件」になって
+     * 成立しなくなります(= 黙って縛りが外れる)。
+     */
+    override val available = false
     override val example = "使い始めて1時間のうち15分を使い切ったら。閉じても窓は消えない"
 
     override val params = listOf(

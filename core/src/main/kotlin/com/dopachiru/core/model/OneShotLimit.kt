@@ -1,7 +1,9 @@
 package com.dopachiru.core.model
 
 import com.dopachiru.core.action.types.BlockAction
-import com.dopachiru.core.condition.types.WindowBudgetCondition
+import com.dopachiru.core.condition.types.UsageBudgetCondition
+import com.dopachiru.core.engine.BudgetReset
+import com.dopachiru.core.engine.CountBy
 import com.dopachiru.core.param.Params
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -12,7 +14,7 @@ import java.time.ZoneId
  *
  * ## なぜ普通のルールと分けるのか
  *
- * 分けていません ── **中身はただのルール**です([WindowBudgetCondition] +
+ * 分けていません ── **中身はただのルール**です([UsageBudgetCondition] +
  * 「条件のあいだ使えなくする」)。違うのは、作り方と、期限が入っていること。
  *
  * 分ける必要が無いのに入口を分けてあるのは、**作るときの気分が違う**からです。
@@ -21,7 +23,7 @@ import java.time.ZoneId
  * 「一生守れるか」を考えることになり、その場では作られません。
  * 明日消えると分かっていれば、いま決められます。
  *
- * ## なぜ窓([WindowBudgetCondition])なのか
+ * ## なぜ窓なのか
  *
  * 「2時間使ったら1時間休憩」は、**幅3時間の窓に持ち時間2時間**と同じです。
  * 使い切れば残りの1時間は閉まり、窓が明ければまた2時間使えます。
@@ -75,12 +77,14 @@ object OneShotLimit {
             name = name.ifBlank { label(use, rest) },
             target = target,
             condition = ConditionNode.Leaf(
-                WindowBudgetCondition.id,
+                UsageBudgetCondition.id,
                 Params.of(
+                    UsageBudgetCondition.KEY_BUDGET_MINUTES to use,
+                    UsageBudgetCondition.KEY_COUNT_BY to CountBy.GROUP.name,
+                    UsageBudgetCondition.KEY_RESET to BudgetReset.WINDOW.name,
                     // 窓は「使う + 休む」。休みを窓の残りとして取るので、
                     // 別に休憩用の条件を足す必要がない
-                    WindowBudgetCondition.KEY_WINDOW_MINUTES to (use + rest),
-                    WindowBudgetCondition.KEY_BUDGET_MINUTES to use,
+                    UsageBudgetCondition.KEY_WINDOW_MINUTES to (use + rest),
                 ),
             ),
             // 「閉じるだけ」では開き直せる。条件が続くあいだ塞ぎ続ける側を使う

@@ -8,6 +8,9 @@ import com.dopachiru.core.action.Rotation
 import com.dopachiru.core.action.types.LockoutAction
 import com.dopachiru.core.condition.types.CalendarBusyCondition
 import com.dopachiru.core.engine.Decision
+import com.dopachiru.core.engine.BudgetQuery
+import com.dopachiru.core.engine.CountBy
+import com.dopachiru.core.engine.UsageBudgets
 import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.engine.RuleEngine
 import com.dopachiru.core.engine.WindowUsage
@@ -418,6 +421,7 @@ object DopaRuntime {
         sessionSeed = usage.currentSessionSeed(),
         minutesSinceBreakOf = { ruleId, breakMinutes -> minutesSinceBreak(ruleId, breakMinutes) },
         windowUsageOf = { ruleId, windowMinutes -> windowUsage(ruleId, windowMinutes) },
+        budgetUsageOf = { query -> budgetUsage(query, now) },
         minutesSinceLastUseOf = { ruleId -> minutesSinceLastUse(ruleId) },
         // 別の端末でそのルールが効いているか。**ここだけがネットに依存する。**
         // 届いていなければ偽 ── 圏外で塞がるより、圏外で緩むほうへ倒してある
@@ -438,6 +442,29 @@ object DopaRuntime {
         screenSignals = currentScreenSignals,
         overrideCountOf = { ruleId -> overrideCounts[ruleId] ?: 0 },
     )
+
+    /**
+     * 「使いすぎたら」が数えるぶん。
+     *
+     * ここでやるのは**対象を決めて区間を集めるところまで**で、数え方は core の
+     * [UsageBudgets] に任せる ── 端末ごとに書くと Android と Windows で
+     * 必ず食い違う。
+     *
+     * 対象の解決をここでやるのは、タグからアプリを引けるのが端末側だけだから。
+     */
+    private fun budgetUsage(query: BudgetQuery, now: LocalDateTime): WindowUsage {
+        val nowSec = System.currentTimeMillis() / 1000
+        val matches: (String) -> Boolean = when (query.countBy) {
+            // アプリごとの財布。いま前面のものだけ数える
+            CountBy.APP -> { name -> name == query.packageName }
+            CountBy.GROUP -> {
+                val rule = ruleCache.firstOrNull { it.id == query.ruleId }
+                    ?: return WindowUsage.NONE
+                { name -> rule.target.matches(name, tagCache[name] ?: emptySet()) }
+            }
+        }
+        return UsageBudgets.compute(query, usage.spansOf(matches, nowSec), now, nowSec)
+    }
 
     /**
      * そのルールの対象アプリをまとめて数えた、休憩をはさむまでの使用時間(分)。

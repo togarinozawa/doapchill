@@ -6,6 +6,7 @@ import com.dopachiru.core.model.Clause
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.Rule
+import com.dopachiru.core.model.RuleMigrations
 import com.dopachiru.core.model.Target
 import com.dopachiru.core.param.Params
 import com.dopachiru.data.db.AppTagDao
@@ -29,7 +30,14 @@ class RuleRepository(
      */
     private val syncStateDao: SyncStateDao? = null,
 ) {
-    val rules: Flow<List<Rule>> = ruleDao.observeAll().map { rows -> rows.map { it.toRule() } }
+    /**
+     * 画面と判定が読むルール。**古い形はここで読み替える**([RuleMigrations])。
+     *
+     * 書き戻すのは次に保存したときだけ。読むたびに通すのは、画面と判定で
+     * 見えかたが食い違わないようにするため。
+     */
+    val rules: Flow<List<Rule>> = ruleDao.observeAll()
+        .map { rows -> RuleMigrations.upgradeAll(rows.map { it.toRule() }) }
 
     val tagsByPackage: Flow<Map<String, Set<String>>> = appTagDao.observeAll().map { rows ->
         rows.groupBy({ it.packageName }, { it.tag }).mapValues { it.value.toSet() }
@@ -37,9 +45,9 @@ class RuleRepository(
 
     val tags: Flow<List<String>> = appTagDao.observeTags()
 
-    suspend fun getAll(): List<Rule> = ruleDao.getAll().map { it.toRule() }
+    suspend fun getAll(): List<Rule> = RuleMigrations.upgradeAll(ruleDao.getAll().map { it.toRule() })
 
-    suspend fun getById(id: Long): Rule? = ruleDao.getById(id)?.toRule()
+    suspend fun getById(id: Long): Rule? = ruleDao.getById(id)?.toRule()?.let { RuleMigrations.upgrade(it) }
 
     suspend fun currentTagsByPackage(): Map<String, Set<String>> =
         appTagDao.getAll().groupBy({ it.packageName }, { it.tag }).mapValues { it.value.toSet() }
@@ -119,7 +127,7 @@ class RuleRepository(
 
     /** 行と更新時刻の組。同期に送るときに要る。 */
     suspend fun allWithUpdatedAt(): List<Pair<Rule, Long>> =
-        ruleDao.getAll().map { it.toRule() to it.updatedAt }
+        ruleDao.getAll().map { RuleMigrations.upgrade(it.toRule()) to it.updatedAt }
 
     suspend fun setEnabled(id: Long, enabled: Boolean) =
         ruleDao.setEnabled(id, enabled, System.currentTimeMillis() / 1000)

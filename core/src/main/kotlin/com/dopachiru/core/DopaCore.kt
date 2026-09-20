@@ -29,6 +29,7 @@ import com.dopachiru.core.condition.types.StudyPrepCondition
 import com.dopachiru.core.condition.types.StudySessionCondition
 import com.dopachiru.core.condition.types.TimeRangeCondition
 import com.dopachiru.core.condition.types.TotalUsageCondition
+import com.dopachiru.core.condition.types.UsageBudgetCondition
 import com.dopachiru.core.condition.types.UsageSinceBreakCondition
 import com.dopachiru.core.condition.types.WindowBudgetCondition
 import com.dopachiru.core.model.ConditionNode
@@ -67,6 +68,7 @@ object DopaCore {
             ContinuousUsageCondition,
             SessionCountCondition,
             TotalUsageCondition,
+            UsageBudgetCondition,
             UsageSinceBreakCondition,
             WindowBudgetCondition,
             CooldownCondition,

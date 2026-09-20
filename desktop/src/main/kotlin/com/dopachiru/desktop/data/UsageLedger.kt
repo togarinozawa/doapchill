@@ -132,8 +132,14 @@ class UsageLedger(private val zone: ZoneId = ZoneId.systemDefault()) {
         matches: (String) -> Boolean,
     ): WindowUsage = UsageWindows.current(spansOf(matches, nowSeconds), windowMinutes, nowSeconds)
 
-    /** 対象に当たる区間。開いている最中のものは現在時刻まで伸ばす。 */
-    private fun spansOf(matches: (String) -> Boolean, nowSeconds: Long): List<Pair<Long, Long>> =
+    /**
+     * 対象に当たる区間。開いている最中のものは現在時刻まで伸ばす。
+     *
+     * 外から呼べるのは「使いすぎたら」のため ── 数え方は core の
+     * [com.dopachiru.core.engine.UsageBudgets] に1つだけ置いてあり、
+     * 端末側は区間を集めるところまでをやる。
+     */
+    fun spansOf(matches: (String) -> Boolean, nowSeconds: Long): List<Pair<Long, Long>> =
         synchronized(lock) {
             val openStart = open?.takeIf { matches(it.processName) }?.startSec
             entries.filter { matches(it.processName) }.map { entry ->

@@ -168,8 +168,14 @@ class UsageTracker(
         matches: (String) -> Boolean,
     ): WindowUsage = UsageWindows.current(spansOf(matches, nowSec), windowMinutes, nowSec)
 
-    /** 対象に当たる区間。開いている最中のものは現在時刻まで伸ばす。 */
-    private fun spansOf(matches: (String) -> Boolean, nowSec: Long): List<Pair<Long, Long>> =
+    /**
+     * 対象に当たる区間。開いている最中のものは現在時刻まで伸ばす。
+     *
+     * 外から呼べるのは「使いすぎたら」のため ── 数え方は core の
+     * [com.dopachiru.core.engine.UsageBudgets] に1つだけ置いてあり、
+     * 端末側は区間を集めるところまでをやる。
+     */
+    fun spansOf(matches: (String) -> Boolean, nowSec: Long): List<Pair<Long, Long>> =
         synchronized(lock) {
             val openStart = current?.takeIf { matches(it.packageName) }?.startSec
             sessions.filter { matches(it.packageName) }.map { session ->
