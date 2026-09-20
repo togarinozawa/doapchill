@@ -862,7 +862,11 @@ object DesktopRuntime {
             if (rule.uid !in watched) continue
             if (!rule.appliesToDevice(deviceId)) continue
 
-            val active = rule.enabled && engine.evaluate(rule.condition, base.forRule(rule))
+            // どれか1組でも縛っていれば「効いている」。連動は組の単位ではなく
+            // ルールの単位で見る ── 向こうの端末は組の番号を知らない
+            val active = rule.enabled && rule.clauses.any {
+                engine.evaluate(it.condition, base.forClause(rule, it))
+            }
             val previous = states.firstOrNull { it.ruleUid == rule.uid && it.deviceId == deviceId }
             if (!RuleStates.shouldPublish(previous, active, now)) continue
 

@@ -29,7 +29,7 @@ class MigrationSqlTest {
     private val schema: JsonObject by lazy { schemaOf(4) }
 
     /** いまの版。移行を足したらここを上げる。 */
-    private val latest: JsonObject by lazy { schemaOf(7) }
+    private val latest: JsonObject by lazy { schemaOf(8) }
 
     private fun createSqlOf(tableName: String): String = entity(tableName)["createSql"]!!
         .jsonPrimitive.content
@@ -48,7 +48,7 @@ class MigrationSqlTest {
     @Test
     fun `スキーマの版と database の版がそろっている`() {
         assertEquals(4, schema["version"]!!.jsonPrimitive.content.toInt())
-        assertEquals(7, latest["version"]!!.jsonPrimitive.content.toInt())
+        assertEquals(8, latest["version"]!!.jsonPrimitive.content.toInt())
     }
 
     @Test
@@ -213,6 +213,45 @@ class MigrationSqlTest {
         fun tables(version: Int) = schemaOf(version)["entities"]!!.jsonArray
             .map { it.jsonObject["tableName"]!!.jsonPrimitive.content }.toSet()
         assertEquals(tables(6), tables(7))
+    }
+
+    // ---- 7 から 8 ---------------------------------------------------------
+
+    @Test
+    fun `組の欄2つが生成物と一致する`() {
+        listOf("extraClausesJson", "extraActionsJson").forEach { column ->
+            val field = fieldOf(8, "rules", column)
+            assertEquals("''", field["defaultValue"]!!.jsonPrimitive.content, column)
+            assertEquals("TEXT", field["affinity"]!!.jsonPrimitive.content, column)
+            assertEquals(true, field["notNull"]!!.jsonPrimitive.content.toBoolean(), column)
+
+            assertTrue(
+                DopaDatabase.MIGRATION_7_8_SQL.any {
+                    it == "ALTER TABLE `rules` ADD COLUMN `$column` TEXT NOT NULL DEFAULT ''"
+                },
+                column + " の ALTER がずれている: " + DopaDatabase.MIGRATION_7_8_SQL,
+            )
+        }
+    }
+
+    @Test
+    fun `7から8で増えた列はこの2つだけ`() {
+        fun columns(version: Int) = schemaOf(version)["entities"]!!.jsonArray
+            .map { it.jsonObject }
+            .flatMap { e ->
+                val table = e["tableName"]!!.jsonPrimitive.content
+                e["fields"]!!.jsonArray.map { table + "." + it.jsonObject["columnName"]!!.jsonPrimitive.content }
+            }.toSet()
+
+        assertEquals(setOf("rules.extraClausesJson", "rules.extraActionsJson"), columns(8) - columns(7))
+        assertEquals(2, DopaDatabase.MIGRATION_7_8_SQL.size)
+    }
+
+    @Test
+    fun `7から8でテーブルは増えていない`() {
+        fun tables(version: Int) = schemaOf(version)["entities"]!!.jsonArray
+            .map { it.jsonObject["tableName"]!!.jsonPrimitive.content }.toSet()
+        assertEquals(tables(7), tables(8))
     }
 
     @Test

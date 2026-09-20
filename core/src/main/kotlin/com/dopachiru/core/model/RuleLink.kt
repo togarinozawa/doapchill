@@ -20,12 +20,13 @@ object RuleLinks {
     fun watchedUids(rules: List<Rule>): Set<String> = buildSet {
         for (rule in rules) {
             if (!rule.enabled) continue
-            collect(rule.condition, rule.uid, this)
+            rule.clauses.forEach { collect(it.condition, rule.uid, this) }
         }
     }
 
     /** そのルールが連動の条件を持っているか。画面で印を付けるため。 */
-    fun isLinked(rule: Rule): Boolean = buildSet { collect(rule.condition, rule.uid, this) }.isNotEmpty()
+    fun isLinked(rule: Rule): Boolean =
+        rule.clauses.any { contains(it.condition) }
 
     /**
      * 「ほかの端末で効いているあいだ、ここでも効かせる」を足す。

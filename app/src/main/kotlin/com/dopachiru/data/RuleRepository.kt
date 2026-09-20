@@ -1,6 +1,8 @@
 package com.dopachiru.data
 
 import com.dopachiru.core.DopaCore
+import com.dopachiru.core.model.ActionSpec
+import com.dopachiru.core.model.Clause
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.Rule
@@ -14,6 +16,7 @@ import com.dopachiru.data.db.SyncStateDao
 import com.dopachiru.data.db.SyncStateEntity
 import com.dopachiru.core.sync.SyncKinds
 import kotlinx.coroutines.flow.Flow
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.coroutines.flow.map
 
 /** Room の行と core の [Rule] を相互変換する。 */
@@ -183,7 +186,23 @@ fun RuleEntity.toRule(): Rule = Rule(
         ?: Consequence.NONE,
     devices = devicesCsv.split('\t').filter { it.isNotBlank() }.toSet(),
     expiresAtSec = expiresAtSec,
+    // 読めなければ「組は1つだけ」に倒す。壊れた2組目でルール全体を失わない
+    extraClauses = decodeClauses(extraClausesJson),
+    extraActions = decodeActions(extraActionsJson),
 )
+
+private val clauseListSerializer = ListSerializer(Clause.serializer())
+private val actionListSerializer = ListSerializer(ActionSpec.serializer())
+
+private fun decodeClauses(json: String): List<Clause> =
+    if (json.isBlank()) emptyList()
+    else runCatching { DopaCore.json.decodeFromString(clauseListSerializer, json) }
+        .getOrDefault(emptyList())
+
+private fun decodeActions(json: String): List<ActionSpec> =
+    if (json.isBlank()) emptyList()
+    else runCatching { DopaCore.json.decodeFromString(actionListSerializer, json) }
+        .getOrDefault(emptyList())
 
 fun Rule.toEntity(createdAt: Long, updatedAt: Long): RuleEntity = RuleEntity(
     id = id,
@@ -201,6 +220,17 @@ fun Rule.toEntity(createdAt: Long, updatedAt: Long): RuleEntity = RuleEntity(
     },
     devicesCsv = devices.filter { it.isNotBlank() }.joinToString("\t"),
     expiresAtSec = expiresAtSec,
+    // 空のときは空文字。"[]" を書くと、組を持たない行と持つ行が見分けづらい
+    extraClausesJson = if (extraClauses.isEmpty()) {
+        ""
+    } else {
+        DopaCore.json.encodeToString(clauseListSerializer, extraClauses)
+    },
+    extraActionsJson = if (extraActions.isEmpty()) {
+        ""
+    } else {
+        DopaCore.json.encodeToString(actionListSerializer, extraActions)
+    },
     createdAt = createdAt,
     updatedAt = updatedAt,
 )

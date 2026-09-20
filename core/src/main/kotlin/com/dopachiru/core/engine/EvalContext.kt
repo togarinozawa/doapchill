@@ -71,6 +71,15 @@ data class EvalContext(
     val currentRuleUid: String = "",
 
     /**
+     * いま評価している組の番号。エンジンが差し込む。
+     *
+     * ルールが「条件 → こうする」を何組も持てるので、**どの組の話か**が要る。
+     * 数える財布を組ごとに分けるための鍵でもある(「午前は30分・夜は60分」)。
+     * 1組しか無いルールでは常に [com.dopachiru.core.model.Clauses.FIRST_ID]。
+     */
+    val currentClauseId: Int = com.dopachiru.core.model.Clauses.FIRST_ID,
+
+    /**
      * そのルールが、**自分以外の端末**でいま効いているか。
      *
      * 使いすぎを止めるルールは端末を替えれば逃げられる ── 持ち時間が端末ごとに
@@ -156,4 +165,14 @@ data class EvalContext(
      */
     fun forRule(rule: com.dopachiru.core.model.Rule): EvalContext =
         copy(currentRuleId = rule.id, currentRuleUid = rule.uid)
+
+    /** その組を評価するための文脈。 */
+    fun forClause(
+        rule: com.dopachiru.core.model.Rule,
+        clause: com.dopachiru.core.model.Clause,
+    ): EvalContext = copy(
+        currentRuleId = rule.id,
+        currentRuleUid = rule.uid,
+        currentClauseId = clause.id,
+    )
 }

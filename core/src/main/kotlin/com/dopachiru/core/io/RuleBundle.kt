@@ -311,6 +311,17 @@ object RuleBundleIo {
         return rule.copy(
             condition = fillCondition(rule.condition),
             actionParams = actionParams,
+            // 2組目以降も同じように埋める。1組目だけ埋めると、
+            // 外で書いたルールの2組目が既定値なしで動くことになる
+            extraClauses = rule.extraClauses.map { clause ->
+                clause.copy(
+                    condition = fillCondition(clause.condition),
+                    actions = clause.actions.map { spec ->
+                        val type = ActionRegistry[spec.actionId] ?: return@map spec
+                        spec.copy(params = merge(Params.defaultsOf(type.params), spec.params))
+                    },
+                )
+            },
         )
     }
 

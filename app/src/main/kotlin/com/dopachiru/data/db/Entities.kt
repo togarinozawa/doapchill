@@ -56,6 +56,18 @@ data class RuleEntity(
      */
     @ColumnInfo(defaultValue = "0") val expiresAtSec: Long = 0L,
 
+    /**
+     * 2組目以降の「条件 → こうする」を JSON にしたもの。空なら1組だけ。
+     *
+     * 1組目は今までどおり [conditionJson] と [actionId] に入っています。
+     * **対称ではありませんが、そうしてあります** ── 動かすと、既存の行を
+     * 書き換えることになり、数える鍵(組の番号)も振り直しになるため。
+     */
+    @ColumnInfo(defaultValue = "''") val extraClausesJson: String = "",
+
+    /** 1組目に重ねる動作を JSON にしたもの。空なら主の動作だけ。 */
+    @ColumnInfo(defaultValue = "''") val extraActionsJson: String = "",
+
     val createdAt: Long,
     val updatedAt: Long,
 )

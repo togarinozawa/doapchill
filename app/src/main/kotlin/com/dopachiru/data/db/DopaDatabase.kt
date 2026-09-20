@@ -21,7 +21,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PointEventEntity::class,
         SyncStateEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 abstract class DopaDatabase : RoomDatabase() {
@@ -186,6 +186,25 @@ abstract class DopaDatabase : RoomDatabase() {
             "ALTER TABLE `rules` ADD COLUMN `expiresAtSec` INTEGER NOT NULL DEFAULT 0",
         )
 
+        /**
+         * 7→8。ルールが「条件 → こうする」を何組も持てるようにした(ver.0.28)。
+         *
+         * 1組目は既存の列のまま。足したのは2組目以降と、1組目に重ねる動作。
+         * **既存の行に触らない**のが肝で、触ると数える鍵(組の番号)が振り直しになり、
+         * 更新した瞬間にみんなの持ち時間の窓がリセットされます。
+         */
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_7_8_SQL.forEach { db.execSQL(it) }
+            }
+        }
+
+        /** 7→8 で流す SQL。生成物との突き合わせはテストが見ています。 */
+        internal val MIGRATION_7_8_SQL: List<String> = listOf(
+            "ALTER TABLE `rules` ADD COLUMN `extraClausesJson` TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE `rules` ADD COLUMN `extraActionsJson` TEXT NOT NULL DEFAULT ''",
+        )
+
         @Volatile
         private var instance: DopaDatabase? = null
 
@@ -203,6 +222,7 @@ abstract class DopaDatabase : RoomDatabase() {
                         MIGRATION_4_5,
                         MIGRATION_5_6,
                         MIGRATION_6_7,
+                        MIGRATION_7_8,
                     )
                     .build()
                     .also { instance = it }

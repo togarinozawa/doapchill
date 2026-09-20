@@ -335,7 +335,11 @@ object DopaRuntime {
             calendarNeeded = false
             return
         }
-        val usedByRule = ruleCache.any { it.enabled && usesCalendar(it.condition) }
+        // 2組目以降にカレンダーの条件が入っていることもある。1組目しか見ないと、
+        // その条件だけ永久に成立しない(読み手を起こさないので)
+        val usedByRule = ruleCache.any { rule ->
+            rule.enabled && rule.clauses.any { usesCalendar(it.condition) }
+        }
         val usedByGate = gateCache.any { it is Gate.CalendarWindow }
         calendarNeeded = usedByRule || usedByGate
         if (calendarNeeded) refreshCalendarIfStale(force = true)
@@ -343,7 +347,7 @@ object DopaRuntime {
 
     /** そのルールが、凍結中の機能に頼っていて動かないか。編集画面で知らせるため。 */
     fun usesFrozenFeature(rule: Rule): Boolean =
-        !DopaFeatures.CALENDAR_ENABLED && usesCalendar(rule.condition)
+        !DopaFeatures.CALENDAR_ENABLED && rule.clauses.any { usesCalendar(it.condition) }
 
     private fun usesCalendar(node: ConditionNode): Boolean = when (node) {
         is ConditionNode.Leaf -> node.typeId == CalendarBusyCondition.id
@@ -785,7 +789,10 @@ object DopaRuntime {
                 ruleName = rule.name,
                 enabled = rule.enabled,
                 targeted = rule.target.matches(packageName, tags),
-                conditionMet = engine.evaluate(rule.condition, ctx),
+                // どれか1組でも成立していれば「条件を満たしている」
+                conditionMet = rule.clauses.any {
+                    engine.evaluate(it.condition, ctx.forClause(rule, it))
+                },
             )
         }
     }
@@ -1053,7 +1060,11 @@ object DopaRuntime {
             if (rule.uid !in watched) continue
             if (!rule.appliesToDevice(deviceId)) continue
 
-            val active = rule.enabled && engine.evaluate(rule.condition, base.forRule(rule))
+            // どれか1組でも縛っていれば「効いている」。連動は組の単位ではなく
+            // ルールの単位で見る ── 向こうの端末は組の番号を知らない
+            val active = rule.enabled && rule.clauses.any {
+                engine.evaluate(it.condition, base.forClause(rule, it))
+            }
             val previous = states.firstOrNull { it.ruleUid == rule.uid && it.deviceId == deviceId }
             if (!RuleStates.shouldPublish(previous, active, now)) continue
 

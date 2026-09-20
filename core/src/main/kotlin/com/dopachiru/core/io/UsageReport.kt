@@ -234,12 +234,18 @@ object UsageReport {
                     rule.target.tags.forEach { add("#" + it) }
                     addAll(rule.target.sites)
                 }.joinToString("・").ifBlank { "(空)" }
-                val action = ActionRegistry[rule.actionId]?.summarize(rule.actionParams) ?: rule.actionId
-                out.appendLine(
-                    "| " + rule.name + " | " + target + " | " +
-                        ConditionTree.describe(rule.condition) + " | " + action + " | " +
-                        (if (rule.enabled) "はい" else "いいえ") + " |",
-                )
+                // 組ごとに1行。1組しか無ければ今までと同じ見た目になる
+                for (clause in rule.clauses) {
+                    val spec = clause.mainAction
+                    val action = spec?.let {
+                        ActionRegistry[it.actionId]?.summarize(it.params) ?: it.actionId
+                    } ?: "(なし)"
+                    out.appendLine(
+                        "| " + rule.name + " | " + target + " | " +
+                            ConditionTree.describe(clause.condition) + " | " + action + " | " +
+                            (if (rule.enabled) "はい" else "いいえ") + " |",
+                    )
+                }
             }
         }
         out.appendLine()

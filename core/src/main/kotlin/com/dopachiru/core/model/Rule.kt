@@ -132,7 +132,45 @@ data class Rule(
      * 一覧に死んだルールが溜まると、生きているものが見えなくなるため。
      */
     val expiresAtSec: Long = 0L,
+
+    /**
+     * 1組目に重ねる動作。先頭の [actionId] が主で、ここが上乗せ。
+     *
+     * **いまのエンジンは実行しません。** 器だけ先に用意してある([Clause])。
+     */
+    val extraActions: List<ActionSpec> = emptyList(),
+
+    /**
+     * 2組目以降の「条件 → こうする」。1組目は [condition] と [actionId]。
+     *
+     * 対称ではありませんが、そうしてあるのは**既存の保存をそのまま読む**ためと、
+     * **既存のルールの数える鍵を動かさない**ため ── 振り直すと、更新した瞬間に
+     * 持ち時間の窓がリセットされます。読むときは [clauses] を使うこと。
+     */
+    val extraClauses: List<Clause> = emptyList(),
 ) {
+    /**
+     * 「条件 → こうする」の全部。1組目もここでは同じ形に揃う。
+     *
+     * 判定も画面もこちらを見ること。[condition] と [actionId] を直に読むのは、
+     * 1組しか無いと分かっている場所だけにする。
+     */
+    val clauses: List<Clause>
+        get() = buildList {
+            add(
+                Clause(
+                    id = Clauses.FIRST_ID,
+                    condition = condition,
+                    actions = listOf(ActionSpec(actionId, actionParams)) + extraActions,
+                ),
+            )
+            // 1組目と番号がかち合うものは捨てる。財布の鍵なので、重なると混ざる
+            addAll(extraClauses.filter { it.id != Clauses.FIRST_ID })
+        }
+
+    /** 組が2つ以上あるか。一覧に印を付けるため。 */
+    val hasManyClauses: Boolean get() = extraClauses.isNotEmpty()
+
     /** その端末で評価に載せるか。 */
     fun appliesToDevice(deviceId: String): Boolean = DeviceScope.appliesTo(devices, deviceId)
 

@@ -3,6 +3,7 @@ package com.dopachiru.core.engine
 import com.dopachiru.core.action.ActionRegistry
 import com.dopachiru.core.action.ActionType
 import com.dopachiru.core.condition.ConditionRegistry
+import com.dopachiru.core.model.Clauses
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Rule
@@ -19,6 +20,12 @@ sealed interface Decision {
         val rule: Rule,
         val action: ActionType,
         val params: Params,
+        /**
+         * 成立した組の番号。ルールは「条件 → こうする」を何組も持てる。
+         *
+         * 何が効いたのかを画面に出すのと、数える財布を組ごとに分けるのに要る。
+         */
+        val clauseId: Int = Clauses.FIRST_ID,
     ) : Decision
 
     /**
@@ -79,6 +86,19 @@ class RuleEngine {
         return decide(rules, ctx, tagsOf)
     }
 
+    /**
+     * 成立した組のうち、いちばん強い措置を1つ採る。
+     *
+     * ## 組をまたいでも「いちばん強い1つ」
+     *
+     * ルールは「条件 → こうする」を何組も持てる(「22時以降は待たせる」
+     * 「前回から3時間あいていないなら閉じる」)。両方が成立したら、
+     * **強いほうだけ**を実行します ── 待たせてから閉じる、では
+     * 待った時間が無駄になるだけなので。
+     *
+     * 重ねられる措置(経過表示など)を同時に出すのは別の話で、
+     * 画面を作り直すときに入れます([Clause.overlays])。
+     */
     fun decide(
         rules: List<Rule>,
         ctx: EvalContext,
@@ -90,13 +110,17 @@ class RuleEngine {
         for (rule in rules) {
             if (!rule.enabled) continue
             if (!rule.target.matches(ctx.packageName, tags, ctx.url)) continue
-            // どのルールを見ているかを条件に伝える。確率の抽選や慣れの判定が
-            // ルールごとに独立していないと、隣のルールの結果を巻き込む
-            if (!evaluate(rule.condition, ctx.forRule(rule))) continue
 
-            val action = ActionRegistry[rule.actionId] ?: continue
-            if (best == null || action.severity > best.action.severity) {
-                best = Decision.Act(rule, action, rule.actionParams)
+            for (clause in rule.clauses) {
+                val spec = clause.mainAction ?: continue
+                // どのルールのどの組を見ているかを条件に伝える。確率の抽選や
+                // 慣れの判定が独立していないと、隣の結果を巻き込む
+                if (!evaluate(clause.condition, ctx.forClause(rule, clause))) continue
+
+                val action = ActionRegistry[spec.actionId] ?: continue
+                if (best == null || action.severity > best.action.severity) {
+                    best = Decision.Act(rule, action, spec.params, clause.id)
+                }
             }
         }
         return best ?: Decision.Allow
@@ -130,8 +154,11 @@ class RuleEngine {
         for (rule in rules) {
             if (!rule.enabled) continue
             if (!rule.target.matches(ctx.packageName, tags, ctx.url)) continue
-            val at = nextChangeAt(rule.condition, ctx.forRule(rule)) ?: return null
-            if (earliest == null || at.isBefore(earliest)) earliest = at
+            for (clause in rule.clauses) {
+                if (clause.mainAction == null) continue
+                val at = nextChangeAt(clause.condition, ctx.forClause(rule, clause)) ?: return null
+                if (earliest == null || at.isBefore(earliest)) earliest = at
+            }
         }
         return earliest
     }

@@ -200,7 +200,8 @@ object ReservationRules {
      * 「塞ぐルールがあるか」しか見ていませんでした。並べる相手はこちらが正しい。
      */
     fun unlocksByReservation(rule: Rule): Boolean =
-        rule.enabled && mentionsReservation(rule.condition)
+        // どれか1組でも予約で開くなら、その枠は取る意味がある
+        rule.enabled && rule.clauses.any { mentionsReservation(it.condition) }
 
     private fun mentionsReservation(node: ConditionNode): Boolean = when (node) {
         is ConditionNode.Leaf -> node.typeId == RESERVATION_CONDITION_ID

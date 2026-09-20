@@ -397,5 +397,8 @@ fun describeRule(rule: Rule): String {
     } else {
         " / 破ったら${rule.consequence.lockScope.label}を${rule.consequence.lockMinutes}分"
     }
-    return "$head → $action$consequence"
+    // 2組目以降があることを隠さない。隠すと、一覧に出ていない組が黙って
+    // 効いて「書いていないのに閉まる」になる
+    val more = if (rule.extraClauses.isEmpty()) "" else " ほか" + rule.extraClauses.size + "組"
+    return "$head → $action$consequence$more"
 }
