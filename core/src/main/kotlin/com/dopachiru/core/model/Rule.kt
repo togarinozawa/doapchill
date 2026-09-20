@@ -120,7 +120,34 @@ data class Rule(
      * 既定が空なので、この欄より前に作ったルールは挙動が変わらない。[DeviceScope]
      */
     val devices: Set<String> = DeviceScope.EVERYWHERE,
+
+    /**
+     * この時刻(エポック秒)を過ぎたら消えるルール。0 なら消えない。
+     *
+     * 「今日だけ 2時間使ったら1時間休憩」のような**その場で決める枠**のためにある。
+     * 消えると分かっているから気軽に作れる ── 残り続けるなら、作る前に
+     * 「これを一生守れるか」を考えることになり、その場では作られない。
+     *
+     * 消すのは端末側([Rules.prune])。評価から外すだけでなく行ごと消すのは、
+     * 一覧に死んだルールが溜まると、生きているものが見えなくなるため。
+     */
+    val expiresAtSec: Long = 0L,
 ) {
     /** その端末で評価に載せるか。 */
     fun appliesToDevice(deviceId: String): Boolean = DeviceScope.appliesTo(devices, deviceId)
+
+    /** 期限切れか。期限なし(0)は常に偽。 */
+    fun isExpiredAt(nowSec: Long): Boolean = expiresAtSec > 0L && nowSec >= expiresAtSec
+
+    /** 期限つきか。一覧で印を付けるため。 */
+    val isTemporary: Boolean get() = expiresAtSec > 0L
+}
+
+/** ルール一覧の手入れ。端末側の保存方法に依存しないようここに置く。 */
+object Rules {
+    /** 期限切れを落とす。 */
+    fun prune(all: List<Rule>, nowSec: Long): List<Rule> = all.filterNot { it.isExpiredAt(nowSec) }
+
+    /** 落ちるものがあるか。無ければ書き戻さない(無駄な同期を起こさないため)。 */
+    fun hasExpired(all: List<Rule>, nowSec: Long): Boolean = all.any { it.isExpiredAt(nowSec) }
 }

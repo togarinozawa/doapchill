@@ -53,6 +53,8 @@ fun main(args: Array<String>) = application {
     LaunchedEffect(Unit) { DesktopRuntime.start() }
 
     val settings by DesktopRuntime.settings.collectAsState()
+    // 明けたぶんは watchLoop が 0 に戻すので、残っていれば止まっている
+    val paused = settings.pausedUntilSec > 0L
     val presentation by DesktopRuntime.presentation.collectAsState()
 
     // ログインと一緒に立ち上がったときは窓を出さない。
@@ -60,8 +62,8 @@ fun main(args: Array<String>) = application {
     var windowOpen by remember { mutableStateOf(!args.contains(WindowsAutoStart.STARTUP_FLAG)) }
 
     Tray(
-        icon = remember(settings.paused) { TrayIcon(settings.paused) },
-        tooltip = if (settings.paused) "ドパチル(一時停止中)" else "ドパチル",
+        icon = remember(paused) { TrayIcon(paused) },
+        tooltip = if (paused) "ドパチル(一時停止中)" else "ドパチル",
         onAction = { windowOpen = true },
         menu = {
             Item("開く", onClick = { windowOpen = true })
@@ -69,10 +71,10 @@ fun main(args: Array<String>) = application {
             // 設定で隠した意味が無くなる ── 詰まったときにまず押してしまう
             if (settings.developerMode) {
                 CheckboxItem(
-                    "一時停止",
-                    checked = settings.paused,
-                    onCheckedChange = { paused ->
-                        DesktopRuntime.updateSettings { it.copy(paused = paused) }
+                    "一時停止(" + DesktopRuntime.PAUSE_MINUTES + "分)",
+                    checked = paused,
+                    onCheckedChange = { on ->
+                        DesktopRuntime.pauseFor(if (on) DesktopRuntime.PAUSE_MINUTES else 0)
                     },
                 )
             }

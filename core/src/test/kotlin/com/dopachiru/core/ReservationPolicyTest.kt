@@ -1,6 +1,7 @@
 package com.dopachiru.core
 
 import com.dopachiru.core.action.types.BlockAction
+import com.dopachiru.core.condition.types.ReservationCondition
 import com.dopachiru.core.model.BookingCheck
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.Reservation
@@ -228,5 +229,114 @@ class ReservationPolicyTest {
             actionParams = Params.EMPTY,
         )
         assertFalse(ReservationRules.isGuarded(policy, listOf(rule)))
+    }
+
+    // ---- 予約すれば使えるようになるルール ------------------------------
+
+    private fun guarding(
+        uid: String,
+        name: String,
+        condition: ConditionNode,
+        devices: Set<String> = emptySet(),
+        enabled: Boolean = true,
+    ) = Rule(
+        id = 1,
+        uid = uid,
+        name = name,
+        enabled = enabled,
+        target = youtube,
+        condition = condition,
+        actionId = BlockAction.id,
+        actionParams = Params.EMPTY,
+        devices = devices,
+    )
+
+    private val outsideReservation = ConditionNode.Leaf(ReservationCondition.id, Params.EMPTY)
+
+    @Test
+    fun `予約の条件を持つルールだけを並べる`() {
+        // 塞いでいるだけのルールを並べると、枠を取っても開かない。
+        // 「取ったのに効かない」はいちばん効く失望なので、出さない
+        val unlockable = guarding("u1", "予約の外では開かない", outsideReservation)
+        val justBlocked = guarding("u2", "ずっと塞ぐ", ConditionNode.AllOf(emptyList()))
+
+        assertTrue(ReservationRules.unlocksByReservation(unlockable))
+        assertFalse(ReservationRules.unlocksByReservation(justBlocked))
+        assertEquals(
+            listOf(unlockable),
+            ReservationRules.unlockableOn(listOf(unlockable, justBlocked), ""),
+        )
+    }
+
+    @Test
+    fun `入れ子の中にあっても見つける`() {
+        val nested = guarding(
+            "u1",
+            "夜と、予約の外",
+            ConditionNode.AnyOf(
+                listOf(
+                    ConditionNode.AllOf(listOf(outsideReservation)),
+                    ConditionNode.AllOf(emptyList()),
+                ),
+            ),
+        )
+        assertTrue(ReservationRules.unlocksByReservation(nested))
+    }
+
+    @Test
+    fun `否定の中にあっても見つける`() {
+        val negated = guarding("u1", "否定", ConditionNode.Not(outsideReservation))
+        assertTrue(ReservationRules.unlocksByReservation(negated))
+    }
+
+    @Test
+    fun `止めてあるルールは並べない`() {
+        val off = guarding("u1", "止めてある", outsideReservation, enabled = false)
+        assertTrue(ReservationRules.unlockableOn(listOf(off), "").isEmpty())
+    }
+
+    @Test
+    fun `端末で絞る`() {
+        val onPhone = guarding("u1", "スマホだけ", outsideReservation, devices = setOf("phone"))
+        val everywhere = guarding("u2", "どこでも", outsideReservation)
+
+        assertEquals(
+            listOf(onPhone, everywhere),
+            ReservationRules.unlockableOn(listOf(onPhone, everywhere), "phone"),
+        )
+        // PC には「スマホだけ」のルールが無いので、PC の枠には出さない
+        assertEquals(
+            listOf(everywhere),
+            ReservationRules.unlockableOn(listOf(onPhone, everywhere), "pc"),
+        )
+        // 端末を指定しなければ全部
+        assertEquals(2, ReservationRules.unlockableOn(listOf(onPhone, everywhere), "").size)
+    }
+
+    // ---- ルールに紐づく型 ----------------------------------------------
+
+    @Test
+    fun `型が無ければ既定値で出す`() {
+        // 数字を触っていないだけで「予約できないアプリ」に見えては困る
+        val rule = guarding("u1", "YouTube は予約の外では開かない", outsideReservation)
+        val made = ReservationRules.policyFor(rule, emptyList())
+        assertEquals(rule.name, made.label)
+        assertEquals(rule.target, made.target)
+        assertEquals("u1", made.ruleUid)
+        assertEquals(ReservationRules.MIN_LEAD_MINUTES, made.minLeadMinutes)
+    }
+
+    @Test
+    fun `紐づけてある型を優先する`() {
+        val rule = guarding("u1", "YouTube", outsideReservation)
+        val mine = policy.copy(id = "p9", ruleUid = "u1", maxDurationMinutes = 30)
+        assertEquals(mine, ReservationRules.policyFor(rule, listOf(mine)))
+    }
+
+    @Test
+    fun `古い型は対象の重なりで拾う`() {
+        // ruleUid を足す前に手で作った型。作り直させるほどのことではない
+        val rule = guarding("u1", "YouTube", outsideReservation)
+        assertEquals(policy, ReservationRules.policyFor(rule, listOf(policy)))
     }
 }

@@ -29,7 +29,7 @@ class MigrationSqlTest {
     private val schema: JsonObject by lazy { schemaOf(4) }
 
     /** いまの版。移行を足したらここを上げる。 */
-    private val latest: JsonObject by lazy { schemaOf(6) }
+    private val latest: JsonObject by lazy { schemaOf(7) }
 
     private fun createSqlOf(tableName: String): String = entity(tableName)["createSql"]!!
         .jsonPrimitive.content
@@ -48,7 +48,7 @@ class MigrationSqlTest {
     @Test
     fun `スキーマの版と database の版がそろっている`() {
         assertEquals(4, schema["version"]!!.jsonPrimitive.content.toInt())
-        assertEquals(6, latest["version"]!!.jsonPrimitive.content.toInt())
+        assertEquals(7, latest["version"]!!.jsonPrimitive.content.toInt())
     }
 
     @Test
@@ -165,6 +165,54 @@ class MigrationSqlTest {
                 e["fields"]!!.jsonArray.map { t + "." + it.jsonObject["columnName"]!!.jsonPrimitive.content }
             }.toSet()
         assertEquals(columns(5), columns(6))
+    }
+
+    // ---- 6 から 7 ---------------------------------------------------------
+
+    @Test
+    fun `ルールに足した2列が生成物と一致する`() {
+        val devices = fieldOf(7, "rules", "devicesCsv")
+        assertEquals("''", devices["defaultValue"]!!.jsonPrimitive.content)
+        assertEquals("TEXT", devices["affinity"]!!.jsonPrimitive.content)
+        assertEquals(true, devices["notNull"]!!.jsonPrimitive.content.toBoolean())
+
+        val expires = fieldOf(7, "rules", "expiresAtSec")
+        assertEquals("0", expires["defaultValue"]!!.jsonPrimitive.content)
+        assertEquals("INTEGER", expires["affinity"]!!.jsonPrimitive.content)
+        assertEquals(true, expires["notNull"]!!.jsonPrimitive.content.toBoolean())
+
+        assertTrue(
+            DopaDatabase.MIGRATION_6_7_SQL.any {
+                it == "ALTER TABLE `rules` ADD COLUMN `devicesCsv` TEXT NOT NULL DEFAULT ''"
+            },
+            "devicesCsv の ALTER がずれている: " + DopaDatabase.MIGRATION_6_7_SQL,
+        )
+        assertTrue(
+            DopaDatabase.MIGRATION_6_7_SQL.any {
+                it == "ALTER TABLE `rules` ADD COLUMN `expiresAtSec` INTEGER NOT NULL DEFAULT 0"
+            },
+            "expiresAtSec の ALTER がずれている: " + DopaDatabase.MIGRATION_6_7_SQL,
+        )
+    }
+
+    @Test
+    fun `6から7で増えた列はこの2つだけ`() {
+        fun columns(version: Int) = schemaOf(version)["entities"]!!.jsonArray
+            .map { it.jsonObject }
+            .flatMap { e ->
+                val table = e["tableName"]!!.jsonPrimitive.content
+                e["fields"]!!.jsonArray.map { table + "." + it.jsonObject["columnName"]!!.jsonPrimitive.content }
+            }.toSet()
+
+        assertEquals(setOf("rules.devicesCsv", "rules.expiresAtSec"), columns(7) - columns(6))
+        assertEquals(2, DopaDatabase.MIGRATION_6_7_SQL.size)
+    }
+
+    @Test
+    fun `6から7でテーブルは増えていない`() {
+        fun tables(version: Int) = schemaOf(version)["entities"]!!.jsonArray
+            .map { it.jsonObject["tableName"]!!.jsonPrimitive.content }.toSet()
+        assertEquals(tables(6), tables(7))
     }
 
     @Test

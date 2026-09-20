@@ -36,6 +36,26 @@ data class RuleEntity(
      * 読むときは Consequence.NONE に落とす。
      */
     @ColumnInfo(defaultValue = "''") val consequenceJson: String = "",
+
+    /**
+     * どの端末で効かせるか。deviceId をタブで繋いだもの。空ならどの端末でも。
+     *
+     * **列を足すまで、この欄は保存されていませんでした。**(core の Rule には
+     * あったが、ここに無いので書くたびに落ちていた。)端末ごとのルールが
+     * 再起動で「どの端末でも」に化けるので、予約の一覧にも出てこなかった。
+     *
+     * タブで繋ぐのは、deviceId に使えない字だから ── JSON にすると
+     * 引用符の分だけ読みにくく、SQL から目で見るときに困る。
+     */
+    @ColumnInfo(defaultValue = "''") val devicesCsv: String = "",
+
+    /**
+     * この時刻(エポック秒)を過ぎたら消えるルール。0 なら消えない。
+     *
+     * 「今日だけ 2時間使ったら1時間休憩」のような、その場で決める枠のため。
+     */
+    @ColumnInfo(defaultValue = "0") val expiresAtSec: Long = 0L,
+
     val createdAt: Long,
     val updatedAt: Long,
 )

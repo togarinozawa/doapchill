@@ -42,8 +42,8 @@ android {
          */
         minSdk = 29
         targetSdk = 36
-        versionCode = 32
-        versionName = "0.25.0"
+        versionCode = 33
+        versionName = "0.26.0"
 
         buildConfigField("String", "ENROLL_KEY", "\"" + enrollKey + "\"")
     }

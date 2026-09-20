@@ -34,6 +34,7 @@ import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Lockouts
 import com.dopachiru.core.model.Reservation
 import com.dopachiru.core.model.Reservations
+import com.dopachiru.core.model.Rules
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.param.Params
 import com.dopachiru.core.points.PointEvent
@@ -402,6 +403,9 @@ object DesktopRuntime {
         DopaCore.registerAll()
         _settings.value = Stores.settings.load()
         _ruleFile.value = Stores.rules.load()
+        // その場で決めた枠のうち、期限が来たものを落とす。
+        // 起動時にやるのは、寝ているあいだに明けるのがふつうだから
+        pruneExpiredRules()
         ledger.restore(Stores.usage.load())
         declarations.restore(Stores.declarations.load())
         // 罰と残高も戻す。再起動で罰が消えるなら罰にならない
@@ -484,7 +488,7 @@ object DesktopRuntime {
         val updated = transform(_settings.value)
         _settings.value = updated
         Stores.settings.save(updated)
-        if (updated.paused) releaseHold()
+        if (updated.isPausedAt(nowSec())) releaseHold()
     }
 
     fun updateRules(transform: (RuleFile) -> RuleFile) {
@@ -737,9 +741,23 @@ object DesktopRuntime {
      * これが無いと、端末をまたいだ頼みごとは**設定画面のボタンを押すまで届きません**。
      * Windows は常駐しているので、素直な繰り返しで足ります。
      */
+    /**
+     * 期限切れのルールを落とす。
+     *
+     * 消すのは行ごと。評価から外すだけだと、一覧に死んだ枠が溜まって
+     * 生きているものが見えなくなる。
+     */
+    private fun pruneExpiredRules() {
+        val now = nowSec()
+        if (!Rules.hasExpired(_ruleFile.value.rules, now)) return
+        updateRules { it.copy(rules = Rules.prune(it.rules, now)) }
+    }
+
     private fun startSyncLoop() = scope.launch {
         while (isActive) {
             delay(SYNC_EVERY_MS)
+            // 同期と同じ刻みに乗せる。期限は分単位なので専用の刻みは要らない
+            pruneExpiredRules()
             val sync = _settings.value.sync
             if (!sync.enabled || !sync.isConfigured) continue
             runCatching { syncNow() }
@@ -1049,8 +1067,21 @@ object DesktopRuntime {
         releaseHold()
         WindowControl.resumeAll()
         _foreground.value = null
-        updateSettings { it.copy(paused = true) }
+        pauseFor(EMERGENCY_PAUSE_MINUTES)
     }
+
+    /**
+     * [minutes] 分だけ止める。0 を渡すと解除。
+     *
+     * 期限で持つのは、**切ったまま忘れるのを防ぐ**ため。真偽値だと再起動をまたいで
+     * 残り、スタートアップで立ち上げた朝に「一時停止中」で待っていることになる。
+     */
+    fun pauseFor(minutes: Int) {
+        val until = if (minutes <= 0) 0L else nowSec() + minutes * 60L
+        updateSettings { it.copy(pausedUntilSec = until) }
+    }
+
+    fun resumeNow() = pauseFor(0)
 
     /** ブロック画面の「それでも使う」。 */
     fun overrideBlock() {
@@ -1422,7 +1453,12 @@ object DesktopRuntime {
             declarations.tick(processName, nowSec)
             _foreground.value = fg
 
-            if (_settings.value.paused) {
+            // 明けたら書き戻す。時刻だけで判定していると、画面とトレイの印が
+            // 止まったままになる ── 見た目が「止まっている」なら、止まっている
+            val pausedUntil = _settings.value.pausedUntilSec
+            if (pausedUntil in 1 until nowSec) updateSettings { it.copy(pausedUntilSec = 0L) }
+
+            if (_settings.value.isPausedAt(nowSec)) {
                 if (_presentation.value != null) {
                     _presentation.value = null
                     releaseHold()
@@ -2026,6 +2062,23 @@ object DesktopRuntime {
      * 2日にしてあるのは、空の行を並べないため。
      */
     const val USAGE_REPORT_DAYS = 2
+
+    /**
+     * トレイから止めるときの長さ(分)。
+     *
+     * 切ったまま忘れないよう、必ず明ける。長さに迷ったら短いほうへ ──
+     * 足りなければもう一度押せばいいが、長すぎたぶんは取り返せない。
+     */
+    const val PAUSE_MINUTES = 30
+
+    /**
+     * 逃げ道で止まる長さ(分)。
+     *
+     * トレイからのものより長い。ここが要るのは**こちらの不具合で閉じ込めた**ときで、
+     * そのときに要るのは「直すか、消すかを落ち着いてやれる時間」。
+     * 30分で閉まり直すと、直している最中に塞がれます。
+     */
+    const val EMERGENCY_PAUSE_MINUTES = 60
 
     private const val SYNC_EVERY_MS = 60_000L
 }

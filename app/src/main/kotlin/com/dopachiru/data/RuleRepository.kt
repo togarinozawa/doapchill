@@ -90,6 +90,20 @@ class RuleRepository(
         }
     }
 
+    /**
+     * 期限切れのルールを落とす。
+     *
+     * **[delete] を通すので墓標が残ります。** 行を消すだけだと、期限を知らない
+     * 別の端末が次の同期で送り返してきて、消えたはずの枠が生き返ります。
+     *
+     * @return 落とした数。
+     */
+    suspend fun purgeExpired(nowSec: Long = System.currentTimeMillis() / 1000): Int {
+        val dead = ruleDao.getAll().filter { it.expiresAtSec in 1..nowSec }
+        dead.forEach { delete(it.id) }
+        return dead.size
+    }
+
     /** 同期で受け取った削除を反映する。墓標は呼ぶ側が書きます。 */
     suspend fun deleteByUid(uid: String) {
         val row = ruleDao.getAll().firstOrNull { it.uid == uid } ?: return
@@ -167,6 +181,8 @@ fun RuleEntity.toRule(): Rule = Rule(
                 .getOrDefault(Consequence.NONE)
         }
         ?: Consequence.NONE,
+    devices = devicesCsv.split('\t').filter { it.isNotBlank() }.toSet(),
+    expiresAtSec = expiresAtSec,
 )
 
 fun Rule.toEntity(createdAt: Long, updatedAt: Long): RuleEntity = RuleEntity(
@@ -183,6 +199,8 @@ fun Rule.toEntity(createdAt: Long, updatedAt: Long): RuleEntity = RuleEntity(
     } else {
         DopaCore.json.encodeToString(Consequence.serializer(), consequence)
     },
+    devicesCsv = devices.filter { it.isNotBlank() }.joinToString("\t"),
+    expiresAtSec = expiresAtSec,
     createdAt = createdAt,
     updatedAt = updatedAt,
 )

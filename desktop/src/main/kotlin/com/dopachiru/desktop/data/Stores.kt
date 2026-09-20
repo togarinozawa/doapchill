@@ -21,8 +21,17 @@ data class DesktopSettings(
     /** ブロックのやり方。Windows には Android のような統一された止め方が無いので選ばせる。 */
     val blockStrength: BlockStrength = BlockStrength.MINIMIZE,
 
-    /** 一時停止中。トレイから切り替える。 */
-    val paused: Boolean = false,
+    /**
+     * 一時停止が明ける時刻(エポック秒)。0 なら止めていない。
+     *
+     * **真偽値ではなく期限**にしてあるのは、切ったまま忘れるのを防ぐため。
+     * 真偽値だと再起動をまたいで残り、スタートアップで立ち上げた朝いちばんに
+     * 「一時停止中」で待っていることになる ── 立ち上げるたびに手で戻すのでは、
+     * 自動で立ち上げる意味がない。
+     *
+     * 時刻で持てば、寝て起きたぶんだけ勝手に明けます。**一時**停止なので。
+     */
+    val pausedUntilSec: Long = 0L,
 
     /** Windows と一緒に起動する。 */
     val launchAtLogin: Boolean = false,
@@ -90,7 +99,14 @@ data class DesktopSettings(
      * 配られるので、ここが埋まっている = 一度は自分の手で繋いだ、という意味になる。
      */
     val bridgeToken: String = "",
-)
+) {
+    /** いま一時停止中か。 */
+    fun isPausedAt(nowSec: Long): Boolean = pausedUntilSec > nowSec
+
+    /** 明けるまで何分か。切り上げ ── 「あと0分」と出したまま止まっているのは嘘。 */
+    fun pauseRemainingMinutes(nowSec: Long): Int =
+        if (!isPausedAt(nowSec)) 0 else ((pausedUntilSec - nowSec + 59) / 60).toInt()
+}
 
 @Serializable
 data class RuleFile(

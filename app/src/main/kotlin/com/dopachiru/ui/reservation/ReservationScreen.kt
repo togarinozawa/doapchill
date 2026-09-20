@@ -2,7 +2,6 @@ package com.dopachiru.ui.reservation
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,10 +15,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -40,36 +37,40 @@ import com.dopachiru.core.model.BookingCheck
 import com.dopachiru.core.model.Reservation
 import com.dopachiru.core.model.ReservationPolicy
 import com.dopachiru.core.model.ReservationRules
+import com.dopachiru.core.model.Rule
 import com.dopachiru.core.model.Target
 import com.dopachiru.core.sync.DeviceInfo
 import com.dopachiru.runtime.DopaRuntime
-import com.dopachiru.ui.rules.AppPickerDialog
 import com.dopachiru.ui.rules.InstalledApps
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.util.UUID
 
 /**
  * 予約を取る・見る・取り消す画面。
  *
- * ## 予約は「例外」であって「予定」ではない
+ * ## 並ぶのは「予約すれば使えるようになるルール」だけ
  *
- * 予約が効くのは**本来ダメな時間の中**でだけです。時間帯ルールや常時ブロックで
- * 塞いである相手に、「この枠だけは通す」と穴を開けるのが予約の役目
- * (`outside_reservation` 条件と組む)。塞いでいない相手を予約しても
- * いつでも開くので、何も起きません。だから型ごとに**塞ぐルールがあるか**を見て、
- * 無ければそこを真っ先に言います。
+ * 予約が効くのは**本来ダメな時間の中**でだけです。しかも、塞いであれば何でも
+ * 開くわけではない ── 開くのは条件に「予約した時間の外」を持つルールだけです。
+ * それ以外のルールは、枠を取っても素通りしません。
  *
- * ## 型を先に決めてから取る
+ * だから並べる相手は「塞いでいるルール」ではなく
+ * **[ReservationRules.unlockableOn] が返すルール**です。手で対象を選ばせるのを
+ * やめたのはこのため ── 選べてしまうと、取っても何も起きない枠を作れて、
+ * 「予約したのに開かない」という一番効く失望を自分で仕込むことになります。
  *
- * 好きなアプリを好きなだけ予約できるなら、それは制限ではありません。
- * 欲しくなってから条件を決めると、欲しい側に有利な条件になります。
+ * ## 端末ごとに並べる
  *
- * だから**枠の型**(何を・1回どれくらい・どの間隔で・1日何回)を冷静なうちに
- * 1回だけ決めておき、取るときはそこから選ぶだけにしてあります。
- * 選ぶ瞬間には、長さも間隔も回数もすでに決まっている。
+ * 同じルールでも、効く端末は端末ごとに違います([Rule.devices])。
+ * 「PC で Steam を開ける枠」をスマホから取れるのが予約の使いどころなので、
+ * **どの端末の話なのかを先に見せて**から選ばせます。
+ *
+ * ## 数字は型([ReservationPolicy])で持つ
+ *
+ * 何分前から・1回どれくらい・間隔・1日何回。触っていなければ既定値で、
+ * 触ったぶんだけルールに紐づいて残ります。
  *
  * 時刻は日時ピッカーを出さず、30分刻みの前後ボタンで動かす ── 予約は
  * 「だいたいこの時間」で足り、細かく指定させると取るのが億劫になる。
@@ -80,52 +81,86 @@ fun ReservationScreen() {
     val reservations by DopaRuntime.reservations.reservations.collectAsState()
     val policies by DopaRuntime.settings.reservationPolicies.collectAsState(initial = emptyList())
     val roster by DopaRuntime.devices.collectAsState(initial = emptyList())
+    val rules by DopaRuntime.rules.rules.collectAsState(initial = emptyList())
     val me = DopaRuntime.myDeviceId
     val scope = rememberCoroutineScope()
 
     var editing by remember { mutableStateOf<ReservationPolicy?>(null) }
-    var booking by remember { mutableStateOf<ReservationPolicy?>(null) }
+    var booking by remember { mutableStateOf<Pair<ReservationPolicy, String>?>(null) }
+
+    // この端末が名簿に無いこともある(同期する前)。自分だけは必ず出す
+    val devices = remember(roster, me) { deviceSlots(roster, me) }
+    val groups = remember(rules, devices) {
+        devices.map { slot -> slot to ReservationRules.unlockableOn(rules, slot.deviceId) }
+    }
+    val nothingToBook = groups.all { it.second.isEmpty() }
 
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
             Text(
-                "予約は、本来ダメな時間に穴を開けるものです。塞ぐルールがあって初めて意味があります。" +
-                    "枠の型を先に決めておき、取るときはそこから選びます。",
+                "予約は、本来ダメな時間に穴を開けるものです。" +
+                    "ここに並ぶのは「予約すれば使えるようになるルール」だけ ── " +
+                    "条件に「予約した時間の外」が入っているものです。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
-        item {
-            Text("枠の型", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-        }
-
-        if (policies.isEmpty()) {
+        if (nothingToBook) {
             item {
-                Text(
-                    "まだありません。まず「何を・どれくらい・どの間隔で」予約してよいかを決めます。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(
+                            "予約で開くルールがまだありません。",
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            // 「塞ぐルール」ではなく「予約の条件を持つルール」。
+                            // ここを曖昧にすると、塞ぐだけのルールを作って
+                            // 「予約が効かない」と思うことになる
+                            "ルールを1つ作って、条件に「予約した時間の外」を入れてください。" +
+                                "そのルールがここに出てきます。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
         }
 
-        items(policies, key = { it.id }) { policy ->
-            PolicyCard(
-                policy = policy,
-                onBook = { booking = policy },
-                onEdit = { editing = policy },
-            )
+        groups.forEach { (slot, unlockable) ->
+            if (unlockable.isNotEmpty()) {
+                if (devices.size >= 2) {
+                    item(key = "head-" + slot.deviceId) {
+                        Text(
+                            slot.label,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+
+                items(
+                    unlockable,
+                    key = { slot.deviceId + "/" + it.uid.ifBlank { it.id.toString() } },
+                ) { rule ->
+                    val policy = ReservationRules.policyFor(rule, policies)
+                    RuleSlotCard(
+                        rule = rule,
+                        policy = policy,
+                        onBook = { booking = policy to slot.deviceId },
+                        onTune = { editing = policy },
+                    )
+                }
+            }
         }
 
         item {
-            OutlinedButton(onClick = { editing = newPolicy() }) { Text("枠の型を作る") }
-        }
-
-        item {
+            Spacer(Modifier.height(4.dp))
             Text("これからの予約", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
         }
 
@@ -142,6 +177,7 @@ fun ReservationScreen() {
                 ReservationRow(
                     reservation = reservation,
                     label = { pkg -> InstalledApps.labelOf(context, pkg) },
+                    deviceLabel = { id -> devices.firstOrNull { it.deviceId == id }?.label ?: id },
                     onCancel = { DopaRuntime.reservations.cancel(reservation.uid) },
                 )
             }
@@ -158,7 +194,7 @@ fun ReservationScreen() {
                 }
                 editing = null
             },
-            onDelete = {
+            onReset = {
                 scope.launch {
                     DopaRuntime.settings.setReservationPolicies(policies.filterNot { it.id == draft.id })
                 }
@@ -168,40 +204,59 @@ fun ReservationScreen() {
         )
     }
 
-    booking?.let { policy ->
+    booking?.let { (policy, deviceId) ->
         BookDialog(
             policy = policy,
-            roster = roster,
-            myDeviceId = me,
+            deviceId = deviceId,
+            deviceLabel = devices.firstOrNull { it.deviceId == deviceId }?.label.orEmpty(),
+            showDevice = devices.size >= 2,
             onDismiss = { booking = null },
             onBooked = { booking = null },
         )
     }
 }
 
-private fun newPolicy(): ReservationPolicy = ReservationPolicy(
-    id = UUID.randomUUID().toString(),
-    label = "新しい枠",
-    target = Target(),
-)
+/** 一覧の見出しに使う端末1つぶん。 */
+private data class DeviceSlot(val deviceId: String, val label: String)
 
-/** 型1つぶん。塞ぐルールが無ければ、そこを真っ先に言う。 */
+/**
+ * 並べる端末。**この端末を必ず先頭に**置く。
+ *
+ * 同期する前は名簿が空なので、自分すら出てこないと「予約できないアプリ」に見える。
+ * 同期を切っていても予約は使えるべきなので、名簿が無くても自分だけは出す。
+ */
+private fun deviceSlots(roster: List<DeviceInfo>, myDeviceId: String): List<DeviceSlot> {
+    val mine = DeviceSlot(
+        myDeviceId,
+        (roster.firstOrNull { it.deviceId == myDeviceId }?.displayName ?: "この端末") +
+            if (myDeviceId.isNotBlank()) "(この端末)" else "",
+    )
+    val others = roster
+        .filter { it.deviceId != myDeviceId && it.deviceId.isNotBlank() }
+        .map { DeviceSlot(it.deviceId, it.displayName) }
+    return listOf(mine) + others
+}
+
+/**
+ * 予約で開くルール1つぶん。
+ *
+ * 型を持っていなくても並びます ── 数字を触っていないだけで、既定値で取れます。
+ */
 @Composable
-private fun PolicyCard(
+private fun RuleSlotCard(
+    rule: Rule,
     policy: ReservationPolicy,
     onBook: () -> Unit,
-    onEdit: () -> Unit,
+    onTune: () -> Unit,
 ) {
     val context = LocalContext.current
-    val rules by DopaRuntime.rules.rules.collectAsState(initial = emptyList())
-    val guarded = remember(rules, policy) { ReservationRules.isGuarded(policy, rules) }
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
-            Text(policy.label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text(rule.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(2.dp))
             Text(
-                describeTarget(context, policy.target),
+                describeTarget(context, rule.target),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -212,21 +267,10 @@ private fun PolicyCard(
                 color = MaterialTheme.colorScheme.primary,
             )
 
-            if (!guarded) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    // 塞いでいない相手を予約しても、いつでも開くので何も起きない
-                    "この対象を塞ぐルールがありません。予約しても何も変わりません。" +
-                        "先に「時間帯で塞ぐ」か「条件なしで塞ぐ」ルールを作ってください。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onBook, enabled = !policy.target.isEmpty) { Text("この枠で予約する") }
-                TextButton(onClick = onEdit) { Text("型を直す") }
+                Button(onClick = onBook, enabled = !rule.target.isEmpty) { Text("この枠で予約する") }
+                TextButton(onClick = onTune) { Text("条件を直す") }
             }
         }
     }
@@ -238,41 +282,33 @@ private fun describeTarget(context: android.content.Context, target: Target): St
     return listOf(apps, tags).filter { it.isNotBlank() }.joinToString("・").ifBlank { "(対象なし)" }
 }
 
-/** 枠の型を作る・直す。 */
+/**
+ * 予約の条件を直す。
+ *
+ * **何を通すかはここで選べません。** 通る相手はルールの対象そのもので、
+ * ここで別に選べると「塞いでいない相手の枠」を作れてしまいます。
+ * 取っても何も起きない枠は、作れないほうがいい。
+ */
 @Composable
 private fun PolicyEditorDialog(
     policy: ReservationPolicy,
     onSave: (ReservationPolicy) -> Unit,
-    onDelete: () -> Unit,
+    onReset: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
     var draft by remember(policy.id) { mutableStateOf(policy) }
-    var showPicker by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("枠の型") },
+        title = { Text(policy.label) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                OutlinedTextField(
-                    value = draft.label,
-                    onValueChange = { draft = draft.copy(label = it.take(20)) },
-                    label = { Text("名前") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-
-                Spacer(Modifier.height(12.dp))
-                Text("何を通すか", style = MaterialTheme.typography.labelLarge)
-                Spacer(Modifier.height(4.dp))
                 Text(
-                    describeTarget(context, draft.target),
+                    "通るのは " + describeTarget(context, draft.target) + "。ルールの対象と同じです。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.height(4.dp))
-                OutlinedButton(onClick = { showPicker = true }) { Text("アプリを選ぶ") }
 
                 PolicyStepper(
                     label = "何分前から予約できるか",
@@ -312,35 +348,16 @@ private fun PolicyEditorDialog(
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = { onSave(draft) },
-                enabled = draft.label.isNotBlank() && !draft.target.isEmpty,
-            ) { Text("保存") }
+            TextButton(onClick = { onSave(draft) }) { Text("保存") }
         },
         dismissButton = {
             Row {
-                TextButton(onClick = onDelete) {
-                    Text("消す", color = MaterialTheme.colorScheme.error)
-                }
+                // 消すのではなく戻す。ルールが残っている以上、枠そのものは残る
+                TextButton(onClick = onReset) { Text("既定に戻す") }
                 TextButton(onClick = onDismiss) { Text("やめる") }
             }
         },
     )
-
-    if (showPicker) {
-        AppPickerDialog(
-            selected = draft.target.packages,
-            onToggle = { pkg ->
-                val next = if (pkg in draft.target.packages) {
-                    draft.target.packages - pkg
-                } else {
-                    draft.target.packages + pkg
-                }
-                draft = draft.copy(target = draft.target.copy(packages = next))
-            },
-            onDismiss = { showPicker = false },
-        )
-    }
 }
 
 @Composable
@@ -385,8 +402,9 @@ private fun PolicyStepper(
 @Composable
 private fun BookDialog(
     policy: ReservationPolicy,
-    roster: List<DeviceInfo>,
-    myDeviceId: String,
+    deviceId: String,
+    deviceLabel: String,
+    showDevice: Boolean,
     onDismiss: () -> Unit,
     onBooked: () -> Unit,
 ) {
@@ -394,7 +412,6 @@ private fun BookDialog(
     val earliest = roundUpToHalfHour(now + policy.minLeadMinutes * 60L)
     var startSec by remember { mutableLongStateOf(earliest) }
     var minutes by remember { mutableIntStateOf(minOf(30, policy.maxDurationMinutes)) }
-    var forDevice by remember { mutableStateOf<String?>(null) }
     var refused by remember { mutableStateOf("") }
 
     AlertDialog(
@@ -436,28 +453,15 @@ private fun BookDialog(
                     ) { Text("+") }
                 }
 
-                if (roster.size >= 2) {
+                if (showDevice) {
                     Spacer(Modifier.height(12.dp))
-                    Text("どの端末の枠", style = MaterialTheme.typography.labelLarge)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = forDevice == null,
-                            onClick = { forDevice = null },
-                            label = { Text("すべて") },
-                        )
-                        roster.forEach { device ->
-                            FilterChip(
-                                selected = forDevice == device.deviceId,
-                                onClick = { forDevice = device.deviceId },
-                                label = {
-                                    Text(
-                                        device.displayName +
-                                            if (device.deviceId == myDeviceId) "(この端末)" else "",
-                                    )
-                                },
-                            )
-                        }
-                    }
+                    // 端末は一覧で選んである。ここで選び直せると、
+                    // 見出しと違う端末の枠を取れてしまう
+                    Text(
+                        deviceLabel + "の枠として取ります。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
 
                 if (refused.isNotBlank()) {
@@ -476,7 +480,7 @@ private fun BookDialog(
                     policy = policy,
                     startEpochSec = startSec,
                     endEpochSec = startSec + minutes * 60L,
-                    devices = setOfNotNull(forDevice),
+                    devices = setOfNotNull(deviceId.takeIf { it.isNotBlank() }),
                 )
                 when (result) {
                     is BookingCheck.Ok -> onBooked()
@@ -492,6 +496,7 @@ private fun BookDialog(
 private fun ReservationRow(
     reservation: Reservation,
     label: (String) -> String,
+    deviceLabel: (String) -> String,
     onCancel: () -> Unit,
 ) {
     val now = System.currentTimeMillis() / 1000
@@ -509,6 +514,9 @@ private fun ReservationRow(
                 )
                 Text(
                     formatRange(reservation.startEpochSec, reservation.endEpochSec) +
+                        // どの端末の枠かを出さないと、PC の枠をスマホで見て
+                        // 「効いていない」と思うことになる
+                        reservation.devices.joinToString("") { "  ・" + deviceLabel(it) } +
                         if (active) "  ・いま使えます" else "",
                     style = MaterialTheme.typography.bodySmall,
                     color = if (active) {

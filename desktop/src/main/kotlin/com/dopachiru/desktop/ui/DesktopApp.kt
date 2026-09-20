@@ -45,6 +45,8 @@ import java.awt.Frame
 import java.io.File
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
@@ -81,6 +83,7 @@ import com.dopachiru.core.points.PointPolicy
 import com.dopachiru.core.preset.RulePreset
 import com.dopachiru.core.preset.RulePresets
 import com.dopachiru.core.model.Target
+import com.dopachiru.core.model.ReservationRules
 import com.dopachiru.desktop.DesktopRuntime
 import com.dopachiru.desktop.update.DesktopUpdater
 import com.dopachiru.desktop.platform.BlockStrength
@@ -420,6 +423,11 @@ private fun TodayTab() {
             )
             Spacer(Modifier.height(16.dp))
         }
+
+        // 決めたくなるのは使う直前。設定まで行かせると、
+        // 行き着くころには決める気が消えている
+        OneShotCard()
+        Spacer(Modifier.height(16.dp))
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
@@ -1493,16 +1501,27 @@ private fun BehaviourSection() {
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Column(Modifier.weight(1f)) {
-                Text("一時停止", style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    "何も止めなくなります。トレイからも切り替えられます。",
+                    "一時停止(" + DesktopRuntime.PAUSE_MINUTES + "分)",
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    // 真偽値だと再起動をまたいで残り、自動で立ち上げた朝に
+                    // 「一時停止中」で待っていることになる。必ず明けるようにした
+                    if (settings.pausedUntilSec > 0L) {
+                        "あと" + settings.pauseRemainingMinutes(System.currentTimeMillis() / 1000) +
+                            "分で勝手に戻ります。"
+                    } else {
+                        "何も止めなくなります。" + DesktopRuntime.PAUSE_MINUTES +
+                            "分で勝手に戻るので、切ったまま忘れることはありません。"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             Switch(
-                checked = settings.paused,
-                onCheckedChange = { DesktopRuntime.updateSettings { s -> s.copy(paused = it) } },
+                checked = settings.pausedUntilSec > 0L,
+                onCheckedChange = { DesktopRuntime.pauseFor(if (it) DesktopRuntime.PAUSE_MINUTES else 0) },
             )
         }
         Spacer(Modifier.height(20.dp))
@@ -1534,7 +1553,7 @@ private fun BehaviourSection() {
                     } else {
                         s.copy(
                             developerMode = false,
-                            paused = false,
+                            pausedUntilSec = 0L,
                             blockStrength = if (s.blockStrength == BlockStrength.SUSPEND) {
                                 BlockStrength.MINIMIZE
                             } else {
@@ -1954,8 +1973,17 @@ private fun ReservationSection() {
     val settings by DesktopRuntime.settings.collectAsState()
     val leadMinutes = settings.reservationLeadMinutes
 
-    var picked by remember { mutableStateOf(setOf<String>()) }
-    var showPicker by remember { mutableStateOf(false) }
+    // 手でアプリを選ばせない。予約で開くのは条件に「予約した時間の外」を
+    // 持つルールだけで、それ以外を選べると「取ったのに開かない」が起きる
+    val ruleFile by DesktopRuntime.ruleFile.collectAsState()
+    val me = DesktopRuntime.myDeviceId()
+    val unlockable = remember(ruleFile, me) {
+        ReservationRules.unlockableOn(ruleFile.rules, me)
+    }
+    var pickedRuleUid by remember { mutableStateOf("") }
+    val picked = remember(unlockable, pickedRuleUid) {
+        unlockable.firstOrNull { it.uid == pickedRuleUid }
+    }
     var startSec by remember { mutableStateOf(0L) }
     var durationMinutes by remember { mutableStateOf(30) }
     var refused by remember { mutableStateOf(false) }
@@ -1965,8 +1993,9 @@ private fun ReservationSection() {
     if (startSec < earliest) startSec = earliest
 
     Text(
-        "先に「この時間だけ使う」と決めておく枠です。いまから" +
-            describeLead(leadMinutes) + "より手前には取れません ── 少し先にしか置けないから、冷静に決められます。",
+        "先に「この時間だけ使う」と決めておく枠です。開くのは条件に「予約した時間の外」を" +
+            "持つルールだけ。いまから" + describeLead(leadMinutes) +
+            "より手前には取れません ── 少し先にしか置けないから、冷静に決められます。",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -1994,13 +2023,34 @@ private fun ReservationSection() {
 
     Text("新しく予約する", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
     Spacer(Modifier.height(8.dp))
-    Text("対象アプリ", style = MaterialTheme.typography.labelLarge)
-    if (picked.isEmpty()) {
-        Text("まだ選んでいません", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text("どのルールに穴を開けるか", style = MaterialTheme.typography.labelLarge)
+    if (unlockable.isEmpty()) {
+        Text(
+            // 「塞ぐルール」ではなく「予約の条件を持つルール」。ここを曖昧にすると、
+            // 塞ぐだけのルールを作って「予約が効かない」と思うことになる
+            "この端末には、予約で開くルールがありません。" +
+                "ルールを1つ作って、条件に「予約した時間の外」を入れてください。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     } else {
-        picked.forEach { Text("・" + it, style = MaterialTheme.typography.bodySmall) }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            unlockable.forEach { rule ->
+                FilterChip(
+                    selected = rule.uid == pickedRuleUid,
+                    onClick = { pickedRuleUid = if (rule.uid == pickedRuleUid) "" else rule.uid },
+                    label = { Text(rule.name) },
+                )
+            }
+        }
+        picked?.let {
+            Text(
+                "通るのは " + it.target.packages.joinToString("・").ifBlank { "(対象なし)" },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
-    OutlinedButton(onClick = { showPicker = true }) { Text("選ぶ") }
 
     Spacer(Modifier.height(12.dp))
     Text("いつから", style = MaterialTheme.typography.labelLarge)
@@ -2031,16 +2081,17 @@ private fun ReservationSection() {
     Spacer(Modifier.height(12.dp))
     Button(
         onClick = {
+            val rule = picked ?: return@Button
             val booked = DesktopRuntime.book(
-                target = Target(packages = picked),
+                target = rule.target,
                 startEpochSec = startSec,
                 endEpochSec = startSec + durationMinutes * 60L,
                 minLeadMinutes = leadMinutes,
             )
             refused = booked == null
-            if (booked != null) picked = emptySet()
+            if (booked != null) pickedRuleUid = ""
         },
-        enabled = picked.isNotEmpty(),
+        enabled = picked != null,
     ) { Text("予約する") }
     if (refused) {
         Text(
@@ -2080,13 +2131,6 @@ private fun ReservationSection() {
         }
     }
 
-    if (showPicker) {
-        AppPickerDialog(
-            selected = picked,
-            onToggle = { pkg -> picked = if (pkg in picked) picked - pkg else picked + pkg },
-            onDismiss = { showPicker = false },
-        )
-    }
 }
 
 private val reservationDayFormat: java.time.format.DateTimeFormatter =

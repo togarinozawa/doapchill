@@ -21,7 +21,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PointEventEntity::class,
         SyncStateEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 abstract class DopaDatabase : RoomDatabase() {
@@ -164,6 +164,28 @@ abstract class DopaDatabase : RoomDatabase() {
                 "PRIMARY KEY(`kind`, `uid`))",
         )
 
+        /**
+         * 6→7。ルールに「どの端末で効かせるか」と「いつ消えるか」を足した(ver.0.26)。
+         *
+         * 端末の欄は core の Rule には前からありましたが、**この表に列が無く、
+         * 書くたびに落ちていました。** 端末ごとのルールを作っても、
+         * 読み直した瞬間に「どの端末でも」に化けていたということです。
+         *
+         * 期限のほうは新顔。その場で決める「2時間使ったら1時間休憩」が、
+         * 明日には勝手に消えるようにするためのもの。
+         */
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_6_7_SQL.forEach { db.execSQL(it) }
+            }
+        }
+
+        /** 6→7 で流す SQL。生成物との突き合わせはテストが見ています。 */
+        internal val MIGRATION_6_7_SQL: List<String> = listOf(
+            "ALTER TABLE `rules` ADD COLUMN `devicesCsv` TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE `rules` ADD COLUMN `expiresAtSec` INTEGER NOT NULL DEFAULT 0",
+        )
+
         @Volatile
         private var instance: DopaDatabase? = null
 
@@ -180,6 +202,7 @@ abstract class DopaDatabase : RoomDatabase() {
                         MIGRATION_3_4,
                         MIGRATION_4_5,
                         MIGRATION_5_6,
+                        MIGRATION_6_7,
                     )
                     .build()
                     .also { instance = it }

@@ -33,6 +33,15 @@ data class ReservationPolicy(
     val target: Target,
 
     /**
+     * どのルールの穴を開ける枠か([Rule.uid])。
+     *
+     * 対象を手で選ばせるのをやめて**ルールから作る**ようにしたときに足した。
+     * 手で選ばせると、塞いでいない相手の枠を作れてしまい、取っても何も起きない。
+     * 空なら、この欄より前に手で作った型。
+     */
+    val ruleUid: String = "",
+
+    /**
      * いまからこれだけ先にしか置けない(分)。
      *
      * 直前予約を封じるための待ち。0 にすると「いま開きたいから今すぐ予約」ができて、
@@ -176,4 +185,63 @@ object ReservationRules {
     /** そのアプリを塞ぐルールがあるか。無ければ予約しても意味がない。 */
     fun isGuarded(policy: ReservationPolicy, rules: List<Rule>): Boolean =
         rules.any { it.enabled && RuleOverlap.overlaps(it.target, policy.target) }
+
+    // ---- ルールから枠を出す --------------------------------------------
+
+    /**
+     * 予約すれば使えるようになるルールか。
+     *
+     * **塞いでいるだけでは足りません。** 予約で開くのは
+     * [com.dopachiru.core.condition.types.ReservationCondition]
+     * (「予約した時間の外」)を条件に持つルールだけ ── 持っていないルールは、
+     * 枠を取っても素通りせず、取った本人が「効かない」と思うことになります。
+     *
+     * ここを対象の重なりで判定していたのが元の [isGuarded] で、あれは
+     * 「塞ぐルールがあるか」しか見ていませんでした。並べる相手はこちらが正しい。
+     */
+    fun unlocksByReservation(rule: Rule): Boolean =
+        rule.enabled && mentionsReservation(rule.condition)
+
+    private fun mentionsReservation(node: ConditionNode): Boolean = when (node) {
+        is ConditionNode.Leaf -> node.typeId == RESERVATION_CONDITION_ID
+        is ConditionNode.AllOf -> node.children.any { mentionsReservation(it) }
+        is ConditionNode.AnyOf -> node.children.any { mentionsReservation(it) }
+        is ConditionNode.Not -> mentionsReservation(node.child)
+    }
+
+    /**
+     * 条件の ID を直に書いてあるのは、[ReservationPolicy] が置いてある model から
+     * condition を参照すると、model → condition → model の輪ができるため。
+     * 変えるときは [com.dopachiru.core.condition.types.ReservationCondition] と揃えること。
+     */
+    private const val RESERVATION_CONDITION_ID = "outside_reservation"
+
+    /**
+     * その端末で、予約すれば使えるようになるルール。
+     *
+     * @param deviceId 空なら端末で絞らない(どの端末のぶんも出す)。
+     */
+    fun unlockableOn(rules: List<Rule>, deviceId: String): List<Rule> = rules.filter {
+        unlocksByReservation(it) && (deviceId.isBlank() || it.appliesToDevice(deviceId))
+    }
+
+    /**
+     * ルールに紐づく型を引く。無ければ既定値の型をその場で作る。
+     *
+     * **無いときに空を返さない**のは、ルールがあるのに枠が出ないと
+     * 「予約できないアプリ」に見えるため。数字を触っていないだけで、
+     * 予約そのものは既定値で取れるべき。
+     */
+    fun policyFor(rule: Rule, policies: List<ReservationPolicy>): ReservationPolicy =
+        policies.firstOrNull { it.ruleUid.isNotBlank() && it.ruleUid == rule.uid }
+            ?: policies.firstOrNull { it.ruleUid.isBlank() && RuleOverlap.overlaps(it.target, rule.target) }
+            ?: defaultFor(rule)
+
+    /** ルールから作る既定の型。保存はしない ── 数字を触ったときに初めて残る。 */
+    fun defaultFor(rule: Rule): ReservationPolicy = ReservationPolicy(
+        id = "rule:" + rule.uid.ifBlank { rule.id.toString() },
+        label = rule.name,
+        target = rule.target,
+        ruleUid = rule.uid,
+    )
 }

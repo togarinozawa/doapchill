@@ -209,6 +209,9 @@ object DopaRuntime {
         scope.launch {
             // 同期を始める前に、uid の無い古いルールへ振っておく
             rules.backfillUids()
+            // その場で決めた枠のうち、期限が来たものを落とす。
+            // 起動時にやるのは、寝ているあいだに明けるのがふつうだから
+            runCatching { rules.purgeExpired() }
             usage.warmUp()
             declarations.warmUp()
             // 再起動をまたいでも学習中のままでいられるように、窓を読み直す
@@ -958,6 +961,10 @@ object DopaRuntime {
         if (now - lastSyncAtMs < SYNC_EVERY_MS) return
         lastSyncAtMs = now
         scope.launch {
+            // 同期と同じ刻みに乗せる。その場の枠の期限は分単位なので、
+            // 専用の刻みを足すほどのことではない
+            runCatching { rules.purgeExpired() }
+
             val settings = this@DopaRuntime.settings.syncSettings.first()
             if (!settings.enabled || !settings.isConfigured) return@launch
             runCatching { sync.syncNow() }
