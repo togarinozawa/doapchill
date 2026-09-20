@@ -5,6 +5,7 @@ import com.dopachiru.core.sync.AppInfo
 import com.dopachiru.core.sync.DeviceInfo
 import com.dopachiru.core.sync.Envelope
 import com.dopachiru.core.sync.MergeAction
+import com.dopachiru.core.sync.RuleStates
 import com.dopachiru.core.sync.SyncApi
 import com.dopachiru.core.sync.SyncKinds
 import com.dopachiru.core.sync.SyncMapper
@@ -202,6 +203,21 @@ object DesktopSync {
             }
         }
 
+        // ---- ルールが効いているか ---------------------------------------
+        // **自分のぶんは入れない。** 同じルールが端末をまたいで同じ uid を持つので、
+        // 自分の状態を読み戻すと、一度効いたら永久に外れなくなる
+        for (envelope in response.of(SyncKinds.RULE_STATES)) {
+            val localAt = next.stampOf(SyncKinds.RULE_STATES, envelope.uid)?.updatedAt
+            if (decideMerge(envelope, localAt) != MergeAction.Apply) continue
+            val state = SyncMapper.ruleStateOf(envelope) ?: continue
+            if (state.deviceId == settings.deviceId) continue
+            next = next.copy(
+                ruleStates = next.ruleStates.filterNot { it.uid == state.uid } + state,
+            ).withStamp(SyncKinds.RULE_STATES, envelope.uid, SyncStamp(envelope.updatedAt, false))
+            pulled++
+        }
+        next = next.copy(ruleStates = RuleStates.prune(next.ruleStates, nowSec()))
+
         // 古い墓標を落とす。長く寝ていた端末が復活させない程度には残す
         val cutoff = nowSec() - TOMBSTONE_KEEP_SEC
         next = next.copy(
@@ -318,6 +334,17 @@ object DesktopSync {
             )
         }
 
+        // ルールが効いているか。**この端末のぶんだけ送る** ──
+        // 受け取ったぶんまで送り返すと、消えた端末の状態が生き続ける
+        val ruleStates = file.ruleStates
+            .filter { it.deviceId == settings.deviceId }
+            .map { state ->
+                SyncMapper.ruleStateEnvelope(
+                    state,
+                    file.stampOf(SyncKinds.RULE_STATES, state.uid)?.updatedAt ?: nowSec(),
+                )
+            }
+
         return mapOf(
             SyncKinds.RULES to rules,
             SyncKinds.TAGS to tags,
@@ -325,6 +352,7 @@ object DesktopSync {
             SyncKinds.DEVICES to listOf(self),
             SyncKinds.RESERVATIONS to reservationEnvelopes,
             SyncKinds.COMMANDS to commands,
+            SyncKinds.RULE_STATES to ruleStates,
         )
     }
 

@@ -31,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -59,6 +60,7 @@ import com.dopachiru.core.model.MainAction
 import com.dopachiru.core.gate.ChangeKind
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.ConditionTree
+import com.dopachiru.core.model.RuleLinks
 import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.RuleOverlap
 import com.dopachiru.core.sync.DeviceInfo
@@ -270,6 +272,20 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(exceptSites = it.exceptSites - site) }
 
     fun setCondition(condition: ConditionNode) = _state.update { it.copy(condition = condition) }
+
+    /**
+     * 「ほかの端末で効いているあいだ、この端末でも効かせる」。
+     *
+     * 使いすぎを止めるルールは端末を替えれば逃げられる ── 持ち時間が端末ごとに
+     * 1本ずつあるため。ルールを配っても直りません(配られるのは決まりごとであって、
+     * 使った時間ではない)。効いているという事実のほうを見る条件を、
+     * 元の条件との **OR** で足します。[RuleLinks]
+     */
+    fun setLinked(on: Boolean) = _state.update {
+        it.copy(
+            condition = if (on) RuleLinks.withLink(it.condition) else RuleLinks.withoutLink(it.condition),
+        )
+    }
 
     fun setConsequence(consequence: Consequence) =
         _state.update { it.copy(consequence = consequence) }
@@ -528,6 +544,28 @@ private fun DeviceScopeSection(state: RuleEditState, viewModel: RuleEditViewMode
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+
+    Spacer(Modifier.height(12.dp))
+    val linked = remember(state.condition) { RuleLinks.contains(state.condition) }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("端末をまたいで効かせる", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                // ルールを配っても「使った時間」は配られない。
+                // 効いているという事実のほうを配って塞ぐ
+                if (linked) {
+                    "どれかの端末でこのルールが効いているあいだ、ほかの端末でも効きます。" +
+                        "同期が届かないあいだは、それぞれの端末の中だけで判定します。"
+                } else {
+                    "いまは端末ごとに別々です。スマホで使い切っても、PC では数え直しになります。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = linked, onCheckedChange = viewModel::setLinked)
+    }
+
     Spacer(Modifier.height(20.dp))
 }
 

@@ -6,6 +6,7 @@ import com.dopachiru.core.model.Command
 import com.dopachiru.core.model.FocusSettings
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.sync.DeviceInfo
+import com.dopachiru.core.sync.RuleState
 import com.dopachiru.core.sync.SyncSettings
 import com.dopachiru.core.model.Reservation
 import com.dopachiru.core.model.Rule
@@ -141,6 +142,15 @@ data class RuleFile(
      * 掃除は [DesktopSync] が期限で落とす。
      */
     val commands: List<Command> = emptyList(),
+
+    /**
+     * 「そのルールが、その端末で、いま効いているか」。自分のぶんも他の端末のぶんも。
+     *
+     * ルールを配っても**使った時間は配られない**ので、スマホで持ち時間を使い切っても
+     * PC では数え直しになる。効いているという事実のほうを配って塞ぐ。
+     * 締め切りつきなので、古いものを残す意味はない。
+     */
+    val ruleStates: List<RuleState> = emptyList(),
 
     /**
      * 同期の覚え書き。Android の `sync_state` 表にあたるもの。

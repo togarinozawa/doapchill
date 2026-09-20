@@ -14,6 +14,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.AssistChip
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.runtime.collectAsState
+import com.dopachiru.runtime.DopaRuntime
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -177,6 +180,11 @@ private fun ParamField(
                 onChange = { onValueChange(spec.key, it) },
             )
 
+            is ParamSpec.RuleRefParam -> RuleRefPicker(
+                selected = params.string(spec.key, spec.default),
+                onChange = { onValueChange(spec.key, it) },
+            )
+
             is ParamSpec.BoolParam -> Unit // 上で描画済み
         }
     }
@@ -327,5 +335,35 @@ private fun formatMinutes(minutes: Int): String {
     return buildString {
         if (h > 0) append("${h}時間")
         if (m > 0 || h == 0) append("${m}分")
+    }
+}
+
+/**
+ * ほかのルールを1つ指す。
+ *
+ * **「このルール自身」を先頭に置いてある**のは、それがいちばん多い使い方だから
+ * ── 同じルールが端末をまたいで同じ uid を持つので、自身を指せば
+ * 「どちらの端末で使い切っても両方閉まる」になる。
+ *
+ * 保存するのは uid。番号(id)は端末ごとに独立して振られるので、
+ * 端末をまたぐ話に使うと別の端末では違うルールを指す。
+ */
+@Composable
+private fun RuleRefPicker(selected: String, onChange: (String) -> Unit) {
+    val rules by DopaRuntime.rules.rules.collectAsState(initial = emptyList())
+
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = selected.isBlank(),
+            onClick = { onChange("") },
+            label = { Text("このルール自身") },
+        )
+        rules.filter { it.uid.isNotBlank() }.forEach { rule ->
+            FilterChip(
+                selected = selected == rule.uid,
+                onClick = { onChange(if (selected == rule.uid) "" else rule.uid) },
+                label = { Text(rule.name) },
+            )
+        }
     }
 }

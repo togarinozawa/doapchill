@@ -20,6 +20,7 @@ import com.dopachiru.core.model.ReservationPolicy
 import com.dopachiru.core.model.ReservationRules
 import com.dopachiru.core.points.PointPolicy
 import com.dopachiru.core.sync.DeviceInfo
+import com.dopachiru.core.sync.RuleState
 import com.dopachiru.core.sync.SyncSettings
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -62,6 +63,7 @@ class SettingsStore(private val context: Context) {
         val deviceName = stringPreferencesKey("device_name")
         val devicesJson = stringPreferencesKey("devices_json")
         val commandsJson = stringPreferencesKey("commands_json")
+        val ruleStatesJson = stringPreferencesKey("rule_states_json")
         val focusSchedulesJson = stringPreferencesKey("focus_schedules_json")
         val focusScheduleRunsJson = stringPreferencesKey("focus_schedule_runs_json")
         val reservationPoliciesJson = stringPreferencesKey("reservation_policies_json")
@@ -244,6 +246,24 @@ class SettingsStore(private val context: Context) {
     suspend fun setCommands(list: List<Command>) {
         val encoded = DopaCore.json.encodeToString(ListSerializer(Command.serializer()), list)
         context.dataStore.edit { it[Keys.commandsJson] = encoded }
+    }
+
+    /**
+     * 「そのルールが、その端末で、いま効いているか」。自分のぶんも他の端末のぶんも。
+     *
+     * 使いすぎを止めるルールは端末を替えれば逃げられる ── 持ち時間が端末ごとに
+     * 1本ずつあるため。効いているという事実を配って塞ぐ。[RuleState]
+     */
+    val ruleStates: Flow<List<RuleState>> = context.dataStore.data.map { prefs ->
+        val raw = prefs[Keys.ruleStatesJson] ?: return@map emptyList()
+        runCatching {
+            DopaCore.json.decodeFromString(ListSerializer(RuleState.serializer()), raw)
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun setRuleStates(list: List<RuleState>) {
+        val encoded = DopaCore.json.encodeToString(ListSerializer(RuleState.serializer()), list)
+        context.dataStore.edit { it[Keys.ruleStatesJson] = encoded }
     }
 
     /**

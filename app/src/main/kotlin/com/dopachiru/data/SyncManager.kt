@@ -6,6 +6,7 @@ import com.dopachiru.core.sync.AppInfo
 import com.dopachiru.core.sync.DeviceInfo
 import com.dopachiru.core.sync.Envelope
 import com.dopachiru.core.sync.MergeAction
+import com.dopachiru.core.sync.RuleStates
 import com.dopachiru.core.sync.SyncApi
 import com.dopachiru.core.sync.SyncKinds
 import com.dopachiru.core.sync.SyncMapper
@@ -73,12 +74,14 @@ class SyncManager(
         }
 
         val pulled = apply(
+            settings,
             response.of(SyncKinds.RULES),
             response.of(SyncKinds.TAGS),
             response.of(SyncKinds.APPS),
             response.of(SyncKinds.DEVICES),
             response.of(SyncKinds.RESERVATIONS),
             response.of(SyncKinds.COMMANDS),
+            response.of(SyncKinds.RULE_STATES),
         )
 
         // 実績は別の口。落ちても同期そのものは成立したことにする ──
@@ -182,6 +185,12 @@ class SyncManager(
             SyncMapper.commandEnvelope(command, stampFor(SyncKinds.COMMANDS, command.uid))
         }
 
+        // ルールが効いているか。**この端末のぶんだけ送ります** ──
+        // 受け取ったぶんまで送り返すと、消えた端末の状態が生き続ける
+        val stateEnvelopes = settingsStore.ruleStates.first()
+            .filter { it.deviceId == settings.deviceId }
+            .map { SyncMapper.ruleStateEnvelope(it, stampFor(SyncKinds.RULE_STATES, it.uid)) }
+
         return mapOf(
             SyncKinds.RULES to ruleEnvelopes,
             SyncKinds.TAGS to tagEnvelopes,
@@ -189,6 +198,7 @@ class SyncManager(
             SyncKinds.DEVICES to listOf(self),
             SyncKinds.RESERVATIONS to reservationEnvelopes,
             SyncKinds.COMMANDS to commandEnvelopes,
+            SyncKinds.RULE_STATES to stateEnvelopes,
         )
     }
 
@@ -258,12 +268,14 @@ class SyncManager(
     // ---- 受け取ったものを入れる --------------------------------------------
 
     private suspend fun apply(
+        settings: SyncSettings,
         incomingRules: List<Envelope>,
         incomingTags: List<Envelope>,
         incomingApps: List<Envelope>,
         incomingDevices: List<Envelope>,
         incomingReservations: List<Envelope>,
         incomingCommands: List<Envelope>,
+        incomingRuleStates: List<Envelope>,
     ): Int {
         var applied = 0
         val localRuleTimes = rules.updatedAtByUid()
@@ -323,6 +335,27 @@ class SyncManager(
                 applied++
             }
             settingsStore.setDevices(roster)
+        }
+
+        // ---- ルールが効いているか ---------------------------------------
+        //
+        // **上書きで持ちます。** 締め切りつきの値なので、古いものを残す意味が無い。
+        // 自分のぶんは自分が書くので、受け取ったぶんだけ入れ替える
+        if (incomingRuleStates.isNotEmpty()) {
+            val now = System.currentTimeMillis() / 1000
+            var states = settingsStore.ruleStates.first()
+            for (envelope in incomingRuleStates) {
+                val local = syncStateDao.get(SyncKinds.RULE_STATES, envelope.uid)?.updatedAt
+                if (decideMerge(envelope, local) != MergeAction.Apply) continue
+                val state = SyncMapper.ruleStateOf(envelope) ?: continue
+                if (state.deviceId == settings.deviceId) continue
+                states = states.filterNot { it.uid == state.uid } + state
+                syncStateDao.put(
+                    SyncStateEntity(SyncKinds.RULE_STATES, envelope.uid, envelope.updatedAt, false),
+                )
+                applied++
+            }
+            settingsStore.setRuleStates(RuleStates.prune(states, now))
         }
 
         // ---- 予約 ------------------------------------------------------

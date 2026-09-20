@@ -120,6 +120,22 @@ object SyncMapper {
             .copy(deviceId = envelope.uid)
     }.getOrNull()
 
+    // ---- ルールが効いているか ---------------------------------------------
+
+    /**
+     * 鍵は「ルール + 端末」。同じルールが端末ごとに別の状態を持つので、
+     * ルールだけを鍵にすると端末どうしで上書き合戦になる。
+     */
+    fun ruleStateEnvelope(state: RuleState, updatedAt: Long): Envelope = Envelope(
+        uid = state.uid,
+        updatedAt = updatedAt,
+        payload = SyncApi.JSON.encodeToJsonElement(RuleState.serializer(), state) as JsonObject,
+    )
+
+    fun ruleStateOf(envelope: Envelope): RuleState? = runCatching {
+        SyncApi.JSON.decodeFromJsonElement(RuleState.serializer(), envelope.payload)
+    }.getOrNull()?.takeIf { it.ruleUid.isNotBlank() && it.deviceId.isNotBlank() }
+
     // ---- 予約 -------------------------------------------------------------
 
     fun reservationEnvelope(

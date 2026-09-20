@@ -62,6 +62,29 @@ data class EvalContext(
     val currentRuleId: Long = 0L,
 
     /**
+     * いま評価しているルールの uid。エンジンが差し込む。
+     *
+     * [currentRuleId] は端末ごとに独立して振られるので、**端末をまたぐ話には使えない**。
+     * 端末間の連動([com.dopachiru.core.condition.types.LinkedRuleCondition])は
+     * こちらを見る。
+     */
+    val currentRuleUid: String = "",
+
+    /**
+     * そのルールが、**自分以外の端末**でいま効いているか。
+     *
+     * 使いすぎを止めるルールは端末を替えれば逃げられる ── 持ち時間が端末ごとに
+     * 1本ずつあるため。効いているという事実を配って、向こうで効いているあいだ
+     * こちらも成立させるための口。
+     *
+     * **これだけがネットに依存する条件です。** 渡されなければ常に偽 ──
+     * 圏外で塞がるより、圏外で緩むほうへ倒してあります(上乗せであって土台ではない)。
+     *
+     * @param deviceId 特定の端末に絞るなら渡す。空ならどの端末でも。
+     */
+    val linkedActiveOf: (ruleUid: String, deviceId: String) -> Boolean = { _, _ -> false },
+
+    /**
      * そのルールの対象アプリをまとめて数えた、休憩をはさむまでの使用時間(分)。
      *
      * 対象の解決(タグからアプリを引く)も実測の持ち方も端末側の都合なので、
@@ -123,4 +146,14 @@ data class EvalContext(
      * 見つけて強度を上げるには、「効いていない」を測れる必要がある。
      */
     val overrideCountOf: (ruleId: Long) -> Int = { 0 },
-)
+) {
+    /**
+     * そのルールを評価するための文脈。
+     *
+     * どのルールを見ているかを条件に伝えるため。確率の抽選や慣れの判定が
+     * ルールごとに独立していないと、隣のルールの結果を巻き込む。
+     * uid のほうは端末をまたぐ話(連動)で要る。
+     */
+    fun forRule(rule: com.dopachiru.core.model.Rule): EvalContext =
+        copy(currentRuleId = rule.id, currentRuleUid = rule.uid)
+}

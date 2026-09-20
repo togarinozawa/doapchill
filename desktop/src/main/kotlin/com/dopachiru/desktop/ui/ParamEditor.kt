@@ -14,6 +14,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.runtime.collectAsState
+import com.dopachiru.desktop.DesktopRuntime
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -209,6 +212,29 @@ private fun ParamField(
                 policy = params.resetPolicy(spec.key, spec.default),
                 onChange = { onValueChange(spec.key, it) },
             )
+
+            is ParamSpec.RuleRefParam -> {
+                // 「このルール自身」が先頭。同じルールが端末をまたいで同じ uid を
+                // 持つので、自身を指せば「どちらで使い切っても両方閉まる」になる
+                val rules = DesktopRuntime.ruleFile.collectAsState().value.rules
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = params.string(spec.key, spec.default).isBlank(),
+                        onClick = { onValueChange(spec.key, "") },
+                        label = { Text("このルール自身") },
+                    )
+                    rules.filter { it.uid.isNotBlank() }.forEach { rule ->
+                        val current = params.string(spec.key, spec.default)
+                        FilterChip(
+                            selected = current == rule.uid,
+                            onClick = {
+                                onValueChange(spec.key, if (current == rule.uid) "" else rule.uid)
+                            },
+                            label = { Text(rule.name) },
+                        )
+                    }
+                }
+            }
 
             is ParamSpec.BoolParam -> Unit // 上で描画済み
         }

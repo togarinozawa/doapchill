@@ -92,7 +92,7 @@ class RuleEngine {
             if (!rule.target.matches(ctx.packageName, tags, ctx.url)) continue
             // どのルールを見ているかを条件に伝える。確率の抽選や慣れの判定が
             // ルールごとに独立していないと、隣のルールの結果を巻き込む
-            if (!evaluate(rule.condition, ctx.copy(currentRuleId = rule.id))) continue
+            if (!evaluate(rule.condition, ctx.forRule(rule))) continue
 
             val action = ActionRegistry[rule.actionId] ?: continue
             if (best == null || action.severity > best.action.severity) {
@@ -130,7 +130,7 @@ class RuleEngine {
         for (rule in rules) {
             if (!rule.enabled) continue
             if (!rule.target.matches(ctx.packageName, tags, ctx.url)) continue
-            val at = nextChangeAt(rule.condition, ctx.copy(currentRuleId = rule.id)) ?: return null
+            val at = nextChangeAt(rule.condition, ctx.forRule(rule)) ?: return null
             if (earliest == null || at.isBefore(earliest)) earliest = at
         }
         return earliest

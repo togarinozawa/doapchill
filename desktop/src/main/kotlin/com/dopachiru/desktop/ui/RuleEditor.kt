@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -22,6 +23,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -50,6 +52,7 @@ import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.LockScope
 import com.dopachiru.core.model.NodePath
 import com.dopachiru.core.model.Rule
+import com.dopachiru.core.model.RuleLinks
 import com.dopachiru.core.model.RuleCheck
 import com.dopachiru.core.model.RuleOverlap
 import com.dopachiru.core.model.Target
@@ -123,6 +126,33 @@ fun RuleEditorDialog(
                             )
                         }
                     }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Switch(
+                            checked = RuleLinks.contains(draft.condition),
+                            onCheckedChange = { on ->
+                                draft = draft.copy(
+                                    condition = if (on) {
+                                        RuleLinks.withLink(draft.condition)
+                                    } else {
+                                        RuleLinks.withoutLink(draft.condition)
+                                    },
+                                )
+                            },
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text("端末をまたいで効かせる", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                // ルールを配っても「使った時間」は配られない。
+                                // 効いているという事実のほうを配って塞ぐ
+                                "どれかの端末でこのルールが効いているあいだ、ほかの端末でも効きます。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+
                     if (draft.devices.isNotEmpty() && me !in draft.devices) {
                         Spacer(Modifier.height(4.dp))
                         Text(

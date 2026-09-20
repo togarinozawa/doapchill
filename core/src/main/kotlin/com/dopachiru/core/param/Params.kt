@@ -81,6 +81,7 @@ value class Params(val json: JsonObject) {
                         is ParamSpec.DurationParam -> JsonPrimitive(spec.default)
                         is ParamSpec.BoolParam -> JsonPrimitive(spec.default)
                         is ParamSpec.TextParam -> JsonPrimitive(spec.default)
+                        is ParamSpec.RuleRefParam -> JsonPrimitive(spec.default)
                         is ParamSpec.EnumParam -> JsonPrimitive(spec.default)
                         is ParamSpec.DayOfWeekParam -> JsonArray(spec.default.map { JsonPrimitive(it) })
                         is ParamSpec.PackagesParam -> JsonArray(spec.default.map { JsonPrimitive(it) })

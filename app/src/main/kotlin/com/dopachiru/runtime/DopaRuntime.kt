@@ -34,6 +34,9 @@ import com.dopachiru.BuildConfig
 import com.dopachiru.core.sync.DeviceInfo
 import com.dopachiru.core.sync.Enrollment
 import com.dopachiru.core.sync.SyncApi
+import com.dopachiru.core.sync.RuleState
+import com.dopachiru.core.sync.RuleStates
+import com.dopachiru.core.model.RuleLinks
 import com.dopachiru.core.sync.SyncKinds
 import com.dopachiru.core.time.ResetPolicy
 import com.dopachiru.data.CalendarReader
@@ -239,6 +242,7 @@ object DopaRuntime {
         }
         enrollIfNeeded()
         scope.launch { rules.tagsByPackage.collect { tagCache = it } }
+        scope.launch { settings.ruleStates.collect { ruleStateCache = it } }
         scope.launch {
             settings.gates.collect {
                 gateCache = it
@@ -294,6 +298,15 @@ object DopaRuntime {
             }
         }
     }
+
+    /**
+     * 「そのルールが、その端末で、いま効いているか」。判定から同期的に読むので持っておく。
+     *
+     * 自分のぶんも入っているが、読むときに自分は外す ── 同じルールが端末をまたいで
+     * 同じ uid を持つので、外さないと自分の状態を自分で読んで永久に外れない。
+     */
+    @Volatile
+    private var ruleStateCache: List<RuleState> = emptyList()
 
     /** この端末の deviceId。同期を設定していなければ空。 */
     @Volatile
@@ -402,6 +415,17 @@ object DopaRuntime {
         minutesSinceBreakOf = { ruleId, breakMinutes -> minutesSinceBreak(ruleId, breakMinutes) },
         windowUsageOf = { ruleId, windowMinutes -> windowUsage(ruleId, windowMinutes) },
         minutesSinceLastUseOf = { ruleId -> minutesSinceLastUse(ruleId) },
+        // 別の端末でそのルールが効いているか。**ここだけがネットに依存する。**
+        // 届いていなければ偽 ── 圏外で塞がるより、圏外で緩むほうへ倒してある
+        linkedActiveOf = { ruleUid, deviceId ->
+            RuleStates.isActive(
+                states = ruleStateCache,
+                ruleUid = ruleUid,
+                nowSec = System.currentTimeMillis() / 1000,
+                myDeviceId = myDeviceId,
+                deviceId = deviceId,
+            )
+        },
         withinReservation = reservations.covers(
             packageName,
             tagCache[packageName] ?: emptySet(),
@@ -878,6 +902,7 @@ object DopaRuntime {
                 stats.updateTotalScreenMinutes(minutes)
             }
         }
+        publishRuleStatesIfDue()
         syncIfDue()
         startScheduledFocusIfDue()
         return if (batterySaverMode) SAVER_TICK_MS else ACTIVE_TICK_MS
@@ -970,6 +995,76 @@ object DopaRuntime {
             runCatching { sync.syncNow() }
             runInbox()
         }
+    }
+
+    @Volatile
+    private var lastPublishAtMs = 0L
+
+    /**
+     * 連動の状態を見直す。**変わっていたら、次の同期を待たずに送る。**
+     *
+     * 同期の刻み(5分)に任せると、向こうが塞がるまで最大で5分+相手の刻みぶん
+     * かかります。閉まるべき瞬間に閉まらないのはこの機能の値打ちを削るので、
+     * 変わったときだけ刻みを飛ばします。見直し自体は1分おき ── 対象は
+     * 「見られているルール」だけなので軽い。
+     */
+    private fun publishRuleStatesIfDue() {
+        val now = System.currentTimeMillis()
+        if (now - lastPublishAtMs < PUBLISH_EVERY_MS) return
+        lastPublishAtMs = now
+        scope.launch {
+            val changed = runCatching { publishRuleStates() }.getOrDefault(false)
+            // 変わったのに5分待たせない。次の syncIfDue がその場で通る
+            if (changed) lastSyncAtMs = 0L
+        }
+    }
+
+    /**
+     * この端末でどのルールが効いているかを書き出す。次の同期で配られる。
+     *
+     * ## 自分の手柄だけを書く
+     *
+     * 評価するときは**連動そのものを外します**([EvalContext.linkedActiveOf] を偽に
+     * 固定)。外さないと、A が「B が効いているから効いている」と書き、B が
+     * 「A が効いているから効いている」と書いて、どちらも永久に外れません。
+     *
+     * ## 見られているルールだけ書く
+     *
+     * どこからも指されていないルールの状態を配っても誰も読まない。
+     * 毎回全部書くと、何も起きていない日でも同期のたびに行が動きます。
+     */
+    private suspend fun publishRuleStates(): Boolean {
+        val deviceId = myDeviceId
+        if (deviceId.isBlank()) return false
+
+        val all = ruleCache
+        val watched = RuleLinks.watchedUids(all)
+        if (watched.isEmpty()) return false
+
+        val now = System.currentTimeMillis() / 1000
+        val nowTime = LocalDateTime.now()
+        // 連動を外した文脈。ここで外さないと、向こうの状態が自分に跳ね返る
+        val base = buildContext("", nowTime).copy(linkedActiveOf = { _, _ -> false })
+
+        var states = settings.ruleStates.first()
+        var changed = false
+
+        for (rule in all) {
+            if (rule.uid !in watched) continue
+            if (!rule.appliesToDevice(deviceId)) continue
+
+            val active = rule.enabled && engine.evaluate(rule.condition, base.forRule(rule))
+            val previous = states.firstOrNull { it.ruleUid == rule.uid && it.deviceId == deviceId }
+            if (!RuleStates.shouldPublish(previous, active, now)) continue
+
+            val next = RuleStates.publish(rule.uid, deviceId, active, now)
+            states = states.filterNot { it.uid == next.uid } + next
+            sync.touch(SyncKinds.RULE_STATES, next.uid)
+            changed = true
+        }
+
+        if (changed) settings.setRuleStates(RuleStates.prune(states, now))
+        return changed
     }
 
     /**
@@ -1211,6 +1306,15 @@ object DopaRuntime {
      * Windows(1分)より長いのは、スマホが主に**頼む側**だから ── 受け取りが
      * 数分遅れても困らず、通信と電池のほうが惜しい。頼んだ瞬間には別途すぐ送ります。
      */
+    /**
+     * 連動の状態を見直す間隔。
+     *
+     * 同期(5分)より短い。変わったときだけ同期を前倒しするので、
+     * 見直しが遅いとそのぶん閉まるのが遅れる。見るのは
+     * 「ほかから見られているルール」だけなので、軽い。
+     */
+    private const val PUBLISH_EVERY_MS = 60_000L
+
     private const val SYNC_EVERY_MS = 5L * 60 * 1000
 
     private const val SAVER_TICK_MS = 180_000L

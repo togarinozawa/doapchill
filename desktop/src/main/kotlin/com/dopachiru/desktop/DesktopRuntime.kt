@@ -34,6 +34,7 @@ import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Lockouts
 import com.dopachiru.core.model.Reservation
 import com.dopachiru.core.model.Reservations
+import com.dopachiru.core.model.RuleLinks
 import com.dopachiru.core.model.Rules
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.param.Params
@@ -47,6 +48,7 @@ import com.dopachiru.desktop.data.RuleFile
 import com.dopachiru.desktop.data.DesktopSync
 import com.dopachiru.core.sync.UsageDay
 import com.dopachiru.desktop.data.SyncStamp
+import com.dopachiru.core.sync.RuleStates
 import com.dopachiru.core.sync.SyncKinds
 import com.dopachiru.desktop.data.Stores
 import com.dopachiru.desktop.data.UsageLedger
@@ -466,6 +468,81 @@ object DesktopRuntime {
         }
     }
 
+    /**
+     * 判定に渡す文脈。
+     *
+     * **配る値を計算するときは [linked] を false にします。** 相手が効いているから
+     * 自分も効いている、を配ると、A が B を見て B が A を見て、どちらも外れません。
+     */
+    private fun evalContext(
+        processName: String,
+        url: String?,
+        file: RuleFile,
+        nowSec: Long,
+        linked: Boolean = true,
+    ) = EvalContext(
+        now = LocalDateTime.now(),
+        packageName = processName,
+        url = url,
+        usage = ledger.snapshotFor(processName),
+        declaredRemainingMinutes = declarations.remainingMinutes(processName),
+        previousPackage = ledger.previousProcess(),
+        sessionSeed = ledger.currentSessionSeed(),
+        minutesSinceBreakOf = { ruleId, breakMinutes ->
+            val rule = file.rules.firstOrNull { it.id == ruleId }
+            if (rule == null) {
+                0
+            } else {
+                ledger.minutesSinceBreak(breakMinutes) { name ->
+                    rule.target.matches(name, file.tags[name] ?: emptySet())
+                }
+            }
+        },
+        windowUsageOf = { ruleId, windowMinutes ->
+            val rule = file.rules.firstOrNull { it.id == ruleId }
+            if (rule == null) {
+                WindowUsage.NONE
+            } else {
+                ledger.windowUsage(windowMinutes) { name ->
+                    rule.target.matches(name, file.tags[name] ?: emptySet())
+                }
+            }
+        },
+        minutesSinceLastUseOf = { ruleId ->
+            val rule = file.rules.firstOrNull { it.id == ruleId }
+            if (rule == null) {
+                null
+            } else {
+                ledger.minutesSinceLastUse { name ->
+                    rule.target.matches(name, file.tags[name] ?: emptySet())
+                }
+            }
+        },
+        // 別の端末でそのルールが効いているか。**ここだけがネットに依存する。**
+        // 届いていなければ偽 ── 圏外で塞がるより、圏外で緩むほうへ倒してある
+        linkedActiveOf = { ruleUid, deviceId ->
+            linked && RuleStates.isActive(
+                states = file.ruleStates,
+                ruleUid = ruleUid,
+                nowSec = nowSec,
+                myDeviceId = myDeviceId(),
+                deviceId = deviceId,
+            )
+        },
+        withinReservation = Reservations.covers(
+            _reservations.value,
+            processName,
+            file.tags[processName] ?: emptySet(),
+            nowSec,
+            url,
+            deviceId = myDeviceId(),
+        ),
+        // Windows にはアプリ内の画面を見分ける手立てが無い。ブラウザのショートは
+        // sites(URL)側で当たるので、ここは空でよい
+        screenSignals = emptySet(),
+        overrideCountOf = { ruleId -> overrideCounts[ruleId] ?: 0 },
+    )
+
     private fun nowSec(): Long = System.currentTimeMillis() / 1000
 
     // ------------------------------------------------------------------
@@ -753,11 +830,65 @@ object DesktopRuntime {
         updateRules { it.copy(rules = Rules.prune(it.rules, now)) }
     }
 
+    /**
+     * この端末でどのルールが効いているかを書き出す。次の同期で配られる。
+     *
+     * ## 自分の手柄だけを書く
+     *
+     * 評価するときは**連動そのものを外します**([evalContext] の linked = false)。
+     * 外さないと、A が「B が効いているから効いている」と書き、B が
+     * 「A が効いているから効いている」と書いて、どちらも永久に外れません。
+     *
+     * ## 見られているルールだけ書く
+     *
+     * どこからも指されていないルールの状態を配っても誰も読みません。
+     */
+    private fun publishRuleStates() {
+        val deviceId = myDeviceId()
+        if (deviceId.isBlank()) return
+
+        val file = _ruleFile.value
+        val watched = RuleLinks.watchedUids(file.rules)
+        if (watched.isEmpty()) return
+
+        val now = nowSec()
+        // 連動を外した文脈。ここで外さないと、向こうの状態が自分に跳ね返る
+        val base = evalContext("", null, file, now, linked = false)
+
+        var states = file.ruleStates
+        var changed = false
+
+        for (rule in file.rules) {
+            if (rule.uid !in watched) continue
+            if (!rule.appliesToDevice(deviceId)) continue
+
+            val active = rule.enabled && engine.evaluate(rule.condition, base.forRule(rule))
+            val previous = states.firstOrNull { it.ruleUid == rule.uid && it.deviceId == deviceId }
+            if (!RuleStates.shouldPublish(previous, active, now)) continue
+
+            val next = RuleStates.publish(rule.uid, deviceId, active, now)
+            states = states.filterNot { it.uid == next.uid } + next
+            changed = true
+        }
+
+        if (!changed) return
+        val pruned = RuleStates.prune(states, now)
+        updateRules { current ->
+            var updated = current.copy(ruleStates = pruned)
+            for (state in pruned) {
+                if (state.deviceId != deviceId) continue
+                updated = updated.withStamp(SyncKinds.RULE_STATES, state.uid, SyncStamp(now, false))
+            }
+            updated
+        }
+    }
+
     private fun startSyncLoop() = scope.launch {
         while (isActive) {
             delay(SYNC_EVERY_MS)
             // 同期と同じ刻みに乗せる。期限は分単位なので専用の刻みは要らない
             pruneExpiredRules()
+            publishRuleStates()
             val sync = _settings.value.sync
             if (!sync.enabled || !sync.isConfigured) continue
             runCatching { syncNow() }
@@ -1565,57 +1696,7 @@ object DesktopRuntime {
         if (now < (overrideUntil[fg.processName] ?: 0L)) return
         if (now < (dismissedUntil[fg.processName] ?: 0L)) return
 
-        val context = EvalContext(
-            now = LocalDateTime.now(),
-            packageName = fg.processName,
-            url = url,
-            usage = ledger.snapshotFor(fg.processName),
-            declaredRemainingMinutes = declarations.remainingMinutes(fg.processName),
-            previousPackage = ledger.previousProcess(),
-            sessionSeed = ledger.currentSessionSeed(),
-            minutesSinceBreakOf = { ruleId, breakMinutes ->
-                val rule = file.rules.firstOrNull { it.id == ruleId }
-                if (rule == null) {
-                    0
-                } else {
-                    ledger.minutesSinceBreak(breakMinutes) { name ->
-                        rule.target.matches(name, file.tags[name] ?: emptySet())
-                    }
-                }
-            },
-            windowUsageOf = { ruleId, windowMinutes ->
-                val rule = file.rules.firstOrNull { it.id == ruleId }
-                if (rule == null) {
-                    WindowUsage.NONE
-                } else {
-                    ledger.windowUsage(windowMinutes) { name ->
-                        rule.target.matches(name, file.tags[name] ?: emptySet())
-                    }
-                }
-            },
-            minutesSinceLastUseOf = { ruleId ->
-                val rule = file.rules.firstOrNull { it.id == ruleId }
-                if (rule == null) {
-                    null
-                } else {
-                    ledger.minutesSinceLastUse { name ->
-                        rule.target.matches(name, file.tags[name] ?: emptySet())
-                    }
-                }
-            },
-            withinReservation = Reservations.covers(
-                _reservations.value,
-                fg.processName,
-                file.tags[fg.processName] ?: emptySet(),
-                nowSec,
-                url,
-                deviceId = myDeviceId(),
-            ),
-            // Windows にはアプリ内の画面を見分ける手立てが無い。ブラウザのショートは
-            // sites(URL)側で当たるので、ここは空でよい
-            screenSignals = emptySet(),
-            overrideCountOf = { ruleId -> overrideCounts[ruleId] ?: 0 },
-        )
+        val context = evalContext(fg.processName, url, file, nowSec)
 
         // 別の端末に向けて書かれたルールは、評価に**載せない**。載せたうえで
         // 無視すると、慣れの数え方や持ち時間の窓が端末ごとにずれる

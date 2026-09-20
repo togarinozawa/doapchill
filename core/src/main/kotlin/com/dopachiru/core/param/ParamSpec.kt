@@ -84,6 +84,21 @@ sealed interface ParamSpec {
         override val help: String = "",
     ) : ParamSpec
 
+    /**
+     * ほかのルールを1つ指す。保存するのは [com.dopachiru.core.model.Rule.uid]。
+     *
+     * **id ではなく uid を保存する**のは、id が端末ごとに独立して振られるため。
+     * 端末をまたぐ話(連動)で id を使うと、別の端末では違うルールを指す。
+     *
+     * 空文字は「このルール自身」。いちばん多い使い方なので、選ばなくても通す。
+     */
+    data class RuleRefParam(
+        override val key: String,
+        override val label: String,
+        val default: String = "",
+        override val help: String = "",
+    ) : ParamSpec
+
     /** 選択肢から1つ。value が保存され、label が表示される。 */
     data class EnumParam(
         override val key: String,

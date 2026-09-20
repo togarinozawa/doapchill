@@ -194,6 +194,11 @@ object RuleBundleIo {
         is ParamSpec.BoolParam ->
             ParamDoc(spec.key, spec.label, "bool", spec.default.toString(), spec.help)
 
+        // uid をそのまま書く。id は端末ごとに違う番号なので、
+        // 書き出したものを別の端末で読むと違うルールを指す
+        is ParamSpec.RuleRefParam ->
+            ParamDoc(spec.key, spec.label, "ruleUid", spec.default, spec.help)
+
         is ParamSpec.TextParam -> ParamDoc(
             spec.key, spec.label, "text", spec.default, spec.help,
             range = if (spec.multiline) "改行で区切ると1つずつ選ばれます" else "",

@@ -22,6 +22,7 @@ import com.dopachiru.core.condition.types.HabituationCondition
 import com.dopachiru.core.condition.types.OnScreenCondition
 import com.dopachiru.core.condition.types.PowerSaveCondition
 import com.dopachiru.core.condition.types.QuickReopenCondition
+import com.dopachiru.core.condition.types.LinkedRuleCondition
 import com.dopachiru.core.condition.types.ReservationCondition
 import com.dopachiru.core.condition.types.SessionCountCondition
 import com.dopachiru.core.condition.types.StudyPrepCondition
@@ -70,6 +71,7 @@ object DopaCore {
             WindowBudgetCondition,
             CooldownCondition,
             ReservationCondition,
+            LinkedRuleCondition,
             OnScreenCondition,
             DeclaredBudgetCondition,
             CalendarBusyCondition,
