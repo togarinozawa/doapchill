@@ -168,7 +168,8 @@ object RuleBundleIo {
             "condition は木。leaf(1つの条件)・allOf(かつ)・anyOf(または)・not(でないとき)を入れ子にできる。",
             "condition を children が空の allOf にすると無条件、つまり常に成立する。",
             "timeOfDay と minutes は分で書く。23:00 は 1380、6:00 は 360。",
-            "consequence は破ったときの報い。lockScope は NONE・APP・RULE_TARGET・EVERYTHING のどれか。",
+            "consequence は破ったとき(押し切った・警告を無視した・宣言を超えた)のポイント増減だけ。" +
+                "封鎖を科したいなら、措置そのものを lockout(しばらく閉め出す)にする。",
             "「n分使ったらm分休む」は条件 usage_budget ひとつで書く。budgetMinutes=n、" +
                 "reset=WINDOW、windowMinutes=n+m(窓の残りが休憩になる)。" +
                 "離れたら数え直したいなら reset=AWAY と awayMinutes=m。" +

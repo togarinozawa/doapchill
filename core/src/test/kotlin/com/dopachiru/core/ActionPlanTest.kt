@@ -45,24 +45,9 @@ class ActionPlanTest {
     }
 
     @Test
-    fun `閉じたあと開けないは閉め出しになる`() {
-        // 完全封印と閉め出しの分かれ目が、この1つのフラグ
-        val plan = ActionPlan(main = MainAction.CLOSE, lockMinutes = 20)
-        val (id, params) = plan.resolve(BlockAction.id, Params.EMPTY)
-        assertEquals(LockoutAction.id, id)
-        assertEquals(20, params.int(LockoutAction.KEY_MINUTES, 0))
-        assertTrue(plan.usesTimer)
-    }
-
-    @Test
-    fun `そっと知らせるは両方に乗る`() {
+    fun `そっと知らせるは閉じるに乗る`() {
         val block = ActionPlan(main = MainAction.CLOSE, prewarnSeconds = 3).resolve(BlockAction.id, Params.EMPTY)
         assertEquals(3, ActionExtras.prewarnSeconds(block.second))
-
-        val lockout =
-            ActionPlan(main = MainAction.CLOSE, lockMinutes = 10, prewarnSeconds = 5).resolve(BlockAction.id, Params.EMPTY)
-        assertEquals(LockoutAction.id, lockout.first)
-        assertEquals(5, ActionExtras.prewarnSeconds(lockout.second))
     }
 
     @Test
@@ -70,7 +55,6 @@ class ActionPlanTest {
         val plans = listOf(
             ActionPlan(main = MainAction.CLOSE, soft = false, prewarnSeconds = 3),
             ActionPlan(main = MainAction.CLOSE, soft = true),
-            ActionPlan(main = MainAction.CLOSE, lockMinutes = 15, prewarnSeconds = 2),
             ActionPlan(main = MainAction.DELAY),
             ActionPlan(main = MainAction.WARN),
             ActionPlan(main = MainAction.ADVANCED, advancedActionId = RadioAction.id),
@@ -79,8 +63,6 @@ class ActionPlanTest {
             val (id, params) = plan.resolve("", Params.EMPTY)
             val back = ActionPlan.from(id, params)
             assertEquals(plan.main, back.main, "main for $plan")
-            assertEquals(plan.usesTimer, back.usesTimer, "timer for $plan")
-            if (plan.usesTimer) assertEquals(plan.lockMinutes, back.lockMinutes, "minutes for $plan")
             assertEquals(plan.prewarnSeconds, back.prewarnSeconds, "prewarn for $plan")
         }
     }
@@ -96,5 +78,14 @@ class ActionPlanTest {
         val radio = ActionPlan.from(RadioAction.id, Params.EMPTY)
         assertEquals(MainAction.ADVANCED, radio.main)
         assertEquals(RadioAction.id, radio.advancedActionId)
+    }
+
+    @Test
+    fun `以前のタイマー封印は「ほかの動作にする」に落ちる`() {
+        // CLOSE+タイマーで作られていた lockout は、ADVANCED として編集を続けられる
+        val params = Params.of(LockoutAction.KEY_MINUTES to 20)
+        val plan = ActionPlan.from(LockoutAction.id, params)
+        assertEquals(MainAction.ADVANCED, plan.main)
+        assertEquals(LockoutAction.id, plan.advancedActionId)
     }
 }

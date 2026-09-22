@@ -6,6 +6,7 @@ import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.param.ParamSpec
 import com.dopachiru.core.param.Params
 import java.time.LocalDateTime
+import java.time.temporal.ChronoUnit
 
 /**
  * 前回の使用から一定時間あくまで成立する = そのあいだ開けなくする。
@@ -21,6 +22,18 @@ import java.time.LocalDateTime
  *
  * 対象がタグなら**グループ全体**で最後に触った時刻を見る。
  * X を見て10分後に YouTube、では「SNSは3時間あける」の意味が無い。
+ *
+ * ## 同じ組に「時間帯」があるとき
+ *
+ * 起点を、実際に触った時刻ではなく**その枠の終わり**にずらす。
+ *
+ * 実際の時刻のままだと、枠の中でうっかり一度だけ開いて閉じたときと、
+ * 枠いっぱい使ったときとで、次に開ける時刻がずれてしまう ──
+ * 早い時間に触っただけで、その分だけ長く待たされることになる。
+ * 枠の終わりに固定すれば、枠の中でいつ・何回触っても起点は動かない。
+ *
+ * 前回が枠の外だった(時間帯条件が無い、または前回の使用がその枠に入らない)なら、
+ * 従来どおり実際に触った時刻を使う。
  */
 object CooldownCondition : ConditionType {
     const val KEY_HOURS = "hours"
@@ -45,9 +58,23 @@ object CooldownCondition : ConditionType {
     override fun evaluate(p: Params, ctx: EvalContext): Boolean {
         val threshold = thresholdMinutes(p)
         if (threshold <= 0) return false
-        // 一度も使っていなければ間隔は無い = 開いてよい
-        val since = ctx.minutesSinceLastUseOf(ctx.currentRuleId) ?: return false
+        val since = effectiveSinceMinutes(ctx) ?: return false
         return since < threshold
+    }
+
+    /**
+     * 間隔の起点(分前)。一度も使っていなければ null(= 開いてよい)。
+     *
+     * 同じ組に「時間帯」があれば、前回の使用が実際にその枠の中だったときだけ
+     * 起点を枠の終わりにずらす。枠の外だった・時間帯が無い、なら実際の時刻のまま。
+     */
+    private fun effectiveSinceMinutes(ctx: EvalContext): Int? {
+        val rawSince = ctx.minutesSinceLastUseOf(ctx.currentRuleId) ?: return null
+        val windowParams = ctx.clauseTimeRangeParams ?: return rawSince
+        val lastUseAt = ctx.now.minusMinutes(rawSince.toLong())
+        val windowEnd = TimeRangeCondition.windowEndContaining(windowParams, lastUseAt) ?: return rawSince
+        if (windowEnd.isAfter(ctx.now)) return rawSince
+        return ChronoUnit.MINUTES.between(windowEnd, ctx.now).toInt()
     }
 
     override fun summarize(p: Params): String {
@@ -66,7 +93,7 @@ object CooldownCondition : ConditionType {
      */
     override fun nextChangeAt(p: Params, ctx: EvalContext): LocalDateTime {
         val threshold = thresholdMinutes(p)
-        val since = ctx.minutesSinceLastUseOf(ctx.currentRuleId)
+        val since = effectiveSinceMinutes(ctx)
         if (since == null || threshold <= 0) return ctx.now.plusDays(1)
         val remaining = threshold - since
         return if (remaining > 0) ctx.now.plusMinutes(remaining.toLong()) else ctx.now.plusDays(1)

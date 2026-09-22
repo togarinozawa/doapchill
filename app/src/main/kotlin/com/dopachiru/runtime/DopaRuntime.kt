@@ -27,7 +27,6 @@ import com.dopachiru.core.model.FocusSchedules
 import com.dopachiru.core.model.FocusSettings
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Lockouts
-import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.param.Params
 import com.dopachiru.core.points.PointPolicy
@@ -527,27 +526,15 @@ object DopaRuntime {
     // 破った / 守ったときに起きること
 
     /**
-     * ルールを破った。罰を科し、ポイントを引く。
+     * ルールを破った。ポイントを引くだけ。
      *
-     * 封鎖は罰を科した時点の範囲で固定する。あとからルールを書き換えても
-     * 罰の重さが変わらないようにするため。
+     * 押し切る・警告を無視する・宣言を超える、その出来事そのものが報いなので、
+     * ここで追加の封鎖は科さない ── 封鎖が要るなら、措置そのものを
+     * [com.dopachiru.core.action.types.LockoutAction] にする([lockByRule])。
      */
     fun punish(packageName: String, rule: Rule, reason: PointReason) {
         if (!initialized) return
-        val consequence = rule.consequence
-
-        consequence.resolveTarget(packageName, rule.target)?.let { target ->
-            // 段階を切ってあれば、直近24時間に同じルールで科した回数だけ長くなる。
-            // 1回目から重くしないのは、強い制約は目標そのものを緩めさせるため
-            val repeats = if (consequence.lockEscalates) lockouts.recentCountFor(rule.name) else 0
-            lockouts.impose(
-                target = target,
-                minutes = consequence.lockMinutesFor(repeats),
-                reason = rule.name,
-            )
-        }
-
-        val delta = pointPolicy.breakDelta(consequence.breakPoints)
+        val delta = pointPolicy.breakDelta(rule.consequence.breakPoints)
         if (pointPolicy.enabled && delta != 0) {
             points.record(
                 delta = delta,
@@ -561,10 +548,6 @@ object DopaRuntime {
     /**
      * 時間切れで閉め出す。破ったからではなく、取り決めどおりに閉まる。
      *
-     * 罰([punish])と同じ道を通す ── 範囲の解決も、繰り返しで長くする計算も
-     * [Consequence] が持っているので、閉め方を2通り持たずに済む。
-     * 違うのは筋道だけで、ポイントは動かさない(違反ではないため)。
-     *
      * 使用時間のセッションはここで閉じる。閉め出しているあいだも数え続けると、
      * 明けた瞬間にまた閾値を超えていて、二度と開かなくなる。
      *
@@ -572,14 +555,15 @@ object DopaRuntime {
      */
     fun lockByRule(packageName: String, rule: Rule, params: Params): Lockout? {
         if (!initialized) return null
-        val consequence = LockoutAction.consequenceOf(params)
-        val target = consequence.resolveTarget(packageName, rule.target) ?: return null
-        val repeats = if (consequence.lockEscalates) lockouts.recentCountFor(rule.name) else 0
+        val target = LockoutAction.resolveTarget(params, packageName, rule.target)
+        // 段階を切ってあれば、直近24時間に同じルールで科した回数だけ長くなる。
+        // 1回目から重くしないのは、強い制約は目標そのものを緩めさせるため
+        val repeats = lockouts.recentCountFor(rule.name)
         val notice = params.string(LockoutAction.KEY_NOTICE).ifBlank { rule.name }
         usage.onForegroundChanged(null)
         return lockouts.impose(
             target = target,
-            minutes = consequence.lockMinutesFor(repeats),
+            minutes = LockoutAction.minutesFor(params, repeats),
             reason = notice,
         )
     }

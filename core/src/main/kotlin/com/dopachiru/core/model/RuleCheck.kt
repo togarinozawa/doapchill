@@ -71,7 +71,8 @@ object RuleCheck {
                 "閉め出しを${breakMinutes}分にするか、数え直しを${lockMinutes}分に下げてください。"
         }
 
-        if (target.matchAll && LockoutAction.scopeOf(actionParams) == LockScope.RULE_TARGET) {
+        val scope = actionParams.string(LockoutAction.KEY_SCOPE, LockoutAction.Scope.TARGET)
+        if (target.matchAll && scope == LockoutAction.Scope.TARGET) {
             warnings += "対象が「ぜんぶ」なので、条件が成立すると端末全体が${lockMinutes}分閉まります。"
         }
 

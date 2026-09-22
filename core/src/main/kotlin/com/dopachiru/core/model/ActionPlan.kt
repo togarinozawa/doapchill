@@ -4,7 +4,6 @@ import com.dopachiru.core.action.ActionExtras
 import com.dopachiru.core.action.ActionRegistry
 import com.dopachiru.core.action.types.BlockAction
 import com.dopachiru.core.action.types.DelayAction
-import com.dopachiru.core.action.types.LockoutAction
 import com.dopachiru.core.action.types.RadioAction
 import com.dopachiru.core.action.types.WarnAction
 import com.dopachiru.core.param.Params
@@ -14,51 +13,49 @@ import com.dopachiru.core.param.Params
  *
  * ## なぜ要るか
  *
- * 保存の形は今まで通り actionId + params のまま。だが編集画面では「完全封印か閉め出しか」
- * を選ばせず、**「閉じる」+ 重ねる少しの選択**として見せたい。その UI 上の状態と、
+ * 保存の形は今まで通り actionId + params のまま。だが編集画面では「閉じる」
+ * 「少し待たせる」「警告だけ」を、迷わず選べる形として見せたい。その UI 上の状態と、
  * 保存の形との**行き来を1か所に置く** ── Android と Windows で別々に書くと、
- * かたや block、かたや lockout に化ける、のような食い違いが必ず出る。
+ * かたや block、かたや warn に化ける、のような食い違いが必ず出る。
  *
  * ## 対応
  *
  * | UI | 保存 |
  * |---|---|
- * | 使えなくする・条件を満たしているあいだ(やんわり/しっかり) | [BlockAction](押し切れる/切れない) |
- * | 使えなくする・このあとN分 | [LockoutAction](N分。押し切れない) |
+ * | 使えなくする(やんわり/しっかり) | [BlockAction](押し切れる/切れない) |
  * | 少し待たせて通す | [DelayAction] |
  * | 警告だけ | [WarnAction] |
  * | くわしい | それ以外の措置そのまま |
  *
- * 完全封印と閉め出しの違い(条件バウンドか、タイマーバウンドか)は、
- * **「いつまで」の二択**に畳んである。どちらも「一度閉じて終わり」ではない ──
- * 前者は条件が続くかぎり、後者は時間が来るまで、開き直しても同じ壁が立つ。
+ * ## 「しばらく閉め出す」はここに無い
+ *
+ * 以前は CLOSE に「このあとN分」という時限の選択肢を重ねて、内部で
+ * [com.dopachiru.core.action.types.LockoutAction] に化けさせていた。
+ * けれど「条件が続くあいだ閉める(封印)」と「時間で区切って閉める(閉め出し)」は
+ * 仕組みが別物(前者は押し切れる・後者は押し切れない)で、1つのトグルに
+ * 畳むと「いま何を選んでいるのか」が読めなくなる。いまは他の「くわしい動作」
+ * (音だけ・目的を書く・経過表示など)と同じ並びに置いてある。
  */
 enum class MainAction { CLOSE, DELAY, WARN, ADVANCED }
 
 data class ActionPlan(
     val main: MainAction = MainAction.CLOSE,
 
-    /** CLOSE のとき、押し切れる(やんわり)か。タイマーを入れたら無視される(閉め出しは押し切れない)。 */
+    /** CLOSE のとき、押し切れる(やんわり)か。 */
     val soft: Boolean = false,
-
-    /** 0 = 条件が続くあいだ使えなくする(完全封印)。1以上 = 閉じて、その分だけ使えなくする(閉め出し)。 */
-    val lockMinutes: Int = 0,
 
     /** 閉じる前にそっと知らせる秒数。0 = 出さない。CLOSE のときだけ効く。 */
     val prewarnSeconds: Int = 0,
 
-    /** ADVANCED のときに使う措置の id(音だけ・目的を書く・宣言・経過表示)。 */
+    /** ADVANCED のときに使う措置の id(しばらく閉め出す・音だけ・目的を書く…)。 */
     val advancedActionId: String = RadioAction.id,
 ) {
-    /** 「このあとN分」を選んでいるか。ここが完全封印と閉め出しの分かれ目。 */
-    val usesTimer: Boolean get() = main == MainAction.CLOSE && lockMinutes > 0
-
     /** この計画を実行する措置の id。 */
     fun actionId(): String = when (main) {
         MainAction.DELAY -> DelayAction.id
         MainAction.WARN -> WarnAction.id
         MainAction.ADVANCED -> advancedActionId
-        MainAction.CLOSE -> if (usesTimer) LockoutAction.id else BlockAction.id
+        MainAction.CLOSE -> BlockAction.id
     }
 
     /**
@@ -79,10 +76,6 @@ data class ActionPlan(
                 BlockAction.KEY_ALLOW_OVERRIDE to soft,
                 ActionExtras.KEY_PREWARN_SECONDS to prewarnSeconds,
             )
-            LockoutAction.id -> base.with(
-                LockoutAction.KEY_MINUTES to lockMinutes.coerceAtLeast(1),
-                ActionExtras.KEY_PREWARN_SECONDS to prewarnSeconds,
-            )
             else -> base
         }
         return id to params
@@ -91,21 +84,16 @@ data class ActionPlan(
     companion object {
         /** 保存の形から UI の形を起こす。 */
         fun from(actionId: String, params: Params): ActionPlan = when (actionId) {
-            LockoutAction.id -> ActionPlan(
-                main = MainAction.CLOSE,
-                lockMinutes = params.int(LockoutAction.KEY_MINUTES, 10).coerceAtLeast(1),
-                prewarnSeconds = ActionExtras.prewarnSeconds(params),
-            )
-
             BlockAction.id -> ActionPlan(
                 main = MainAction.CLOSE,
                 soft = params.bool(BlockAction.KEY_ALLOW_OVERRIDE, true),
-                lockMinutes = 0,
                 prewarnSeconds = ActionExtras.prewarnSeconds(params),
             )
 
             DelayAction.id -> ActionPlan(main = MainAction.DELAY)
             WarnAction.id -> ActionPlan(main = MainAction.WARN)
+            // 以前 CLOSE+タイマーで作られていた lockout もここに落ちる。
+            // 「ほかの動作にする」に並んでいるので、そのまま編集を続けられる
             else -> ActionPlan(main = MainAction.ADVANCED, advancedActionId = actionId)
         }
     }

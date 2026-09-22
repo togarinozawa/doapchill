@@ -30,7 +30,6 @@ import com.dopachiru.core.model.CommandKind
 import com.dopachiru.core.model.CommandState
 import com.dopachiru.core.model.CommandVerdict
 import com.dopachiru.core.model.Commands
-import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.Focus
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Lockouts
@@ -1360,49 +1359,35 @@ object DesktopRuntime {
     private var heldRule: Rule? = null
 
     /**
-     * ルールを破った。罰を科し、ポイントを引く。
+     * ルールを破った。ポイントを引くだけ。
      *
-     * 封鎖は罰を科した時点の範囲で固定する。あとからルールを書き換えても
-     * 罰の重さが変わらないようにするため。
+     * 押し切る・警告を無視する・宣言を超える、その出来事そのものが報いなので、
+     * ここで追加の封鎖は科さない ── 封鎖が要るなら、措置そのものを
+     * [LockoutAction] にする([lockOut])。
      */
     private fun punish(processName: String, rule: Rule, reason: PointReason) {
-        val consequence = rule.consequence
         val policy = _settings.value.pointPolicy
-
-        consequence.resolveTarget(processName, rule.target)?.let { target ->
-            impose(consequence, target, rule.name, rule.name)
-        }
-
         if (policy.enabled) {
-            addPoints(policy.breakDelta(consequence.breakPoints), reason, rule.name)
+            addPoints(policy.breakDelta(rule.consequence.breakPoints), reason, rule.name)
         }
     }
 
     /**
-     * 封鎖を科す。破った罰にも、時間切れの閉め出しにも使う。
+     * 時間切れで閉め出す。破ったからではなく、取り決めどおりに閉まる。
      *
-     * 範囲は科した時点で固定する。あとからルールを書き換えても重さが変わらない。
-     *
-     * @param ruleName 段階を数える鍵。同じルールで繰り返したときだけ伸びる。
-     * @param notice 封鎖画面に出す言葉。
+     * ポイントは動かさない ── 違反ではないため。
      */
-    private fun impose(
-        consequence: Consequence,
-        target: com.dopachiru.core.model.Target,
-        ruleName: String,
-        notice: String,
-    ): Lockout? {
+    private fun lockOut(fg: ForegroundApp, act: Decision.Act) {
+        val target = LockoutAction.resolveTarget(act.params, fg.processName, act.rule.target)
+        val notice = act.params.string(LockoutAction.KEY_NOTICE).ifBlank { act.rule.name }
+
         val now = nowSec()
         // 段階を切ってあれば、直近24時間に同じルールで科した回数だけ長くなる
         imposedLog.removeAll { (_, at) -> at < now - ESCALATION_WINDOW_SEC }
-        val repeats = if (consequence.lockEscalates) {
-            imposedLog.count { (name, _) -> name == ruleName }
-        } else {
-            0
-        }
-        val minutes = consequence.lockMinutesFor(repeats)
-        if (minutes <= 0) return null
-        imposedLog.add(ruleName to now)
+        val repeats = imposedLog.count { (name, _) -> name == act.rule.name }
+        val minutes = LockoutAction.minutesFor(act.params, repeats)
+        if (minutes <= 0) return
+        imposedLog.add(act.rule.name to now)
 
         val lockout = Lockout(
             // uid が無いと、同時に複数走っているとき互いを見分けられない
@@ -1414,19 +1399,6 @@ object DesktopRuntime {
         )
         _lockouts.value = _lockouts.value + lockout
         Stores.lockouts.save(_lockouts.value)
-        return lockout
-    }
-
-    /**
-     * 時間切れで閉め出す。破ったからではなく、取り決めどおりに閉まる。
-     *
-     * ポイントは動かさない ── 違反ではないため。
-     */
-    private fun lockOut(fg: ForegroundApp, act: Decision.Act) {
-        val consequence = LockoutAction.consequenceOf(act.params)
-        val target = consequence.resolveTarget(fg.processName, act.rule.target) ?: return
-        val notice = act.params.string(LockoutAction.KEY_NOTICE).ifBlank { act.rule.name }
-        val lockout = impose(consequence, target, act.rule.name, notice) ?: return
         showLocked(fg, lockout)
     }
 
@@ -2167,11 +2139,9 @@ object DesktopRuntime {
             allowOverride = allowOverride,
             overrideCost = cost,
             balance = balance,
-            penaltyNote = if (rule.consequence.locksNothing) {
-                ""
-            } else {
-                "押し切ると${rule.consequence.lockScope.label}が${rule.consequence.lockMinutes}分閉まります"
-            },
+            // 以前は追加の封鎖(破ったら)をここに書いていたが、その仕組みは無くなった。
+            // ポイントは overrideCost/balance のほうにもう出ているので、ここは空でよい
+            penaltyNote = "",
         )
     }
 

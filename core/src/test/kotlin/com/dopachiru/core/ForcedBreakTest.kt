@@ -6,7 +6,6 @@ import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.engine.UsageSnapshot
 import com.dopachiru.core.engine.UsageSpans
 import com.dopachiru.core.model.ConditionNode
-import com.dopachiru.core.model.LockScope
 import com.dopachiru.core.model.RuleCheck
 import com.dopachiru.core.model.Target
 import com.dopachiru.core.param.Params
@@ -133,9 +132,7 @@ class ForcedBreakTest {
             LockoutAction.KEY_SCOPE to LockoutAction.Scope.TARGET,
         )
         val ruleTarget = Target(tags = setOf("SNS"))
-        val consequence = LockoutAction.consequenceOf(p)
-        assertEquals(LockScope.RULE_TARGET, consequence.lockScope)
-        assertEquals(ruleTarget, consequence.resolveTarget("com.x", ruleTarget))
+        assertEquals(ruleTarget, LockoutAction.resolveTarget(p, "com.x", ruleTarget))
     }
 
     @Test
@@ -144,33 +141,39 @@ class ForcedBreakTest {
             LockoutAction.KEY_MINUTES to 10,
             LockoutAction.KEY_SCOPE to LockoutAction.Scope.APP,
         )
-        val resolved = LockoutAction.consequenceOf(p).resolveTarget("com.x", Target(tags = setOf("SNS")))
+        val resolved = LockoutAction.resolveTarget(p, "com.x", Target(tags = setOf("SNS")))
         assertEquals(Target(packages = setOf("com.x")), resolved)
     }
 
     @Test
     fun `既定は対象ぜんぶ`() {
         // 範囲が空のまま保存された古いルールを読んでも、狭いほうに落ちない
-        assertEquals(LockScope.RULE_TARGET, LockoutAction.scopeOf(Params.EMPTY))
+        val ruleTarget = Target(tags = setOf("SNS"))
+        assertEquals(ruleTarget, LockoutAction.resolveTarget(Params.EMPTY, "com.x", ruleTarget))
     }
 
     @Test
     fun `0分は科さない`() {
         // 分数は必ず1以上に丸める。0分の閉め出しは「効かないのに画面だけ出る」
-        assertEquals(1, LockoutAction.consequenceOf(Params.of(LockoutAction.KEY_MINUTES to 0)).lockMinutes)
+        assertEquals(1, LockoutAction.minutesFor(Params.of(LockoutAction.KEY_MINUTES to 0), 0))
     }
 
     @Test
     fun `繰り返すほど長くなるのは切ったときだけ`() {
-        val flat = LockoutAction.consequenceOf(Params.of(LockoutAction.KEY_MINUTES to 10))
-        assertEquals(10, flat.lockMinutesFor(3))
+        val flat = Params.of(LockoutAction.KEY_MINUTES to 10)
+        assertEquals(10, LockoutAction.minutesFor(flat, 3))
 
-        val steps = LockoutAction.consequenceOf(
-            Params.of(LockoutAction.KEY_MINUTES to 10, LockoutAction.KEY_ESCALATES to true),
-        )
-        assertEquals(10, steps.lockMinutesFor(0))
-        assertEquals(20, steps.lockMinutesFor(1))
-        assertEquals(40, steps.lockMinutesFor(2))
+        val steps = Params.of(LockoutAction.KEY_MINUTES to 10, LockoutAction.KEY_ESCALATES to true)
+        assertEquals(10, LockoutAction.minutesFor(steps, 0))
+        assertEquals(20, LockoutAction.minutesFor(steps, 1))
+        assertEquals(40, LockoutAction.minutesFor(steps, 2))
+    }
+
+    @Test
+    fun `段階を重ねても上限を越えない`() {
+        val steps = Params.of(LockoutAction.KEY_MINUTES to 60, LockoutAction.KEY_ESCALATES to true)
+        assertEquals(LockoutAction.MAX_MINUTES, LockoutAction.minutesFor(steps, 99))
+        assertTrue(LockoutAction.minutesFor(steps, 99) > 0, "溢れて負や 0 になっていないか")
     }
 
     @Test

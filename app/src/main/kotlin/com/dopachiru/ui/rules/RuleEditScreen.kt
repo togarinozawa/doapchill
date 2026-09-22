@@ -991,79 +991,33 @@ private fun ActionStep(
 
     // --- 使えなくするの中身 ---
     if (plan.main == MainAction.CLOSE) {
-        // 「いつまで」が完全封印と閉め出しの分かれ目。ここを選ばせるのが要
+        // 条件が続くかぎり閉まったまま、条件が外れたら開く。時間で区切って
+        // 閉めたいなら、下の「ほかの動作にする」から「しばらく閉め出す」を選ぶ
         Spacer(Modifier.height(16.dp))
-        Text("いつまで", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+        Text("逃げ道", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
         Spacer(Modifier.height(6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(
-                selected = !plan.usesTimer,
-                onClick = { viewModel.setPlan(plan.copy(lockMinutes = 0)) },
-                label = { Text("条件を満たしているあいだ") },
+                selected = !plan.soft,
+                onClick = { viewModel.setPlan(plan.copy(soft = false)) },
+                label = { Text("しっかり") },
             )
             FilterChip(
-                selected = plan.usesTimer,
-                onClick = { viewModel.setPlan(plan.copy(lockMinutes = plan.lockMinutes.coerceAtLeast(10))) },
-                label = { Text("このあとしばらく") },
+                selected = plan.soft,
+                onClick = { viewModel.setPlan(plan.copy(soft = true)) },
+                label = { Text("やんわり") },
             )
         }
         Spacer(Modifier.height(4.dp))
-        if (plan.usesTimer) {
-            AmountStepper(
-                value = plan.lockMinutes,
-                min = 1,
-                max = 12 * 60,
-                step = 5,
-                suffix = "分",
-                onChange = { viewModel.setPlan(plan.copy(lockMinutes = it)) },
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "閉めてから${plan.lockMinutes}分は、条件が外れても開きません。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            Text(
-                "条件が続くかぎり、開き直しても閉まったまま。条件が外れたら開きます。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        Spacer(Modifier.height(16.dp))
-        if (!plan.usesTimer) {
-            Text("逃げ道", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    selected = !plan.soft,
-                    onClick = { viewModel.setPlan(plan.copy(soft = false)) },
-                    label = { Text("しっかり") },
-                )
-                FilterChip(
-                    selected = plan.soft,
-                    onClick = { viewModel.setPlan(plan.copy(soft = true)) },
-                    label = { Text("やんわり") },
-                )
-            }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                if (plan.soft) {
-                    "手間をかければ押し切れます。押し切ると「破った」ことになります。"
-                } else {
-                    "押し切る口はありません。"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            Text(
-                "時間で締め出すあいだは押し切れません。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        Text(
+            if (plan.soft) {
+                "手間をかければ押し切れます。押し切ると「破った」ことになります。"
+            } else {
+                "押し切る口はありません。"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         // --- 重ねる ---
         Spacer(Modifier.height(16.dp))
@@ -1129,7 +1083,7 @@ private fun ActionStep(
 
     // 文言など、こまかい調整。既定のままで困らないので畳んでおく
     ActionRegistry[state.actionId]?.let { action ->
-        val hidden = setOf(BlockAction.KEY_ALLOW_OVERRIDE, ActionExtras.KEY_PREWARN_SECONDS, LockoutAction.KEY_MINUTES)
+        val hidden = setOf(BlockAction.KEY_ALLOW_OVERRIDE, ActionExtras.KEY_PREWARN_SECONDS)
         val specs = action.params.filter { it.key !in hidden }
         if (plan.main != MainAction.ADVANCED && specs.isNotEmpty()) {
             Disclosure("文言・こまかい調整") {
@@ -1172,13 +1126,12 @@ private fun ActionStep(
         }
     }
 
-    // 罰の細かい調整(範囲を変える・段階的に強める等)は、破れる動作のときだけ奥に置く
+    // ポイントの増減は、破れる動作のときだけ奥に置く
     if (breakable) {
-        Disclosure("破ったときの報い(くわしく)") {
+        Disclosure("破ったときのポイント(くわしく)") {
             ConsequenceEditor(
                 consequence = state.consequence,
                 policy = state.pointPolicy,
-                availableTags = state.availableTags,
                 onChange = viewModel::setConsequence,
             )
         }
@@ -1238,7 +1191,7 @@ private fun ClausesSection(state: RuleEditState, viewModel: RuleEditViewModel) {
 /** 主な動作の下に置く「くわしい動作」。閉じる・待たせる・警告 以外。 */
 private fun advancedActions(): List<ActionType> =
     ActionRegistry.all().filter {
-        it.id !in setOf(BlockAction.id, LockoutAction.id, DelayAction.id, WarnAction.id)
+        it.id !in setOf(BlockAction.id, DelayAction.id, WarnAction.id)
     }
 
 /**

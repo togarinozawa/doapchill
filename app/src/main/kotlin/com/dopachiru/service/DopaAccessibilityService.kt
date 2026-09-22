@@ -815,12 +815,13 @@ class DopaAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** 押し切ったら何が閉まるか。押す前に見せるための1行。 */
-    private fun penaltyNote(rule: Rule): String {
-        val consequence = rule.consequence
-        if (consequence.locksNothing) return ""
-        return "押し切ると${consequence.lockScope.label}が${consequence.lockMinutes}分閉まります"
-    }
+    /**
+     * 押し切ったら何が起きるか。押す前に見せるための1行。
+     *
+     * 以前は追加の封鎖(破ったら)をここに書いていたが、その仕組みは無くなった。
+     * ポイントは [overrideCost]/[balance] のほうにもう出ているので、ここは空でよい。
+     */
+    private fun penaltyNote(rule: Rule): String = ""
 
     private fun showWarn(pkg: String, act: Decision.Act) {
         val repeatMs = act.params.int(WarnAction.KEY_REPEAT_MINUTES, 5) * 60_000L

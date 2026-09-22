@@ -11,7 +11,6 @@ import com.dopachiru.core.engine.EvalContext
 import com.dopachiru.core.engine.RuleEngine
 import com.dopachiru.core.engine.UsageSnapshot
 import com.dopachiru.core.model.ConditionNode
-import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.model.Target
 import com.dopachiru.core.param.Params
@@ -209,28 +208,4 @@ class TriggerConditionTest {
         assertEquals("代わり", Rotation.pick("   ", ctx(), fallback = "代わり"))
     }
 
-    // ---- 段階的な封鎖 ---------------------------------------------------
-
-    @Test
-    fun `段階を切っていれば毎回同じ長さ`() {
-        val c = Consequence(lockMinutes = 30, lockEscalates = false)
-        assertEquals(30, c.lockMinutesFor(0))
-        assertEquals(30, c.lockMinutesFor(5))
-    }
-
-    @Test
-    fun `段階を入れると繰り返すほど長くなる`() {
-        val c = Consequence(lockMinutes = 5, lockEscalates = true)
-        assertEquals(5, c.lockMinutesFor(0))
-        assertEquals(10, c.lockMinutesFor(1))
-        assertEquals(20, c.lockMinutesFor(2))
-        assertEquals(40, c.lockMinutesFor(3))
-    }
-
-    @Test
-    fun `段階を重ねても上限を越えない`() {
-        val c = Consequence(lockMinutes = 60, lockEscalates = true)
-        assertEquals(Consequence.MAX_LOCK_MINUTES, c.lockMinutesFor(99))
-        assertTrue(c.lockMinutesFor(99) > 0, "溢れて負や 0 になっていないか")
-    }
 }

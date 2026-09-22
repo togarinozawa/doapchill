@@ -40,6 +40,30 @@ object TimeRangeCondition : ConditionType {
     override fun summarize(p: Params): String =
         "${formatMinuteOfDay(p.int(KEY_START))}〜${formatMinuteOfDay(p.int(KEY_END))}"
 
+    /**
+     * [at] がこの範囲の中にいるなら、そのときの枠の終わりの時刻。範囲の外なら null。
+     *
+     * [com.dopachiru.core.condition.types.CooldownCondition] が、間隔の起点を
+     * 実際に触った時刻ではなく**枠の終わり**にずらすために使う。
+     */
+    fun windowEndContaining(p: Params, at: LocalDateTime): LocalDateTime? {
+        val start = p.int(KEY_START)
+        val end = p.int(KEY_END)
+        val minute = at.hour * 60 + at.minute
+        val midnight = at.toLocalDate().atStartOfDay()
+        return if (start <= end) {
+            if (minute in start until end) midnight.plusMinutes(end.toLong()) else null
+        } else {
+            when {
+                // 日跨ぎの後半(日付が変わったあと、終了前)。枠の終わりは同じ日
+                minute < end -> midnight.plusMinutes(end.toLong())
+                // 日跨ぎの前半(開始以降)。枠の終わりは翌日
+                minute >= start -> midnight.plusDays(1).plusMinutes(end.toLong())
+                else -> null
+            }
+        }
+    }
+
     /** 次に境界をまたぐ時刻。それまでは成否が変わらない。 */
     override fun nextChangeAt(p: Params, ctx: EvalContext): LocalDateTime {
         val nowMinute = ctx.now.hour * 60 + ctx.now.minute

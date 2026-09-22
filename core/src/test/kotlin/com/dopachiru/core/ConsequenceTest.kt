@@ -7,7 +7,6 @@ import com.dopachiru.core.engine.RuleEngine
 import com.dopachiru.core.engine.UsageSnapshot
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.Consequence
-import com.dopachiru.core.model.LockScope
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Lockouts
 import com.dopachiru.core.model.Rule
@@ -47,48 +46,12 @@ class ConsequenceTest {
     private fun lockout(target: Target, untilSec: Long) =
         Lockout(target = target, untilEpochSec = untilSec, reason = "テスト", createdAtEpochSec = now)
 
-    // ---- 範囲の解決 -----------------------------------------------------
-
-    @Test
-    fun `そのアプリだけの罰は他のアプリに及ばない`() {
-        val target = Consequence(LockScope.APP, lockMinutes = 30)
-            .resolveTarget("com.example.sns", Target(matchAll = true))!!
-
-        assertTrue(target.matches("com.example.sns", emptySet()))
-        assertTrue(!target.matches("com.example.other", emptySet()))
-    }
-
-    @Test
-    fun `ルールの対象ぜんぶの罰はタグ単位で閉まる`() {
-        val ruleTarget = Target(tags = setOf("SNS"))
-        val target = Consequence(LockScope.RULE_TARGET, lockMinutes = 30)
-            .resolveTarget("com.example.sns", ruleTarget)!!
-
-        assertTrue(target.matches("com.example.other", setOf("SNS")))
-        assertTrue(!target.matches("com.example.other", setOf("仕事")))
-    }
-
-    @Test
-    fun `端末ぜんぶの罰でも逃がしたアプリは開く`() {
-        val target = Consequence(
-            LockScope.EVERYTHING,
-            lockMinutes = 60,
-            lockAllowPackages = setOf("com.example.dictionary"),
-            lockAllowTags = setOf("仕事"),
-        ).resolveTarget("com.example.sns", Target())!!
-
-        assertTrue(target.matches("com.example.sns", emptySet()))
-        assertTrue(!target.matches("com.example.dictionary", emptySet()))
-        assertTrue(!target.matches("com.example.mail", setOf("仕事")))
-    }
-
-    @Test
-    fun `分が0なら封鎖しない`() {
-        assertNull(Consequence(LockScope.EVERYTHING, lockMinutes = 0).resolveTarget("x", Target()))
-        assertTrue(Consequence(LockScope.NONE, lockMinutes = 60).locksNothing)
-    }
-
     // ---- 封鎖の効き方 ---------------------------------------------------
+    //
+    // 封鎖(Lockout)そのものは残っている ── 科す筋道は「破ったら」ではなく、
+    // 時間で区切って閉める措置([com.dopachiru.core.action.types.LockoutAction])と、
+    // 自分で始める集中([com.dopachiru.core.model.Focus])の2つ。
+    // 範囲の解決と、繰り返すほど長くする計算は [ForcedBreakTest] で確かめる。
 
     @Test
     fun `封鎖はルールより先に効く`() {
@@ -182,22 +145,32 @@ class ConsequenceTest {
     }
 
     @Test
-    fun `罰つきルールはJSONで往復できる`() {
+    fun `報いつきルールはJSONで往復できる`() {
         val original = Rule(
-            name = "夜に押し切ったらお預け",
+            name = "夜に押し切ったら減点",
             target = Target(packages = setOf("com.example.sns")),
             condition = ConditionNode.AllOf(),
             actionId = BlockAction.id,
             actionParams = Params.EMPTY,
-            consequence = Consequence(
-                lockScope = LockScope.EVERYTHING,
-                lockMinutes = 45,
-                lockAllowPackages = setOf("com.example.dictionary"),
-                breakPoints = -25,
-                keepPoints = 3,
-            ),
+            consequence = Consequence(breakPoints = -25, keepPoints = 3),
         )
         assertEquals(original, DopaCore.decodeRule(DopaCore.encodeRule(original)))
+    }
+
+    @Test
+    fun `古い封鎖つきのルールも読める`() {
+        // lockScope/lockMinutes は消えた欄。ignoreUnknownKeys で無視されるだけで、
+        // 読み込み自体は落ちない
+        val json = """
+            {"id":1,"uid":"u1","name":"夜は開かない","enabled":true,
+             "target":{"packages":["com.example.sns"]},
+             "condition":{"kind":"allOf","children":[]},
+             "actionId":"block","actionParams":{},
+             "consequence":{"lockScope":"APP","lockMinutes":30,"breakPoints":-5}}
+        """.trimIndent()
+        val rule = DopaCore.decodeRule(json)
+        assertEquals(-5, rule.consequence.breakPoints)
+        assertNull(rule.consequence.keepPoints)
     }
 
     @Test
@@ -210,7 +183,6 @@ class ConsequenceTest {
         """.trimIndent()
         val rule = DopaCore.decodeRule(json)
         assertEquals(Consequence.NONE, rule.consequence)
-        assertTrue(rule.consequence.locksNothing)
         assertNull(rule.consequence.breakPoints)
     }
 }

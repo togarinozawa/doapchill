@@ -31,7 +31,6 @@ import com.dopachiru.core.condition.types.UsageSinceBreakCondition
 import com.dopachiru.core.condition.types.WindowBudgetCondition
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.Consequence
-import com.dopachiru.core.model.LockScope
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.model.ScreenSignals
 import com.dopachiru.core.model.SiteCatalog
@@ -258,12 +257,9 @@ object RulePresets {
                         "眠いときの判断は、あてにならないと知っている。",
                     BlockAction.KEY_MIN_SECONDS to 20,
                     BlockAction.KEY_COVER_SYSTEM_BARS to true,
-                    BlockAction.KEY_RELEASE_EFFORT to BlockAction.Effort.TYPE,
-                ),
-                consequence = Consequence(
-                    lockScope = LockScope.APP,
-                    lockMinutes = 30,
-                    lockEscalates = true,
+                    // 「問答無用」を言葉どおりにする。押し切れるなら、それは事前に
+                    // 決めておいたことにならない
+                    BlockAction.KEY_ALLOW_OVERRIDE to false,
                 ),
             )
         },
@@ -367,7 +363,7 @@ object RulePresets {
         RulePreset(
             id = "escalate",
             name = "効かなくなったら強くする",
-            description = "ふだんは待たせるだけ。押し切りが続いたら封印に切り替え、繰り返すほど長く閉める。",
+            description = "ふだんは待たせるだけ。押し切りが続いたら閉め出しに切り替え、繰り返すほど長く閉める。",
             group = PresetGroup.STRICT,
             evidence = "段階的ロック(1→5→15→30→60分)は -50.4分/日で選好52.8%。" +
                 "いきなり強いロックは -73.7分だが選好13.9%で、20名が目標そのものを緩めた(GoalKeeper 2019)。" +
@@ -379,20 +375,15 @@ object RulePresets {
                 conditions = listOf(
                     leaf(HabituationCondition.id, HabituationCondition.KEY_OVERRIDES to 3),
                 ),
-                actionId = BlockAction.id,
+                // 押し切りが続いた=軽いやり方が効かなくなったので、押し切れる封印から
+                // 押し切れない閉め出しに切り替える。繰り返すほど長くする段階も
+                // ここ(措置そのもの)が持つ
+                actionId = LockoutAction.id,
                 actionParams = Params.of(
-                    BlockAction.KEY_REFLECTION to
-                        "軽いやり方では効かなくなった。\n" +
-                        "押し切りが続いたので、強くしてある。\n" +
-                        "ここまで来たのは自分の記録のせい。",
-                    BlockAction.KEY_MIN_SECONDS to 25,
-                    BlockAction.KEY_RELEASE_EFFORT to BlockAction.Effort.TYPE,
-                ),
-                consequence = Consequence(
-                    lockScope = LockScope.APP,
-                    lockMinutes = 5,
-                    lockEscalates = true,
-                    breakPoints = -20,
+                    LockoutAction.KEY_MINUTES to 5,
+                    LockoutAction.KEY_SCOPE to LockoutAction.Scope.APP,
+                    LockoutAction.KEY_ESCALATES to true,
+                    LockoutAction.KEY_NOTICE to "軽いやり方では効かなくなった。押し切りが続いたので、強くしてある。",
                 ),
             )
         },
@@ -421,34 +412,6 @@ object RulePresets {
                 actionParams = Params.of(
                     BlockAction.KEY_REFLECTION to "どちらかの線を越えた。",
                     BlockAction.KEY_MIN_SECONDS to 15,
-                ),
-            )
-        },
-
-        RulePreset(
-            id = "night_penalty",
-            name = "夜に押し切ったらお預け",
-            description = "22:00〜06:00 は封印。押し切ったら、そのアプリが30分ぶん開かなくなる。",
-            group = PresetGroup.STRICT,
-        ) { packages ->
-            rule(
-                name = "夜に押し切ったらお預け",
-                packages = packages,
-                conditions = listOf(
-                    leaf(
-                        TimeRangeCondition.id,
-                        TimeRangeCondition.KEY_START to 22 * 60,
-                        TimeRangeCondition.KEY_END to 6 * 60,
-                    ),
-                ),
-                actionId = BlockAction.id,
-                actionParams = Params.of(
-                    BlockAction.KEY_REFLECTION to "押し切れば、そのぶん後で閉まる。",
-                    BlockAction.KEY_MIN_SECONDS to 20,
-                ),
-                consequence = Consequence(
-                    lockScope = LockScope.APP,
-                    lockMinutes = 30,
                 ),
             )
         },

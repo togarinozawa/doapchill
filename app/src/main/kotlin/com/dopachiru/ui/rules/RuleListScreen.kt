@@ -392,11 +392,10 @@ fun describeRule(rule: Rule): String {
     val condition = ConditionTree.describe(rule.condition)
     val action = ActionRegistry[rule.actionId]?.summarize(rule.actionParams) ?: rule.actionId
     val head = if (ConditionTree.leafCount(rule.condition) == 0) "常に" else condition
-    val consequence = if (rule.consequence.locksNothing) {
-        ""
-    } else {
-        " / 破ったら${rule.consequence.lockScope.label}を${rule.consequence.lockMinutes}分"
-    }
+    val consequence = rule.consequence.breakPoints
+        ?.takeIf { it != 0 }
+        ?.let { pt -> " / 破ったら${if (pt < 0) "${-pt}pt払う" else "+${pt}pt"}" }
+        ?: ""
     // 2組目以降があることを隠さない。隠すと、一覧に出ていない組が黙って
     // 効いて「書いていないのに閉まる」になる
     val more = if (rule.extraClauses.isEmpty()) "" else " ほか" + rule.extraClauses.size + "組"

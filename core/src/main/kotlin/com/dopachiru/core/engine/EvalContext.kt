@@ -1,5 +1,8 @@
 package com.dopachiru.core.engine
 
+import com.dopachiru.core.condition.types.TimeRangeCondition
+import com.dopachiru.core.model.ConditionNode
+import com.dopachiru.core.param.Params
 import java.time.LocalDateTime
 
 /**
@@ -166,6 +169,15 @@ data class EvalContext(
      * 見つけて強度を上げるには、「効いていない」を測れる必要がある。
      */
     val overrideCountOf: (ruleId: Long) -> Int = { 0 },
+
+    /**
+     * 同じ組にある「時間帯」条件のパラメータ。無ければ null。エンジンが組ごとに差し込む。
+     *
+     * [com.dopachiru.core.condition.types.CooldownCondition] が読む。間隔の起点を
+     * 実際に触った時刻ではなく**その枠の終わり**にずらすため ── 枠の中でいつ触っても、
+     * 起点は枠が閉じた瞬間で揃う。詳しくはそちらの説明。
+     */
+    val clauseTimeRangeParams: Params? = null,
 ) {
     /**
      * そのルールを評価するための文脈。
@@ -185,5 +197,14 @@ data class EvalContext(
         currentRuleId = rule.id,
         currentRuleUid = rule.uid,
         currentClauseId = clause.id,
+        clauseTimeRangeParams = timeRangeParamsIn(clause.condition),
     )
+}
+
+/** 木のどこかにある「時間帯」条件のパラメータ。最初に見つかったものを返す。 */
+private fun timeRangeParamsIn(node: ConditionNode): Params? = when (node) {
+    is ConditionNode.Leaf -> if (node.typeId == TimeRangeCondition.id) node.params else null
+    is ConditionNode.Not -> timeRangeParamsIn(node.child)
+    is ConditionNode.AllOf -> node.children.firstNotNullOfOrNull { timeRangeParamsIn(it) }
+    is ConditionNode.AnyOf -> node.children.firstNotNullOfOrNull { timeRangeParamsIn(it) }
 }

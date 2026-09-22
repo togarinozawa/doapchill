@@ -49,7 +49,6 @@ import com.dopachiru.core.model.MainAction
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.ConditionTree
 import com.dopachiru.core.model.Consequence
-import com.dopachiru.core.model.LockScope
 import com.dopachiru.core.model.NodePath
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.action.types.DeclareAction
@@ -62,7 +61,6 @@ import com.dopachiru.core.model.Clauses
 import com.dopachiru.core.model.RuleLinks
 import com.dopachiru.core.model.RuleCheck
 import com.dopachiru.core.model.RuleOverlap
-import com.dopachiru.core.model.Target
 import com.dopachiru.core.param.Params
 import com.dopachiru.core.points.PointPolicy
 import com.dopachiru.desktop.DesktopRuntime
@@ -245,7 +243,7 @@ fun RuleEditorDialog(
                     draft = draft.copy(actionId = id, actionParams = params)
                 }
                 val advanced = ActionRegistry.all().filter {
-                    it.id !in setOf(BlockAction.id, LockoutAction.id, DelayAction.id, WarnAction.id)
+                    it.id !in setOf(BlockAction.id, DelayAction.id, WarnAction.id)
                 }
 
                 // 主な動作(1つ)
@@ -281,66 +279,30 @@ fun RuleEditorDialog(
 
                 // 使えなくするの中身
                 if (plan.main == MainAction.CLOSE) {
-                    // 「いつまで」が完全封印と閉め出しの分かれ目
+                    // 条件が続くかぎり閉まったまま、条件が外れたら開く。時間で区切って
+                    // 閉めたいなら、上の「ほかの動作」から「しばらく閉め出す」を選ぶ
                     Spacer(Modifier.height(12.dp))
-                    Text("いつまで", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+                    Text("逃げ道", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
                     Spacer(Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(
-                            selected = !plan.usesTimer,
-                            onClick = { setPlan(plan.copy(lockMinutes = 0)) },
-                            label = { Text("条件を満たしているあいだ") },
+                            selected = !plan.soft,
+                            onClick = { setPlan(plan.copy(soft = false)) },
+                            label = { Text("しっかり") },
                         )
                         FilterChip(
-                            selected = plan.usesTimer,
-                            onClick = { setPlan(plan.copy(lockMinutes = plan.lockMinutes.coerceAtLeast(10))) },
-                            label = { Text("このあとしばらく") },
+                            selected = plan.soft,
+                            onClick = { setPlan(plan.copy(soft = true)) },
+                            label = { Text("やんわり") },
                         )
-                        if (plan.usesTimer) {
-                            NumberStepper(
-                                value = plan.lockMinutes, min = 1, max = 12 * 60, step = 5, suffix = "分",
-                                onChange = { setPlan(plan.copy(lockMinutes = it)) },
-                            )
-                        }
                     }
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        if (plan.usesTimer) "閉めてから${plan.lockMinutes}分は、条件が外れても開きません。"
-                        else "条件が続くかぎり、開き直しても閉まったまま。条件が外れたら開きます。",
+                        if (plan.soft) "手間をかければ押し切れます。押し切ると「破った」ことに。"
+                        else "押し切る口はありません。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-
-                    Spacer(Modifier.height(12.dp))
-                    if (!plan.usesTimer) {
-                        Text("逃げ道", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
-                        Spacer(Modifier.height(4.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterChip(
-                                selected = !plan.soft,
-                                onClick = { setPlan(plan.copy(soft = false)) },
-                                label = { Text("しっかり") },
-                            )
-                            FilterChip(
-                                selected = plan.soft,
-                                onClick = { setPlan(plan.copy(soft = true)) },
-                                label = { Text("やんわり") },
-                            )
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            if (plan.soft) "手間をかければ押し切れます。押し切ると「破った」ことに。"
-                            else "押し切る口はありません。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    } else {
-                        Text(
-                            "時間で締め出すあいだは押し切れません。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
 
                     Spacer(Modifier.height(12.dp))
                     Text("重ねる", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
@@ -372,7 +334,6 @@ fun RuleEditorDialog(
                     val hidden = setOf(
                         BlockAction.KEY_ALLOW_OVERRIDE,
                         ActionExtras.KEY_PREWARN_SECONDS,
-                        LockoutAction.KEY_MINUTES,
                     )
                     val specs = if (plan.main == MainAction.ADVANCED) action.params
                     else action.params.filter { it.key !in hidden }
@@ -767,7 +728,14 @@ private fun NegateChip(negated: Boolean, label: String, onToggle: (Boolean) -> U
 
 // ----------------------------------------------------------------------
 
-/** 破った / 守ったときに起きることの設定。 */
+/**
+ * ルールを破った / 守ったときのポイントの増減。
+ *
+ * 封鎖(どこを・どれだけ閉めるか)はここには無い ── 押し切ることと破ることは
+ * 同じ出来事なので、そのあとにもう一段閉める長さを別に決めさせても、
+ * 二重に設定させるだけで分かりやすくならない。閉める長さそのものが要るなら、
+ * 措置(「しばらく閉め出す」)の側で選ぶ。
+ */
 @Composable
 fun ConsequenceEditor(
     consequence: Consequence,
@@ -775,135 +743,6 @@ fun ConsequenceEditor(
     onChange: (Consequence) -> Unit,
 ) {
     Column(Modifier.fillMaxWidth()) {
-        Text("破ったら何が閉まるか", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
-        Spacer(Modifier.height(6.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            LockScope.entries.forEach { scope ->
-                FilterChip(
-                    selected = consequence.lockScope == scope,
-                    onClick = {
-                        onChange(
-                            consequence.copy(
-                                lockScope = scope,
-                                // 封鎖を選んだのに長さが 0 のままでは何も起きない
-                                lockMinutes = when {
-                                    scope == LockScope.NONE -> 0
-                                    consequence.lockMinutes > 0 -> consequence.lockMinutes
-                                    else -> 30
-                                },
-                            )
-                        )
-                    },
-                    label = { Text(scope.label) },
-                )
-            }
-        }
-        Spacer(Modifier.height(4.dp))
-        Text(
-            consequence.lockScope.description,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        if (consequence.lockScope != LockScope.NONE) {
-            Spacer(Modifier.height(12.dp))
-            Text("どれくらい閉めるか", style = MaterialTheme.typography.labelLarge)
-            Spacer(Modifier.height(4.dp))
-            NumberStepper(
-                value = consequence.lockMinutes,
-                min = 0,
-                max = Consequence.MAX_LOCK_MINUTES,
-                step = 5,
-                suffix = "分",
-                onChange = { onChange(consequence.copy(lockMinutes = it)) },
-            )
-            Text(
-                "上限は${Consequence.MAX_LOCK_MINUTES / 60}時間。桁を間違えて一日詰むことがないようにしてあります。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        if (consequence.lockScope == LockScope.EVERYTHING) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "エクスプローラ・タスクマネージャ・ドパチル自身は、閉めない一覧に入っています。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        // 破ったものと閉まるものを別にしたいとき用。選ばせる先が無いまま
-        // 選択肢だけ出すと、選んでも何も起きない行き止まりになる
-        if (consequence.lockScope == LockScope.CUSTOM) {
-            val lockTarget = consequence.lockTarget ?: Target()
-            val ruleFile by DesktopRuntime.ruleFile.collectAsState()
-            val knownTags = remember(ruleFile) {
-                ruleFile.tags.values.flatten().distinct().sorted()
-            }
-            var showPicker by remember { mutableStateOf(false) }
-
-            Spacer(Modifier.height(12.dp))
-            Text("閉めるものを選ぶ", style = MaterialTheme.typography.labelLarge)
-            Text(
-                "ルールの対象とは別です。ここが空のままだと何も閉まりません。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(6.dp))
-            if (lockTarget.packages.isEmpty()) {
-                Text(
-                    "まだ選んでいません",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                lockTarget.packages.forEach { Text("・$it", style = MaterialTheme.typography.bodySmall) }
-            }
-            Spacer(Modifier.height(6.dp))
-            OutlinedButton(onClick = { showPicker = true }) { Text("アプリを選ぶ") }
-
-            if (knownTags.isNotEmpty()) {
-                Spacer(Modifier.height(10.dp))
-                Text("タグごと閉める", style = MaterialTheme.typography.labelMedium)
-                Spacer(Modifier.height(4.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    knownTags.forEach { tag ->
-                        FilterChip(
-                            selected = tag in lockTarget.tags,
-                            onClick = {
-                                val next = if (tag in lockTarget.tags) {
-                                    lockTarget.tags - tag
-                                } else {
-                                    lockTarget.tags + tag
-                                }
-                                onChange(consequence.copy(lockTarget = lockTarget.copy(tags = next)))
-                            },
-                            label = { Text("#$tag") },
-                        )
-                    }
-                }
-            }
-
-            if (showPicker) {
-                AppPickerDialog(
-                    selected = lockTarget.packages,
-                    onToggle = { process ->
-                        val current = lockTarget.packages
-                        onChange(
-                            consequence.copy(
-                                lockTarget = lockTarget.copy(
-                                    packages = if (process in current) current - process else current + process
-                                )
-                            )
-                        )
-                    },
-                    onDismiss = { showPicker = false },
-                )
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
         PointRow(
             title = "破ったときのポイント",
             help = "押し切る・宣言を超える・警告を無視する のいずれか",

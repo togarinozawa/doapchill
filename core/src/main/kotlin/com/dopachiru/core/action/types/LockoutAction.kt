@@ -1,8 +1,7 @@
 package com.dopachiru.core.action.types
 
 import com.dopachiru.core.action.ActionType
-import com.dopachiru.core.model.Consequence
-import com.dopachiru.core.model.LockScope
+import com.dopachiru.core.model.Target
 import com.dopachiru.core.param.ParamSpec
 import com.dopachiru.core.param.Params
 
@@ -14,10 +13,11 @@ import com.dopachiru.core.param.Params
  * 積み上がるものと組み合わせる ── [com.dopachiru.core.condition.types.UsageSinceBreakCondition]
  * が対になる相手で、あちらが数え、こちらが閉める。
  *
- * ## 罰との違い
- * 見た目も効き方も罰([Consequence])と同じ封鎖だが、科される筋道が違う。
- * 罰は**破ったから**科される。こちらは破っていなくても、時間が来れば閉まる。
- * 「20分使ったら10分休む」は違反ではなく取り決めなので、罰の欄には書けない。
+ * ## 「破ったら」とは別
+ * 「破ったら([Consequence])」は押し切った・警告を無視した・宣言を超えた、
+ * その出来事そのものに対する報いで、ポイントの増減だけを持つ。こちらは
+ * 破っていなくても、時間が来れば閉まる ── 「20分使ったら10分休む」は
+ * 違反ではなく取り決めなので、破ったらの欄には書けない。
  *
  * ## 押し切れない
  * 封鎖に押し切る手段は無い(時間が来れば必ず解ける)。ここが完全封印との差で、
@@ -32,7 +32,7 @@ object LockoutAction : ActionType {
     const val KEY_ESCALATES = "escalates"
     const val KEY_NOTICE = "notice"
 
-    /** 閉める範囲。[LockScope] のうち、ここから選べるものだけ。 */
+    /** 閉める範囲。 */
     object Scope {
         /** いま使っていたアプリ1つだけ。 */
         const val APP = "app"
@@ -50,13 +50,20 @@ object LockoutAction : ActionType {
     /** 完全封印(100)より強い。押し切れないぶん、同時に成立したらこちらを採る。 */
     override val severity = 200
 
+    /**
+     * 閉め出す長さの上限(分)。
+     *
+     * 上限を置かないと、入力を1桁間違えただけで端末が何日も使えなくなる。
+     */
+    const val MAX_MINUTES = 12 * 60
+
     override val params = listOf(
         ParamSpec.DurationParam(
             KEY_MINUTES,
             "閉め出す長さ",
             default = 10,
             min = 1,
-            max = Consequence.MAX_LOCK_MINUTES,
+            max = MAX_MINUTES,
             help = "条件の「これだけ離れたら数え直す」より短くすると、明けた直後にまた閉まる",
         ),
         ParamSpec.EnumParam(
@@ -73,8 +80,7 @@ object LockoutAction : ActionType {
             KEY_ESCALATES,
             "繰り返すほど長くする",
             default = false,
-            help = "同じ日に何度も引っかかったとき、1→2→4倍と伸びる。上限は" +
-                "${Consequence.MAX_LOCK_MINUTES / 60}時間",
+            help = "同じ日に何度も引っかかったとき、1→2→4倍と伸びる。上限は${MAX_MINUTES / 60}時間",
         ),
         ParamSpec.TextParam(
             KEY_NOTICE,
@@ -93,21 +99,25 @@ object LockoutAction : ActionType {
         ),
     )
 
-    /** [KEY_SCOPE] を封鎖の範囲に読み替える。知らない値は対象ぜんぶに倒す。 */
-    fun scopeOf(p: Params): LockScope =
-        if (p.string(KEY_SCOPE, Scope.TARGET) == Scope.APP) LockScope.APP else LockScope.RULE_TARGET
+    /** 閉める範囲を実際の対象に解決する。知らない値は対象ぜんぶに倒す。 */
+    fun resolveTarget(p: Params, packageName: String, ruleTarget: Target): Target =
+        if (p.string(KEY_SCOPE, Scope.TARGET) == Scope.APP) Target(packages = setOf(packageName)) else ruleTarget
 
     /**
-     * 罰と同じ形に直す。
+     * [repeatIndex] 回目(0始まり)の、閉め出す長さ(分)。
      *
-     * 範囲の解決も、繰り返しで伸ばす計算も [Consequence] が持っているので、
-     * 端末側は罰とまったく同じ道を通せる。閉め方を2通り持たない。
+     * 段階を切っていれば毎回同じ。入れていれば 1→2→4→8 倍と伸びる。
+     * 上限は必ず [MAX_MINUTES] で止まる。
      */
-    fun consequenceOf(p: Params): Consequence = Consequence(
-        lockScope = scopeOf(p),
-        lockMinutes = p.int(KEY_MINUTES, 10).coerceAtLeast(1),
-        lockEscalates = p.bool(KEY_ESCALATES, false),
-    )
+    fun minutesFor(p: Params, repeatIndex: Int): Int {
+        val base = p.int(KEY_MINUTES, 10).coerceAtLeast(1)
+        if (!p.bool(KEY_ESCALATES, false) || repeatIndex <= 0) return base.coerceAtMost(MAX_MINUTES)
+        // 8回目より先は伸ばさない。Int が溢れるより先に上限で止まるが、
+        // 計算の途中で溢れないよう段数のほうを抑えておく
+        val steps = repeatIndex.coerceAtMost(8)
+        val scaled = base.toLong() shl steps
+        return scaled.coerceAtMost(MAX_MINUTES.toLong()).toInt()
+    }
 
     override fun summarize(p: Params): String {
         val minutes = p.int(KEY_MINUTES, 10)

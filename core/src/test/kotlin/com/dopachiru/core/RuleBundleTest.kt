@@ -276,16 +276,12 @@ class RuleBundleTest {
     @Test
     fun `措置の付随する報いも運ばれる`() {
         val strict = rule().copy(
-            consequence = com.dopachiru.core.model.Consequence(
-                lockScope = com.dopachiru.core.model.LockScope.RULE_TARGET,
-                lockMinutes = 30,
-                lockEscalates = true,
-            ),
+            consequence = com.dopachiru.core.model.Consequence(breakPoints = -30, keepPoints = 5),
         )
         val bundle = parse(RuleBundleIo.export(listOf(strict)))
         val back = bundle.rules.single().consequence
-        assertEquals(30, back.lockMinutes)
-        assertTrue(back.lockEscalates)
+        assertEquals(-30, back.breakPoints)
+        assertEquals(5, back.keepPoints)
     }
 
     @Test
