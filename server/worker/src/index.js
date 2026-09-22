@@ -35,7 +35,6 @@
  * 実績の中に名前を埋めないのは、同じ名前を日数ぶん繰り返すことになるためです。
  */
 const KINDS = [
-  'rules',
   'tags',
   'gates',
   'changeRequests',

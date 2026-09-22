@@ -1,7 +1,6 @@
 package com.dopachiru.data
 
 import android.content.Context
-import com.dopachiru.core.model.Rule
 import com.dopachiru.core.sync.AppInfo
 import com.dopachiru.core.sync.DeviceInfo
 import com.dopachiru.core.sync.Envelope
@@ -75,7 +74,6 @@ class SyncManager(
 
         val pulled = apply(
             settings,
-            response.of(SyncKinds.RULES),
             response.of(SyncKinds.TAGS),
             response.of(SyncKinds.APPS),
             response.of(SyncKinds.DEVICES),
@@ -117,21 +115,7 @@ class SyncManager(
     // ---- 送るものを集める --------------------------------------------------
 
     private suspend fun collect(settings: SyncSettings): Map<String, List<Envelope>> {
-        val local = rules.allWithUpdatedAt()
-        val ruleEnvelopes = ArrayList<Envelope>()
-        val liveUids = HashSet<String>()
-
-        for ((rule, updatedAt) in local) {
-            if (rule.uid.isBlank()) continue
-            liveUids += rule.uid
-            ruleEnvelopes += SyncMapper.ruleEnvelope(rule, updatedAt)
-        }
-        // 消したものの墓標。手元に生き返っているものは送らない
-        for (state in syncStateDao.ofKind(SyncKinds.RULES)) {
-            if (!state.deleted || state.uid in liveUids) continue
-            ruleEnvelopes += Envelope(uid = state.uid, updatedAt = state.updatedAt, deleted = true)
-        }
-
+        val local = rules.getAll()
         val tagsByPackage = rules.currentTagsByPackage()
         val tagEnvelopes = tagsByPackage.map { (pkg, tags) ->
             SyncMapper.tagsEnvelope(PLATFORM, pkg, tags, stampFor(SyncKinds.TAGS, "$PLATFORM:$pkg"))
@@ -141,7 +125,7 @@ class SyncManager(
         // 端末に入っている全アプリを送るのは、要らないうえに知られすぎる
         val referenced = buildSet {
             addAll(tagsByPackage.keys)
-            local.forEach { (rule, _) ->
+            local.forEach { rule ->
                 addAll(rule.target.packages)
                 addAll(rule.target.exceptPackages)
             }
@@ -192,7 +176,6 @@ class SyncManager(
             .map { SyncMapper.ruleStateEnvelope(it, stampFor(SyncKinds.RULE_STATES, it.uid)) }
 
         return mapOf(
-            SyncKinds.RULES to ruleEnvelopes,
             SyncKinds.TAGS to tagEnvelopes,
             SyncKinds.APPS to appEnvelopes,
             SyncKinds.DEVICES to listOf(self),
@@ -269,7 +252,6 @@ class SyncManager(
 
     private suspend fun apply(
         settings: SyncSettings,
-        incomingRules: List<Envelope>,
         incomingTags: List<Envelope>,
         incomingApps: List<Envelope>,
         incomingDevices: List<Envelope>,
@@ -278,32 +260,6 @@ class SyncManager(
         incomingRuleStates: List<Envelope>,
     ): Int {
         var applied = 0
-        val localRuleTimes = rules.updatedAtByUid()
-
-        for (envelope in incomingRules) {
-            when (decideMerge(envelope, localRuleTimes[envelope.uid])) {
-                MergeAction.Skip -> Unit
-
-                MergeAction.Delete -> {
-                    rules.deleteByUid(envelope.uid)
-                    // こちらでも墓標を残す。残さないと次の同期で送り返して往復する
-                    syncStateDao.put(
-                        SyncStateEntity(SyncKinds.RULES, envelope.uid, envelope.updatedAt, true),
-                    )
-                    applied++
-                }
-
-                MergeAction.Apply -> {
-                    val rule = SyncMapper.ruleOf(envelope) ?: continue
-                    // 同じ uid が手元にあればその番号を引き継ぐ。番号が変わると、
-                    // 罰や記録がぶら下がっている先を見失う
-                    val existingId = rules.getAll().firstOrNull { it.uid == rule.uid }?.id ?: 0L
-                    rules.upsertFromSync(rule.copy(id = existingId), envelope.updatedAt)
-                    syncStateDao.remove(SyncKinds.RULES, envelope.uid)
-                    applied++
-                }
-            }
-        }
 
         for (envelope in incomingTags) {
             val local = syncStateDao.get(SyncKinds.TAGS, envelope.uid)?.updatedAt

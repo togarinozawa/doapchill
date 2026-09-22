@@ -81,35 +81,6 @@ object DesktopSync {
         var nextReservations = reservations
         var pulled = 0
 
-        for (envelope in response.of(SyncKinds.RULES)) {
-            val localAt = next.stampOf(SyncKinds.RULES, envelope.uid)?.updatedAt
-            when (decideMerge(envelope, localAt)) {
-                MergeAction.Skip -> Unit
-
-                MergeAction.Delete -> {
-                    next = next.copy(rules = next.rules.filterNot { it.uid == envelope.uid })
-                        .withStamp(SyncKinds.RULES, envelope.uid, SyncStamp(envelope.updatedAt, true))
-                    pulled++
-                }
-
-                MergeAction.Apply -> {
-                    val rule = SyncMapper.ruleOf(envelope) ?: continue
-                    // 手元にあれば番号を引き継ぐ。変わると罰や記録の紐付けが切れる
-                    val existing = next.rules.firstOrNull { it.uid == envelope.uid }
-                    val placed = rule.copy(id = existing?.id ?: next.nextId)
-                    next = next.copy(
-                        rules = if (existing == null) {
-                            next.rules + placed
-                        } else {
-                            next.rules.map { if (it.uid == envelope.uid) placed else it }
-                        },
-                        nextId = if (existing == null) next.nextId + 1 else next.nextId,
-                    ).withStamp(SyncKinds.RULES, envelope.uid, SyncStamp(envelope.updatedAt, false))
-                    pulled++
-                }
-            }
-        }
-
         for (envelope in response.of(SyncKinds.TAGS)) {
             if (decideMerge(envelope, next.stampOf(SyncKinds.TAGS, envelope.uid)?.updatedAt) !=
                 MergeAction.Apply
@@ -264,19 +235,6 @@ object DesktopSync {
         selfName: String,
         selfVersion: String,
     ): Map<String, List<Envelope>> {
-        val rules = ArrayList<Envelope>()
-        val live = HashSet<String>()
-
-        for (rule in file.rules) {
-            if (rule.uid.isBlank()) continue
-            live += rule.uid
-            rules += SyncMapper.ruleEnvelope(
-                rule,
-                file.stampOf(SyncKinds.RULES, rule.uid)?.updatedAt ?: nowSec(),
-            )
-        }
-        rules += tombstones(file, SyncKinds.RULES, live)
-
         val tags = file.tags.map { (process, set) ->
             SyncMapper.tagsEnvelope(
                 PLATFORM,
@@ -346,7 +304,6 @@ object DesktopSync {
             }
 
         return mapOf(
-            SyncKinds.RULES to rules,
             SyncKinds.TAGS to tags,
             SyncKinds.APPS to apps,
             SyncKinds.DEVICES to listOf(self),

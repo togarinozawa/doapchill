@@ -1,12 +1,9 @@
 package com.dopachiru.core
 
-import com.dopachiru.core.action.types.BlockAction
 import com.dopachiru.core.model.Command
 import com.dopachiru.core.model.CommandKind
 import com.dopachiru.core.model.CommandState
-import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.Reservation
-import com.dopachiru.core.model.Rule
 import com.dopachiru.core.model.Target
 import com.dopachiru.core.param.Params
 import com.dopachiru.core.sync.AppInfo
@@ -27,49 +24,6 @@ class SyncMapperTest {
 
     @Before
     fun setUp() = DopaCore.registerAll()
-
-    private fun rule(uid: String = "u1", name: String = "夜はSNS", id: Long = 5L) = Rule(
-        id = id,
-        uid = uid,
-        name = name,
-        target = Target(packages = setOf("com.example.sns"), tags = setOf("sns")),
-        condition = ConditionNode.AllOf(emptyList()),
-        actionId = BlockAction.id,
-        actionParams = Params.defaultsOf(BlockAction.params),
-    )
-
-    // ---- ルール -----------------------------------------------------------
-
-    @Test
-    fun `ルールが往復する`() {
-        val back = SyncMapper.ruleOf(SyncMapper.ruleEnvelope(rule(), 100))
-        assertNotNull(back)
-        assertEquals("夜はSNS", back.name)
-        assertEquals(setOf("com.example.sns"), back.target.packages)
-        assertEquals(BlockAction.id, back.actionId)
-    }
-
-    @Test
-    fun `端末ごとの番号は運ばない`() {
-        // 向こうの番号をこちらに持ち込むと、同じ番号の既存ルールを踏む
-        val envelope = SyncMapper.ruleEnvelope(rule(id = 42L), 100)
-        assertTrue(!envelope.payload.toString().contains("\"id\":42"), envelope.payload.toString())
-        assertEquals(0L, SyncMapper.ruleOf(envelope)?.id)
-    }
-
-    @Test
-    fun `墓標は中身を運ばない`() {
-        // 消したルールの中身まで送る必要は無いし、送ると消したものが線に残る
-        val envelope = SyncMapper.ruleEnvelope(rule(), 100, deleted = true)
-        assertTrue(envelope.deleted)
-        assertEquals(0, envelope.payload.size)
-        assertEquals("u1", envelope.uid)
-    }
-
-    @Test
-    fun `読めない中身は null になって落ちない`() {
-        assertNull(SyncMapper.ruleOf(Envelope("u1", 1, false)))
-    }
 
     // ---- タグ -------------------------------------------------------------
 
@@ -202,28 +156,5 @@ class SyncMapperTest {
         )
         val back = SyncMapper.commandOf(SyncMapper.commandEnvelope(command, 100))
         assertEquals(command, back)
-    }
-
-    @Test
-    fun `ルールは端末の指定も運ぶ`() {
-        val back = SyncMapper.ruleOf(
-            SyncMapper.ruleEnvelope(rule().copy(devices = setOf("pc")), 100),
-        )
-        assertNotNull(back)
-        assertEquals(setOf("pc"), back.devices)
-    }
-
-    @Test
-    fun `端末の指定が無い古いルールも読める`() {
-        // 欄を足す前に保存されたものは、この欄を持っていない。
-        // 既定が空(= どの端末でも効く)なので、縛りが勝手に外れることはない
-        val bare = DopaCore.json.parseToJsonElement(
-            """{"name":"むかしのルール","target":{},"condition":{"kind":"allOf","children":[]},"actionId":"block"}"""
-        )
-        val envelope = Envelope("old", 1, payload = bare as kotlinx.serialization.json.JsonObject)
-        val back = SyncMapper.ruleOf(envelope)
-        assertNotNull(back)
-        assertTrue(back.devices.isEmpty())
-        assertTrue(back.appliesToDevice("どの端末でも"))
     }
 }

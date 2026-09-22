@@ -18,7 +18,6 @@ import kotlinx.serialization.json.JsonObject
  * ネットが切れれば外れる制限は、機内モードにするだけで抜けられる制限です。
  */
 object SyncKinds {
-    const val RULES = "rules"
     const val TAGS = "tags"
     const val GATES = "gates"
     const val CHANGE_REQUESTS = "changeRequests"
@@ -43,8 +42,10 @@ object SyncKinds {
     /**
      * 「そのルールが、その端末で、いま効いているか」。
      *
-     * ルールを配っても、**使った時間は配られません。** スマホで持ち時間を
-     * 使い切っても PC では数え直しになるので、端末を替えれば逃げられる。
+     * ルール自体は端末ごとに直接作りますが、**同じ uid のルールを複数端末に
+     * 置けば連動できます**([com.dopachiru.core.condition.types.LinkedRuleCondition])。
+     * そのとき使った時間までは配りません。スマホで持ち時間を使い切っても
+     * PC では数え直しになると、端末を替えれば逃げられるので、
      * 効いているという事実のほうを配って塞ぎます。[RuleState]
      */
     const val RULE_STATES = "ruleStates"
@@ -66,7 +67,7 @@ object SyncKinds {
      */
     const val COMMANDS = "commands"
 
-    val ALL = listOf(RULES, TAGS, GATES, CHANGE_REQUESTS, APPS, DEVICES, RESERVATIONS, COMMANDS)
+    val ALL = listOf(TAGS, GATES, CHANGE_REQUESTS, APPS, DEVICES, RESERVATIONS, COMMANDS)
 }
 
 /**

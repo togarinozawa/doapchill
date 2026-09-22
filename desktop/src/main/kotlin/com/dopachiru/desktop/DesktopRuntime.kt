@@ -689,43 +689,26 @@ object DesktopRuntime {
         Stores.rules.save(updated)
     }
 
-    /**
-     * ルールを触ったことを覚えておく。
-     *
-     * Android は行に updatedAt があるが、こちらは JSON なので自分で押す。
-     * 押し忘れると、変えたのに古いままの時刻で送られて**相手に負ける**。
-     */
-    private fun RuleFile.stamped(uid: String, deleted: Boolean = false): RuleFile =
-        if (uid.isBlank()) this else withStamp(SyncKinds.RULES, uid, SyncStamp(nowSec(), deleted))
-
     fun addRule(rule: Rule) = updateRules { file ->
-        // uid は端末をまたいで一意。id と違って、作った端末が変わっても付いて回る
+        // uid は端末をまたいで一意。連動(linked_active)で他端末のルールを指すときに使う
         val uid = rule.uid.ifBlank { java.util.UUID.randomUUID().toString() }
         file.copy(
             rules = file.rules + rule.copy(id = file.nextId, uid = uid),
             nextId = file.nextId + 1,
-        ).stamped(uid)
+        )
     }
 
     /**
      * まるごと写して1本増やす。
      *
-     * 同期でルールは全端末に配られるので、**端末ごとに違う中身にしたいときは
-     * 2本に分ける**しかありません。そのための複製です。番号と uid は
-     * [addRule] が新しく振ります ── 引き継ぐと、写した先が元を上書きします。
+     * 番号と uid は [addRule] が新しく振ります ── 引き継ぐと、写した先が元を
+     * 上書きしたり、同じ uid を指す連動(linked_active)を混乱させたりします。
      */
     fun duplicateRule(rule: Rule) =
         addRule(rule.copy(id = 0L, uid = "", name = rule.name + "(写し)"))
 
-    /**
-     * ルールを消す。
-     *
-     * 消したことを墓標に残します。残さないと、次の同期で別の端末が
-     * 送り返してきて生き返ります。
-     */
     fun removeRule(id: Long) = updateRules { file ->
-        val uid = file.rules.firstOrNull { it.id == id }?.uid.orEmpty()
-        file.copy(rules = file.rules.filter { r -> r.id != id }).stamped(uid, deleted = true)
+        file.copy(rules = file.rules.filter { r -> r.id != id })
     }
 
     // ---- 関門つきのルール変更 ---------------------------------------------
@@ -773,7 +756,6 @@ object DesktopRuntime {
             ChangeKind.DELETE -> removeRule(rule.id)
             ChangeKind.UPDATE, ChangeKind.ENABLE, ChangeKind.DISABLE -> updateRules { file ->
                 file.copy(rules = file.rules.map { if (it.id == rule.id) rule else it })
-                    .stamped(rule.uid)
             }
         }
     }
@@ -1275,13 +1257,11 @@ object DesktopRuntime {
 
     /** ルールを1つ差し替える。条件・罰の編集から使う。 */
     fun updateRule(rule: Rule) = updateRules { file ->
-        file.copy(rules = file.rules.map { if (it.id == rule.id) rule else it }).stamped(rule.uid)
+        file.copy(rules = file.rules.map { if (it.id == rule.id) rule else it })
     }
 
     fun setRuleEnabled(id: Long, enabled: Boolean) = updateRules { file ->
-        val uid = file.rules.firstOrNull { it.id == id }?.uid.orEmpty()
         file.copy(rules = file.rules.map { if (it.id == id) it.copy(enabled = enabled) else it })
-            .stamped(uid)
     }
 
     fun todayBreakdown(): List<Pair<String, Int>> = ledger.breakdownIn(ResetPolicy())

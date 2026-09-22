@@ -3,7 +3,6 @@ package com.dopachiru.core.sync
 import com.dopachiru.core.DopaCore
 import com.dopachiru.core.model.Command
 import com.dopachiru.core.model.Reservation
-import com.dopachiru.core.model.Rule
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -15,9 +14,14 @@ import kotlinx.serialization.json.jsonPrimitive
  *
  * ## 何を配って、何を配らないか
  *
- * 配るのは **ルール・タグ・アプリの名札・使用実績・端末の名簿・予約・頼みごと**。
+ * 配るのは **タグ・アプリの名札・使用実績・端末の名簿・予約・頼みごと・
+ * ルールが効いているかという事実**。
  *
- * **ゲートと変更リクエストは配りません。** ゲート(変更に摩擦をかける仕組み)は
+ * **ルールそのものは配りません。** 各端末で直接作ります。連動させたいときは
+ * 同じ uid のルールを両端末に置き、「効いているか」だけを配って揃えます
+ * ([SyncKinds.RULE_STATES])。
+ *
+ * **ゲートと変更リクエストも配りません。** ゲート(変更に摩擦をかける仕組み)は
  * 端末ごとの自分との約束で、変更リクエストはその端末で承認待ちのものです。
  * 承認待ちが別の端末に流れると、**片方で作った申請をもう片方で承認できてしまい**、
  * ゲートを置いた意味が消えます。
@@ -27,32 +31,10 @@ import kotlinx.serialization.json.jsonPrimitive
  *
  * ## 鍵の付けかた
  *
- * ルールは `uid`(端末をまたいで一意)。タグとアプリの名札は
- * **`platform:識別子`** にします ── `chrome.exe` のように両方の端末に
- * 存在しうる名前があるので、分けないと互いに上書きし合います。
+ * タグとアプリの名札は **`platform:識別子`** にします ── `chrome.exe` のように
+ * 両方の端末に存在しうる名前があるので、分けないと互いに上書きし合います。
  */
 object SyncMapper {
-
-    // ---- ルール -----------------------------------------------------------
-
-    fun ruleEnvelope(rule: Rule, updatedAt: Long, deleted: Boolean = false): Envelope = Envelope(
-        uid = rule.uid,
-        updatedAt = updatedAt,
-        deleted = deleted,
-        // 端末ごとの番号(id)は運ばない。番号は端末の中の都合で、
-        // 向こうの番号をこちらに持ち込むと既存のルールを踏む
-        payload = if (deleted) {
-            JsonObject(emptyMap())
-        } else {
-            DopaCore.json.encodeToJsonElement(Rule.serializer(), rule.copy(id = 0L)) as JsonObject
-        },
-    )
-
-    /** 読めなければ null。知らない条件が入っていても、ここでは弾きません。 */
-    fun ruleOf(envelope: Envelope): Rule? = runCatching {
-        DopaCore.json.decodeFromJsonElement(Rule.serializer(), envelope.payload)
-            .copy(uid = envelope.uid, id = 0L)
-    }.getOrNull()
 
     // ---- タグ -------------------------------------------------------------
 

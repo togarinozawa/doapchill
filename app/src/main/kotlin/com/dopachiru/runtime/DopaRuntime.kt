@@ -187,7 +187,7 @@ object DopaRuntime {
         protectedApps = ProtectedApps(app)
         db = DopaDatabase.get(app)
         settings = SettingsStore(app)
-        rules = RuleRepository(db.ruleDao(), db.appTagDao(), db.syncStateDao())
+        rules = RuleRepository(db.ruleDao(), db.appTagDao())
         usage = UsageTracker(db.usageDao(), scope)
         declarations = DeclarationManager(db.declarationDao(), scope)
         stats = StatsRepository(db.dayStatDao(), db.blockLogDao())

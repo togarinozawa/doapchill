@@ -52,8 +52,8 @@ class SyncApiTest {
             respond(
                 ex,
                 200,
-                """{"rev":9,"serverTime":1,"changes":{"rules":[
-                   {"uid":"r1","updatedAt":5,"deleted":false,"payload":{"name":"夜はSNS"}}],
+                """{"rev":9,"serverTime":1,"changes":{"tags":[
+                   {"uid":"android:com.x","updatedAt":5,"deleted":false,"payload":{"tags":["sns"]}}],
                    "apps":[{"uid":"android:com.x","updatedAt":5,"payload":{"label":"X"}}]}}""",
             )
         }
@@ -112,15 +112,15 @@ class SyncApiTest {
                 deviceId = "phone",
                 since = 3,
                 changes = mapOf(
-                    SyncKinds.RULES to listOf(
-                        Envelope("r1", 5, false, buildJsonObject { put("name", JsonPrimitive("夜はSNS")) }),
+                    SyncKinds.TAGS to listOf(
+                        Envelope("android:com.x", 5, false, buildJsonObject { put("tags", JsonPrimitive("sns")) }),
                     ),
                 ),
             ),
         )
         assertTrue(lastBody.contains("\"deviceId\":\"phone\""), lastBody)
         assertTrue(lastBody.contains("\"since\":3"), lastBody)
-        assertTrue(lastBody.contains("夜はSNS"), lastBody)
+        assertTrue(lastBody.contains("sns"), lastBody)
     }
 
     @Test
@@ -129,7 +129,7 @@ class SyncApiTest {
         assertIs<SyncApi.Outcome.Ok<*>>(r)
         val body = r.value as com.dopachiru.core.sync.SyncResponse
         assertEquals(9L, body.rev)
-        assertEquals("r1", body.of(SyncKinds.RULES).single().uid)
+        assertEquals("android:com.x", body.of(SyncKinds.TAGS).single().uid)
         // アプリの名札も同じ仕組みで運ばれる
         assertEquals("android:com.x", body.of(SyncKinds.APPS).single().uid)
         // 知らない種類を引いても落ちない
