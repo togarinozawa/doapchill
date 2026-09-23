@@ -4,7 +4,10 @@ import android.content.Context
 import com.dopachiru.core.sync.AppInfo
 import com.dopachiru.core.sync.DeviceInfo
 import com.dopachiru.core.sync.Envelope
+import com.dopachiru.core.model.ReservationRules
 import com.dopachiru.core.sync.MergeAction
+import com.dopachiru.core.sync.RuleCatalog
+import com.dopachiru.core.sync.RuleCatalogs
 import com.dopachiru.core.sync.RuleStates
 import com.dopachiru.core.sync.SyncApi
 import com.dopachiru.core.sync.SyncKinds
@@ -28,7 +31,7 @@ import java.time.LocalDate
  * ## 配るだけで、取り締まりには関わりません
  *
  * 判定はローカルのルールでやります。ここが動かなくても、圏外でも、機内モードでも
- * 縛りは効いたまま。**止まって起きるのは「別の端末で足したルールがまだ届かない」だけ**です。
+ * 縛りは効いたまま。**止まって起きるのは「別の端末の予約や連動がまだ届かない」だけ**です。
  *
  * ## 毎回ぜんぶ送ります
  *
@@ -80,6 +83,7 @@ class SyncManager(
             response.of(SyncKinds.RESERVATIONS),
             response.of(SyncKinds.COMMANDS),
             response.of(SyncKinds.RULE_STATES),
+            response.of(SyncKinds.RULE_CATALOGS),
         )
 
         // 実績は別の口。落ちても同期そのものは成立したことにする ──
@@ -175,7 +179,12 @@ class SyncManager(
             .filter { it.deviceId == settings.deviceId }
             .map { SyncMapper.ruleStateEnvelope(it, stampFor(SyncKinds.RULE_STATES, it.uid)) }
 
+        // ルールの名札。ほかの端末から予約や連動でこの端末のルールを指すため
+        val policies = settingsStore.reservationPolicies.first()
+        val catalog = RuleCatalogs.of(settings.deviceId, local) { ReservationRules.policyFor(it, policies) }
+
         return mapOf(
+            SyncKinds.RULE_CATALOGS to listOf(SyncMapper.catalogEnvelope(catalog, catalogStamp(catalog))),
             SyncKinds.TAGS to tagEnvelopes,
             SyncKinds.APPS to appEnvelopes,
             SyncKinds.DEVICES to listOf(self),
@@ -199,6 +208,22 @@ class SyncManager(
         syncStateDao.get(kind, uid)?.let { return it.updatedAt }
         val now = System.currentTimeMillis() / 1000
         syncStateDao.put(SyncStateEntity(kind, uid, now, deleted = false))
+        return now
+    }
+
+    /**
+     * 名札の「いつ変えたか」。**中身が変わったときだけ進めます。**
+     *
+     * ルールは Room の行に更新時刻を持つが、名札は予約の型や連動も混ぜて作るので、
+     * どれか1つの時刻では決まらない。中身の指紋ごとに初めて見た時刻を覚えておき、
+     * 指紋が変わったら古いものを捨てる。
+     */
+    private suspend fun catalogStamp(catalog: RuleCatalog): Long {
+        val key = RuleCatalogs.contentKey(catalog)
+        syncStateDao.get(CATALOG_STAMP, key)?.let { return it.updatedAt }
+        syncStateDao.ofKind(CATALOG_STAMP).forEach { syncStateDao.remove(CATALOG_STAMP, it.uid) }
+        val now = System.currentTimeMillis() / 1000
+        syncStateDao.put(SyncStateEntity(CATALOG_STAMP, key, now, deleted = false))
         return now
     }
 
@@ -258,8 +283,27 @@ class SyncManager(
         incomingReservations: List<Envelope>,
         incomingCommands: List<Envelope>,
         incomingRuleStates: List<Envelope>,
+        incomingCatalogs: List<Envelope>,
     ): Int {
         var applied = 0
+
+        // ---- ルールの名札 ---------------------------------------------
+        // 1台ぶんをまるごと置き換える。自分のぶんは入れない(手元のルールが正)
+        if (incomingCatalogs.isNotEmpty()) {
+            var catalogs = settingsStore.ruleCatalogs.first()
+            for (envelope in incomingCatalogs) {
+                val local = syncStateDao.get(SyncKinds.RULE_CATALOGS, envelope.uid)?.updatedAt
+                if (decideMerge(envelope, local) != MergeAction.Apply) continue
+                val catalog = SyncMapper.catalogOf(envelope) ?: continue
+                if (catalog.deviceId == settings.deviceId) continue
+                catalogs = catalogs.filterNot { it.deviceId == catalog.deviceId } + catalog
+                syncStateDao.put(
+                    SyncStateEntity(SyncKinds.RULE_CATALOGS, envelope.uid, envelope.updatedAt, false),
+                )
+                applied++
+            }
+            settingsStore.setRuleCatalogs(catalogs)
+        }
 
         for (envelope in incomingTags) {
             val local = syncStateDao.get(SyncKinds.TAGS, envelope.uid)?.updatedAt
@@ -393,5 +437,8 @@ class SyncManager(
 
         /** 終わった頼みごとを残しておく長さ。送った側の画面に「済み」を出すため。 */
         const val COMMAND_KEEP_SEC = 3L * 24 * 60 * 60
+
+        /** 自分の名札の指紋を覚えておく置き場。受け取った名札の時刻とは分ける。 */
+        const val CATALOG_STAMP = SyncKinds.RULE_CATALOGS + "#self"
     }
 }

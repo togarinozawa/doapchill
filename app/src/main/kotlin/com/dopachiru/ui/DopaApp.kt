@@ -21,8 +21,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.navArgument
 import androidx.navigation.compose.navigation
 import com.dopachiru.ui.dev.DevToolsScreen
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -130,6 +132,8 @@ fun DopaApp() {
                     onOpenSettings = {
                         navController.navigate("settings/page/" + SettingsPage.Focus.id)
                     },
+                    onCreateTodayRule = { navController.navigate("rule/0?today=true") },
+                    onEditRule = { id -> navController.navigate("rule/$id") },
                 )
             }
 
@@ -141,10 +145,21 @@ fun DopaApp() {
                 )
             }
 
-            composable("rule/{ruleId}") { entry ->
+            // today=true は「今日だけ」の入口(集中タブ)から来たとき。作るルールに期限が付く
+            composable(
+                "rule/{ruleId}?today={today}",
+                arguments = listOf(
+                    navArgument("ruleId") { type = NavType.StringType },
+                    navArgument("today") {
+                        type = NavType.BoolType
+                        defaultValue = false
+                    },
+                ),
+            ) { entry ->
                 val ruleId = entry.arguments?.getString("ruleId")?.toLongOrNull() ?: 0L
                 RuleEditScreen(
                     ruleId = ruleId,
+                    today = entry.arguments?.getBoolean("today") ?: false,
                     onDone = { navController.popBackStack() },
                 )
             }

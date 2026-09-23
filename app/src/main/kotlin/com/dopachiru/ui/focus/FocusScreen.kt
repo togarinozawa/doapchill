@@ -46,7 +46,11 @@ import kotlinx.coroutines.delay
  * ── 入れ替えて、タグはルールタブの中に移しました。
  */
 @Composable
-fun FocusScreen(onOpenSettings: () -> Unit) {
+fun FocusScreen(
+    onOpenSettings: () -> Unit,
+    onCreateTodayRule: () -> Unit,
+    onEditRule: (Long) -> Unit,
+) {
     var tick by remember { mutableIntStateOf(0) }
     // 残り時間と、時間切れで解けたことを拾うために見直す
     LaunchedEffect(Unit) {
@@ -64,6 +68,8 @@ fun FocusScreen(onOpenSettings: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item { if (running != null) RunningCard(running) else StartCard() }
+
+        item { TodayRulesCard(onCreateFromScratch = onCreateTodayRule, onEdit = onEditRule) }
 
         item { ScheduleCard(schedules, onOpenSettings) }
 

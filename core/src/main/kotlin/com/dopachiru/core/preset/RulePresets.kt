@@ -12,7 +12,6 @@ import com.dopachiru.core.action.types.WarnAction
 import com.dopachiru.core.condition.types.AppChainCondition
 import com.dopachiru.core.condition.types.CalendarBusyCondition
 import com.dopachiru.core.condition.types.ChanceCondition
-import com.dopachiru.core.condition.types.ContinuousUsageCondition
 import com.dopachiru.core.condition.types.CooldownCondition
 import com.dopachiru.core.condition.types.DayOfWeekCondition
 import com.dopachiru.core.condition.types.HabituationCondition
@@ -340,7 +339,7 @@ object RulePresets {
         RulePreset(
             id = "long_session",
             name = "だらだら見続けたら警告",
-            description = "連続15分を超えたら、5分おきに警告を重ねる。操作は止めない。",
+            description = "続けて15分を超えたら、5分おきに警告を重ねる(5分離れたら数え直し)。操作は止めない。",
             group = PresetGroup.GENTLE,
             evidence = "「時間を無駄にした」という嫌悪感は約30分で自然に来る(Tran ら CHI 2019)。" +
                 "その手前で声をかけると、自分でやめる判断が前倒しになる。",
@@ -348,9 +347,7 @@ object RulePresets {
             rule(
                 name = "だらだら見続けたら警告",
                 packages = packages,
-                conditions = listOf(
-                    leaf(ContinuousUsageCondition.id, ContinuousUsageCondition.KEY_MINUTES to 15),
-                ),
+                conditions = listOf(budget(minutes = 15, reset = BudgetReset.AWAY, awayMinutes = 5)),
                 actionId = WarnAction.id,
                 actionParams = Params.of(
                     WarnAction.KEY_MESSAGE to "15分経った。まだ続ける?",
@@ -400,7 +397,7 @@ object RulePresets {
                 target = Target(packages = packages),
                 condition = ConditionNode.AnyOf(
                     listOf(
-                        leaf(ContinuousUsageCondition.id, ContinuousUsageCondition.KEY_MINUTES to 15),
+                        budget(minutes = 15, reset = BudgetReset.AWAY, awayMinutes = 5),
                         budget(
                             minutes = 60,
                             reset = BudgetReset.PERIOD,

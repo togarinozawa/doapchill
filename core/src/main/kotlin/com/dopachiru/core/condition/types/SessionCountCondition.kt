@@ -17,7 +17,8 @@ object SessionCountCondition : ConditionType {
     override val displayName = "セッション回数"
     override val description = "期間内にアプリを開いた回数が指定を超えたら成立する。だらだら開き直す癖に効く。"
 
-    override val group = ConditionGroup.USAGE
+    // 量ではなく「開く」という引き金を数えるので、使いすぎの棚ではなくこちら
+    override val group = ConditionGroup.TRIGGER
     override val example = "今日もう10回開いていたら"
 
     override val params = listOf(

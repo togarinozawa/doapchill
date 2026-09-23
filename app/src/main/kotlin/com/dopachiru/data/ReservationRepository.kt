@@ -114,7 +114,7 @@ class ReservationRepository(
         devices: Set<String> = emptySet(),
     ): BookingCheck {
         val now = nowSec()
-        val existing = ReservationRules.bookedUnder(policy, cache, now)
+        val existing = ReservationRules.bookedUnder(policy, cache, now, devices.singleOrNull().orEmpty())
         val verdict = ReservationRules.check(policy, existing, startEpochSec, endEpochSec, now)
         if (verdict is BookingCheck.Refused) return verdict
 

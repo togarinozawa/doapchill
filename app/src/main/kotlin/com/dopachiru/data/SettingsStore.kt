@@ -20,6 +20,7 @@ import com.dopachiru.core.model.ReservationPolicy
 import com.dopachiru.core.model.ReservationRules
 import com.dopachiru.core.points.PointPolicy
 import com.dopachiru.core.sync.DeviceInfo
+import com.dopachiru.core.sync.RuleCatalog
 import com.dopachiru.core.sync.RuleState
 import com.dopachiru.core.sync.SyncSettings
 import kotlinx.coroutines.flow.Flow
@@ -64,6 +65,7 @@ class SettingsStore(private val context: Context) {
         val devicesJson = stringPreferencesKey("devices_json")
         val commandsJson = stringPreferencesKey("commands_json")
         val ruleStatesJson = stringPreferencesKey("rule_states_json")
+        val ruleCatalogsJson = stringPreferencesKey("rule_catalogs_json")
         val focusSchedulesJson = stringPreferencesKey("focus_schedules_json")
         val focusScheduleRunsJson = stringPreferencesKey("focus_schedule_runs_json")
         val reservationPoliciesJson = stringPreferencesKey("reservation_policies_json")
@@ -264,6 +266,19 @@ class SettingsStore(private val context: Context) {
     suspend fun setRuleStates(list: List<RuleState>) {
         val encoded = DopaCore.json.encodeToString(ListSerializer(RuleState.serializer()), list)
         context.dataStore.edit { it[Keys.ruleStatesJson] = encoded }
+    }
+
+    /** ほかの端末から届いたルールの名札。自分のぶんは入れない。[RuleCatalog] */
+    val ruleCatalogs: Flow<List<RuleCatalog>> = context.dataStore.data.map { prefs ->
+        val raw = prefs[Keys.ruleCatalogsJson] ?: return@map emptyList()
+        runCatching {
+            DopaCore.json.decodeFromString(ListSerializer(RuleCatalog.serializer()), raw)
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun setRuleCatalogs(list: List<RuleCatalog>) {
+        val encoded = DopaCore.json.encodeToString(ListSerializer(RuleCatalog.serializer()), list)
+        context.dataStore.edit { it[Keys.ruleCatalogsJson] = encoded }
     }
 
     /**

@@ -49,6 +49,48 @@ object RuleLinks {
     }
 
     /**
+     * ほかの端末の、名指ししたルールと連動させる。すでにある連動は置き換える。
+     *
+     * ルールを配らなくなってから、同じ uid のルールが2台に揃うことは無くなった
+     * ([withLink] の「自分自身を指す」は、配っていた頃に揃ったルールでしか効かない)。
+     * 相手の名札([com.dopachiru.core.sync.RuleCatalog])から選んで、uid と端末を書き込む。
+     */
+    fun linkTo(condition: ConditionNode, ruleUid: String, deviceId: String): ConditionNode {
+        val leaf = ConditionNode.Leaf(
+            LinkedRuleCondition.id,
+            Params.of(
+                LinkedRuleCondition.KEY_RULE_UID to ruleUid,
+                LinkedRuleCondition.KEY_DEVICE_ID to deviceId,
+            ),
+        )
+        val base = withoutLink(condition)
+        return if (base is ConditionNode.AnyOf) {
+            base.copy(children = base.children + leaf)
+        } else {
+            ConditionNode.AnyOf(listOf(base, leaf))
+        }
+    }
+
+    /**
+     * いま連動している相手(ルールの uid, 端末)。連動が無ければ null。
+     *
+     * uid が空なら「自分自身」を指す古い形。
+     */
+    fun linkOf(condition: ConditionNode): Pair<String, String>? = when (condition) {
+        is ConditionNode.Leaf ->
+            if (condition.typeId != LinkedRuleCondition.id) {
+                null
+            } else {
+                condition.params.string(LinkedRuleCondition.KEY_RULE_UID, "") to
+                    condition.params.string(LinkedRuleCondition.KEY_DEVICE_ID, "")
+            }
+
+        is ConditionNode.Not -> linkOf(condition.child)
+        is ConditionNode.AllOf -> condition.children.firstNotNullOfOrNull { linkOf(it) }
+        is ConditionNode.AnyOf -> condition.children.firstNotNullOfOrNull { linkOf(it) }
+    }
+
+    /**
      * 連動を外す。
      *
      * 外したあと子が1つしか残らない OR は、**かぶせた殻ごと剥がします** ──

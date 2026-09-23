@@ -36,6 +36,7 @@ import com.dopachiru.BuildConfig
 import com.dopachiru.core.sync.DeviceInfo
 import com.dopachiru.core.sync.Enrollment
 import com.dopachiru.core.sync.SyncApi
+import com.dopachiru.core.sync.RuleCatalogs
 import com.dopachiru.core.sync.RuleState
 import com.dopachiru.core.sync.RuleStates
 import com.dopachiru.core.model.RuleLinks
@@ -1050,13 +1051,16 @@ object DopaRuntime {
      *
      * どこからも指されていないルールの状態を配っても誰も読まない。
      * 毎回全部書くと、何も起きていない日でも同期のたびに行が動きます。
+     * 「見られている」には、**ほかの端末のルールから指されているもの**も入る
+     * (向こうの名札の [com.dopachiru.core.sync.RuleCatalog.watching])。
      */
     private suspend fun publishRuleStates(): Boolean {
         val deviceId = myDeviceId
         if (deviceId.isBlank()) return false
 
         val all = ruleCache
-        val watched = RuleLinks.watchedUids(all)
+        val watched = RuleLinks.watchedUids(all) +
+            RuleCatalogs.watchedByOthers(settings.ruleCatalogs.first(), deviceId)
         if (watched.isEmpty()) return false
 
         val now = System.currentTimeMillis() / 1000

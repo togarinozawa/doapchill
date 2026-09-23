@@ -65,6 +65,43 @@ class ConditionGroupTest {
     }
 
     @Test
+    fun `連続使用防止の棚は使いすぎたら1つだけ`() {
+        // 1つだけなら選ぶ画面は棚を開かずにそのまま設定へ進む。
+        // 何かを足すとその一発が効かなくなるので、足すなら画面側も見直すこと
+        val usage = ConditionRegistry.byGroup().first { it.first == ConditionGroup.USAGE }.second
+        assertEquals(listOf(UsageBudgetCondition.id), usage.map { it.id })
+    }
+
+    @Test
+    fun `開いた回数は開く癖の棚にある`() {
+        val trigger = ConditionRegistry.byGroup().first { it.first == ConditionGroup.TRIGGER }.second
+        assertTrue(trigger.any { it.id == "session_count" })
+    }
+
+    @Test
+    fun `連続使用時間はもう選べないが読める`() {
+        assertFalse("continuous_usage" in ConditionRegistry.selectable().map { it.id })
+        assertTrue(ConditionRegistry["continuous_usage"] != null)
+    }
+
+    @Test
+    fun `雛形は凍結した条件を使わない`() {
+        // 凍結した条件で新しいルールを作れてしまうと、凍結した意味が無い
+        val frozen = ConditionRegistry.all().filterNot { it.available }.map { it.id }.toSet()
+        val used = com.dopachiru.core.preset.RulePresets.all.flatMap { preset ->
+            preset.build(setOf("com.example")).clauses.flatMap { leafIds(it.condition) }
+        }
+        assertTrue(used.none { it in frozen }, "凍結した条件を使う雛形がある: ${used.filter { it in frozen }}")
+    }
+
+    private fun leafIds(node: com.dopachiru.core.model.ConditionNode): List<String> = when (node) {
+        is com.dopachiru.core.model.ConditionNode.Leaf -> listOf(node.typeId)
+        is com.dopachiru.core.model.ConditionNode.AllOf -> node.children.flatMap { leafIds(it) }
+        is com.dopachiru.core.model.ConditionNode.AnyOf -> node.children.flatMap { leafIds(it) }
+        is com.dopachiru.core.model.ConditionNode.Not -> leafIds(node.child)
+    }
+
+    @Test
     fun `まとめた3つはもう選べない`() {
         // 実装は残す(移行していない保存を読むため)が、選ぶ画面には出さない。
         // 同じことができる条件が4つ並ぶと、何を選べばいいのか分からなくなる

@@ -51,8 +51,12 @@ import com.dopachiru.desktop.data.RuleFile
 import com.dopachiru.desktop.data.DesktopSync
 import com.dopachiru.core.sync.UsageDay
 import com.dopachiru.desktop.data.SyncStamp
+import com.dopachiru.core.sync.RuleCatalogs
 import com.dopachiru.core.sync.RuleStates
 import com.dopachiru.core.sync.SyncKinds
+import com.dopachiru.core.model.BookingCheck
+import com.dopachiru.core.model.ReservationPolicy
+import com.dopachiru.core.model.ReservationRules
 import com.dopachiru.desktop.data.Stores
 import com.dopachiru.desktop.data.UsageLedger
 import com.dopachiru.desktop.platform.BlockStrength
@@ -893,6 +897,7 @@ object DesktopRuntime {
             usage = usage,
             selfName = _settings.value.deviceName,
             selfVersion = AppVersion.CURRENT,
+            policyOf = ::reservationPolicyOf,
             onApply = { updated ->
                 _ruleFile.value = updated
                 Stores.rules.save(updated)
@@ -939,13 +944,16 @@ object DesktopRuntime {
      * ## 見られているルールだけ書く
      *
      * どこからも指されていないルールの状態を配っても誰も読みません。
+     * 「見られている」には、**ほかの端末のルールから指されているもの**も入る
+     * (向こうの名札の [com.dopachiru.core.sync.RuleCatalog.watching])。
      */
     private fun publishRuleStates() {
         val deviceId = myDeviceId()
         if (deviceId.isBlank()) return
 
         val file = _ruleFile.value
-        val watched = RuleLinks.watchedUids(file.rules)
+        val watched = RuleLinks.watchedUids(file.rules) +
+            RuleCatalogs.watchedByOthers(file.ruleCatalogs, deviceId)
         if (watched.isEmpty()) return
 
         val now = nowSec()
@@ -1541,11 +1549,59 @@ object DesktopRuntime {
             startEpochSec = startEpochSec,
             endEpochSec = endEpochSec,
             note = note,
+            // この端末の枠だと書いておく。空だと、スマホで間隔や回数を数えるときに
+            // PC の枠まで数えられる
+            devices = setOfNotNull(myDeviceId().takeIf { it.isNotBlank() }),
         )
         val next = Reservations.prune(_reservations.value, now) + reservation
         _reservations.value = next
         Stores.reservations.save(next)
         return reservation
+    }
+
+    /**
+     * この端末のルールを予約するときの型。名札に載せて、スマホから取るときにも使わせる。
+     *
+     * Windows 版は型を持たず、「何分前から」の1つだけを設定で決めている。
+     * 長さと間隔はこの端末の予約画面と同じ上限にそろえる ── スマホから取るときだけ
+     * 厳しくなったり緩くなったりしないように。
+     */
+    fun reservationPolicyOf(rule: Rule): ReservationPolicy =
+        ReservationRules.defaultFor(rule).copy(
+            minLeadMinutes = _settings.value.reservationLeadMinutes,
+            maxDurationMinutes = ReservationRules.MAX_DURATION_MINUTES,
+            minGapMinutes = 0,
+            maxPerDay = 0,
+        )
+
+    /**
+     * ほかの端末の枠を取る。数字は向こうの名札に載っていた型のまま。
+     *
+     * 取った枠は同期で向こうに届き、向こうのルールの穴になる。
+     */
+    fun bookFor(
+        policy: ReservationPolicy,
+        deviceId: String,
+        startEpochSec: Long,
+        endEpochSec: Long,
+    ): BookingCheck {
+        val now = nowSec()
+        val existing = ReservationRules.bookedUnder(policy, _reservations.value, now, deviceId)
+        val verdict = ReservationRules.check(policy, existing, startEpochSec, endEpochSec, now)
+        if (verdict is BookingCheck.Refused) return verdict
+        val reservation = Reservation(
+            uid = java.util.UUID.randomUUID().toString(),
+            target = policy.target,
+            startEpochSec = startEpochSec,
+            endEpochSec = endEpochSec,
+            note = policy.label,
+            devices = setOf(deviceId),
+            policyId = policy.id,
+        )
+        val next = Reservations.prune(_reservations.value, now) + reservation
+        _reservations.value = next
+        Stores.reservations.save(next)
+        return BookingCheck.Ok
     }
 
     /** 予約を取り消す。 */

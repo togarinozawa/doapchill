@@ -1,7 +1,10 @@
 package com.dopachiru.desktop.data
 
 import com.dopachiru.core.model.Reservation
+import com.dopachiru.core.model.ReservationPolicy
+import com.dopachiru.core.model.Rule
 import com.dopachiru.core.sync.AppInfo
+import com.dopachiru.core.sync.RuleCatalogs
 import com.dopachiru.core.sync.DeviceInfo
 import com.dopachiru.core.sync.Envelope
 import com.dopachiru.core.sync.MergeAction
@@ -25,7 +28,7 @@ import java.time.LocalDate
  * 「どこから読んでどこへ書くか」だけです。
  *
  * **制限の実行はこれに依存しません。** 落ちていても縛りは効いたままで、
- * 止まって起きるのは「別の端末で足したルールがまだ届かない」だけです。
+ * 止まって起きるのは「別の端末の予約や連動がまだ届かない」だけです。
  */
 object DesktopSync {
 
@@ -43,12 +46,16 @@ object DesktopSync {
     /** 終わった頼みごとを残しておく長さ。送った側の画面に「済み」を出すため。 */
     private const val COMMAND_KEEP_SEC = 3L * 24 * 60 * 60
 
+    /** 自分の名札の指紋を覚えておく置き場。受け取った名札の時刻とは分ける。 */
+    private const val CATALOG_STAMP = SyncKinds.RULE_CATALOGS + "#self"
+
     /**
      * 1往復。**呼ぶ側が別スレッドに逃がしてください** ── 素直に待ちます。
      *
      * @param reservations 予約は別の店に住んでいるので、出し入れを引数で受けます。
      * @param selfName この端末の名前。名簿に載せる。
      * @param selfVersion アプリの版。食い違いの切り分け用。
+     * @param policyOf 予約で開くルールの型。名札に載せて、スマホから取るときに使わせる。
      */
     fun run(
         file: RuleFile,
@@ -57,14 +64,22 @@ object DesktopSync {
         usage: List<UsageDay>,
         selfName: String,
         selfVersion: String,
+        policyOf: (Rule) -> ReservationPolicy,
         onApply: (RuleFile) -> Unit,
         onReservations: (List<Reservation>) -> Unit,
         onSettings: (SyncSettings) -> Unit,
     ): Outcome {
         if (!settings.enabled || !settings.isConfigured) return Outcome.NotConfigured
 
+        // 名札は中身が変わったときだけ時刻を進める。毎回いまの時刻で送ると、
+        // 何も変えていない日でも同期のたびにほかの端末が受け取り直す
+        val catalog = RuleCatalogs.of(settings.deviceId, file.rules, policyOf)
+        val catalogKey = RuleCatalogs.contentKey(catalog)
+        val catalogAt = file.stampOf(CATALOG_STAMP, catalogKey)?.updatedAt ?: nowSec()
+
         val api = SyncApi(settings.baseUrl, settings.token)
-        val outgoing = collect(file, reservations, settings, selfName, selfVersion)
+        val outgoing = collect(file, reservations, settings, selfName, selfVersion) +
+            (SyncKinds.RULE_CATALOGS to listOf(SyncMapper.catalogEnvelope(catalog, catalogAt)))
 
         val response = when (
             val r = api.sync(
@@ -77,9 +92,25 @@ object DesktopSync {
             is SyncApi.Outcome.Malformed -> return failed(settings, r.message, onSettings)
         }
 
-        var next = file
+        var next = file.copy(
+            syncState = file.syncState.filterKeys { !it.startsWith("$CATALOG_STAMP|") } +
+                ("$CATALOG_STAMP|$catalogKey" to SyncStamp(catalogAt)),
+        )
         var nextReservations = reservations
         var pulled = 0
+
+        // ---- ルールの名札 ---------------------------------------------
+        // 1台ぶんをまるごと置き換える。自分のぶんは入れない(手元のルールが正)
+        for (envelope in response.of(SyncKinds.RULE_CATALOGS)) {
+            val localAt = next.stampOf(SyncKinds.RULE_CATALOGS, envelope.uid)?.updatedAt
+            if (decideMerge(envelope, localAt) != MergeAction.Apply) continue
+            val received = SyncMapper.catalogOf(envelope) ?: continue
+            if (received.deviceId == settings.deviceId) continue
+            next = next.copy(
+                ruleCatalogs = next.ruleCatalogs.filterNot { it.deviceId == received.deviceId } + received,
+            ).withStamp(SyncKinds.RULE_CATALOGS, envelope.uid, SyncStamp(envelope.updatedAt, false))
+            pulled++
+        }
 
         for (envelope in response.of(SyncKinds.TAGS)) {
             if (decideMerge(envelope, next.stampOf(SyncKinds.TAGS, envelope.uid)?.updatedAt) !=

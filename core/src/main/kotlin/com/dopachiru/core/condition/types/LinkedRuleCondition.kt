@@ -18,16 +18,20 @@ import com.dopachiru.core.param.Params
  *
  * この条件は、**効いているという事実のほうを見ます。**
  *
- * ## いちばん素直な使い方は「自分自身を指す」
+ * ## 相手は名札から選ぶ
  *
- * 同じルールが端末をまたいで同じ [com.dopachiru.core.model.Rule.uid] を持つので、
+ * ルールは端末ごとに直接作るので、指す相手は**向こうの端末の名札**
+ * ([com.dopachiru.core.sync.RuleCatalog])から選び、uid と端末を書き込みます。
  * 条件を
  *
- *     どれかが成立(使い始めてからの持ち時間 / 別の端末でこのルールが効いている)
+ *     どれかが成立(使い始めてからの持ち時間 / PC の「夜のSNS」が効いている)
  *
- * と書けば、**どちらの端末で使い切っても両方が閉まります。** ルールは1本のまま。
+ * と書けば、**どちらの端末で使い切っても両方が閉まります**(両側に書いた場合)。
  *
- * 自分を指しても輪にならないのは、見るのが**自分以外の端末の状態**だけで、
+ * uid が空の古い形は「自分自身」を指します。ルールを配っていた頃に2台で uid が
+ * 揃ったルールだけがこれで繋がります。
+ *
+ * 互いに指しても輪にならないのは、見るのが**自分以外の端末の状態**だけで、
  * 配るほうもこの条件を外して計算しているからです([com.dopachiru.core.sync.RuleStates])。
  *
  * ## ネットが要る唯一の条件です
@@ -44,10 +48,10 @@ object LinkedRuleCondition : ConditionType {
     const val KEY_DEVICE_ID = "deviceId"
 
     override val id = "linked_active"
-    override val displayName = "別の端末でこのルールが効いている"
+    override val displayName = "別の端末のルールが効いている"
     override val description =
         "指定したルールが、自分以外の端末でいま効いていれば成立する。" +
-            "同じルールを指せば「どちらかで使い切ったら両方閉まる」になる。" +
+            "両方の端末で互いを指せば「どちらかで使い切ったら両方閉まる」になる。" +
             "同期が届いていなければ成立しない(上乗せであって、土台にはできない)。"
 
     override val group = ConditionGroup.TRIGGER

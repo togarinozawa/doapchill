@@ -172,13 +172,18 @@ object ReservationRules {
      *
      * 型を消して作り直しても古い枠が残るので、**対象が重なるもの**も見る
      * ── id だけで見ると、同じアプリの枠が間隔の判定から漏れる。
+     *
+     * @param deviceId どの端末の枠を数えるか。予約は全端末に配られるので、絞らないと
+     *   PC の枠がスマホの間隔や回数に数えられる。空なら絞らない。
      */
     fun bookedUnder(
         policy: ReservationPolicy,
         all: List<Reservation>,
         nowSec: Long,
+        deviceId: String = "",
     ): List<Reservation> = all.filter {
         !it.isPastAt(nowSec) &&
+            (deviceId.isBlank() || it.appliesToDevice(deviceId)) &&
             (it.policyId == policy.id || RuleOverlap.overlaps(it.target, policy.target))
     }
 

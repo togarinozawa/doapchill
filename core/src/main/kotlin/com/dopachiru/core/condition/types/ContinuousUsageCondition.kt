@@ -7,7 +7,12 @@ import com.dopachiru.core.param.ParamSpec
 import com.dopachiru.core.param.Params
 import java.time.LocalDateTime
 
-/** そのアプリを連続して一定時間以上使っていれば成立する。 */
+/**
+ * そのアプリを連続して一定時間以上使っていれば成立する。
+ *
+ * **凍結。** 「使いすぎたら」を「離れたら数え直す」にすれば同じことが書け、
+ * 棚に2つ並ぶと選べなくなるため。保存済みのルールを読むために実装は残す。
+ */
 object ContinuousUsageCondition : ConditionType {
     const val KEY_MINUTES = "minutes"
 
@@ -17,6 +22,7 @@ object ContinuousUsageCondition : ConditionType {
 
     override val group = ConditionGroup.USAGE
     override val example = "開きっぱなしで30分たったら。一度離れると0に戻る"
+    override val available = false
 
     override val params = listOf(
         ParamSpec.DurationParam(KEY_MINUTES, "連続使用が", default = 30, min = 1, max = 8 * 60),

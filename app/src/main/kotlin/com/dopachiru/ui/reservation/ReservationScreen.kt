@@ -39,7 +39,10 @@ import com.dopachiru.core.model.ReservationPolicy
 import com.dopachiru.core.model.ReservationRules
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.model.Target
+import com.dopachiru.core.sync.AppInfo
 import com.dopachiru.core.sync.DeviceInfo
+import com.dopachiru.core.sync.RuleCatalog
+import com.dopachiru.data.AppLabels
 import com.dopachiru.runtime.DopaRuntime
 import com.dopachiru.ui.rules.InstalledApps
 import kotlinx.coroutines.launch
@@ -63,9 +66,14 @@ import java.time.format.DateTimeFormatter
  *
  * ## 端末ごとに並べる
  *
- * 同じルールでも、効く端末は端末ごとに違います([Rule.devices])。
- * 「PC で Steam を開ける枠」をスマホから取れるのが予約の使いどころなので、
- * **どの端末の話なのかを先に見せて**から選ばせます。
+ * ルールは端末ごとに直接作るので、**この端末の見出しには手元のルール、
+ * ほかの端末の見出しにはその端末の名札([RuleCatalog])**を並べます。
+ * 「PC で Steam を開ける枠」をスマホから取れるのが予約の使いどころで、
+ * 取った枠は同期で PC に届き、PC のルールの穴になります。
+ *
+ * ほかの端末の枠の数字(何分前から・長さ・間隔・回数)は**持ち主の端末で決めた
+ * ものをそのまま使い、ここでは直せません。** 取る側で直せると、スマホから取る
+ * ときだけ緩くなります。
  *
  * ## 数字は型([ReservationPolicy])で持つ
  *
@@ -82,6 +90,7 @@ fun ReservationScreen() {
     val policies by DopaRuntime.settings.reservationPolicies.collectAsState(initial = emptyList())
     val roster by DopaRuntime.devices.collectAsState(initial = emptyList())
     val rules by DopaRuntime.rules.rules.collectAsState(initial = emptyList())
+    val catalogs by DopaRuntime.settings.ruleCatalogs.collectAsState(initial = emptyList())
     val me = DopaRuntime.myDeviceId
     val scope = rememberCoroutineScope()
 
@@ -90,8 +99,8 @@ fun ReservationScreen() {
 
     // この端末が名簿に無いこともある(同期する前)。自分だけは必ず出す
     val devices = remember(roster, me) { deviceSlots(roster, me) }
-    val groups = remember(rules, devices) {
-        devices.map { slot -> slot to ReservationRules.unlockableOn(rules, slot.deviceId) }
+    val groups = remember(rules, policies, catalogs, devices) {
+        devices.map { slot -> slot to bookablesOn(slot, me, rules, policies, catalogs) }
     }
     val nothingToBook = groups.all { it.second.isEmpty() }
 
@@ -144,16 +153,18 @@ fun ReservationScreen() {
                     }
                 }
 
-                items(
-                    unlockable,
-                    key = { slot.deviceId + "/" + it.uid.ifBlank { it.id.toString() } },
-                ) { rule ->
-                    val policy = ReservationRules.policyFor(rule, policies)
+                items(unlockable, key = { slot.deviceId + "/" + it.key }) { bookable ->
                     RuleSlotCard(
-                        rule = rule,
-                        policy = policy,
-                        onBook = { booking = policy to slot.deviceId },
-                        onTune = { editing = policy },
+                        bookable = bookable,
+                        label = { pkg ->
+                            if (bookable.mine) {
+                                InstalledApps.labelOf(context, pkg)
+                            } else {
+                                AppLabels.labelOf(context, slot.platform + ":" + pkg)
+                            }
+                        },
+                        onBook = { booking = bookable.policy to slot.deviceId },
+                        onTune = if (bookable.mine) ({ editing = bookable.policy }) else null,
                     )
                 }
             }
@@ -174,9 +185,17 @@ fun ReservationScreen() {
             }
         } else {
             items(reservations, key = { it.uid }) { reservation ->
+                // PC の枠は PC のアプリ名で。こちらに入っていないので名札から引く
+                val owner = devices.firstOrNull { it.deviceId == reservation.devices.singleOrNull() }
                 ReservationRow(
                     reservation = reservation,
-                    label = { pkg -> InstalledApps.labelOf(context, pkg) },
+                    label = { pkg ->
+                        if (owner == null || owner.deviceId == me) {
+                            InstalledApps.labelOf(context, pkg)
+                        } else {
+                            AppLabels.labelOf(context, owner.platform + ":" + pkg)
+                        }
+                    },
                     deviceLabel = { id -> devices.firstOrNull { it.deviceId == id }?.label ?: id },
                     onCancel = { DopaRuntime.reservations.cancel(reservation.uid) },
                 )
@@ -217,7 +236,7 @@ fun ReservationScreen() {
 }
 
 /** 一覧の見出しに使う端末1つぶん。 */
-private data class DeviceSlot(val deviceId: String, val label: String)
+private data class DeviceSlot(val deviceId: String, val label: String, val platform: String)
 
 /**
  * 並べる端末。**この端末を必ず先頭に**置く。
@@ -230,54 +249,92 @@ private fun deviceSlots(roster: List<DeviceInfo>, myDeviceId: String): List<Devi
         myDeviceId,
         (roster.firstOrNull { it.deviceId == myDeviceId }?.displayName ?: "この端末") +
             if (myDeviceId.isNotBlank()) "(この端末)" else "",
+        AppInfo.ANDROID,
     )
     val others = roster
         .filter { it.deviceId != myDeviceId && it.deviceId.isNotBlank() }
-        .map { DeviceSlot(it.deviceId, it.displayName) }
+        .map { DeviceSlot(it.deviceId, it.displayName, it.platform) }
     return listOf(mine) + others
 }
+
+/** 予約を取れる枠1つぶん。手元のルールでも、ほかの端末の名札でも同じ形にそろえる。 */
+private data class Bookable(
+    val key: String,
+    val name: String,
+    val target: Target,
+    val policy: ReservationPolicy,
+    /** この端末のルールか。数字を直せるのは持ち主の端末だけ。 */
+    val mine: Boolean,
+)
+
+/** その端末で予約すれば開くもの。この端末は手元のルール、ほかは向こうの名札から。 */
+private fun bookablesOn(
+    slot: DeviceSlot,
+    me: String,
+    rules: List<Rule>,
+    policies: List<ReservationPolicy>,
+    catalogs: List<RuleCatalog>,
+): List<Bookable> =
+    if (slot.deviceId == me) {
+        ReservationRules.unlockableOn(rules, me).map { rule ->
+            Bookable(
+                key = rule.uid.ifBlank { rule.id.toString() },
+                name = rule.name,
+                target = rule.target,
+                policy = ReservationRules.policyFor(rule, policies),
+                mine = true,
+            )
+        }
+    } else {
+        catalogs.firstOrNull { it.deviceId == slot.deviceId }?.rules.orEmpty()
+            .filter { it.enabled }
+            .mapNotNull { card ->
+                val policy = card.reservation ?: return@mapNotNull null
+                Bookable(key = card.uid, name = card.name, target = card.target, policy = policy, mine = false)
+            }
+    }
 
 /**
  * 予約で開くルール1つぶん。
  *
  * 型を持っていなくても並びます ── 数字を触っていないだけで、既定値で取れます。
+ *
+ * @param onTune 数字を直す。ほかの端末の枠では null(持ち主の端末で直す)。
  */
 @Composable
 private fun RuleSlotCard(
-    rule: Rule,
-    policy: ReservationPolicy,
+    bookable: Bookable,
+    label: (String) -> String,
     onBook: () -> Unit,
-    onTune: () -> Unit,
+    onTune: (() -> Unit)?,
 ) {
-    val context = LocalContext.current
-
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
-            Text(rule.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text(bookable.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(2.dp))
             Text(
-                describeTarget(context, rule.target),
+                describeTarget(bookable.target, label),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                policy.describe(),
+                bookable.policy.describe(),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
             )
 
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onBook, enabled = !rule.target.isEmpty) { Text("この枠で予約する") }
-                TextButton(onClick = onTune) { Text("条件を直す") }
+                Button(onClick = onBook, enabled = !bookable.target.isEmpty) { Text("この枠で予約する") }
+                if (onTune != null) TextButton(onClick = onTune) { Text("条件を直す") }
             }
         }
     }
 }
 
-private fun describeTarget(context: android.content.Context, target: Target): String {
-    val apps = target.packages.joinToString("・") { InstalledApps.labelOf(context, it) }
+private fun describeTarget(target: Target, label: (String) -> String): String {
+    val apps = target.packages.joinToString("・") { label(it) }
     val tags = target.tags.joinToString("・") { "#" + it }
     return listOf(apps, tags).filter { it.isNotBlank() }.joinToString("・").ifBlank { "(対象なし)" }
 }
@@ -305,7 +362,8 @@ private fun PolicyEditorDialog(
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
-                    "通るのは " + describeTarget(context, draft.target) + "。ルールの対象と同じです。",
+                    "通るのは " + describeTarget(draft.target) { InstalledApps.labelOf(context, it) } +
+                        "。ルールの対象と同じです。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

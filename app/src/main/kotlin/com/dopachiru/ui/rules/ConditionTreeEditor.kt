@@ -341,7 +341,12 @@ private fun ConditionPickerDialog(
                             items(groups, key = { it.first.name }) { (group, types) ->
                                 Card(
                                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                    onClick = { opened = group },
+                                    // 中身が1つしか無い棚は開かずにそのまま選ぶ。
+                                    // 1つを見せるためだけにもう1回押させる意味が無い
+                                    onClick = {
+                                        val only = types.singleOrNull()
+                                        if (only != null) onPick(only.id) else opened = group
+                                    },
                                 ) {
                                     Column(Modifier.padding(14.dp)) {
                                         Text(
@@ -355,12 +360,14 @@ private fun ConditionPickerDialog(
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
-                                        Spacer(Modifier.height(4.dp))
-                                        Text(
-                                            "${types.size}種類",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
+                                        if (types.size > 1) {
+                                            Spacer(Modifier.height(4.dp))
+                                            Text(
+                                                "${types.size}種類",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
                                     }
                                 }
                             }

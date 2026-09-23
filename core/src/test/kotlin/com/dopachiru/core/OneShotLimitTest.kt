@@ -1,13 +1,13 @@
 package com.dopachiru.core
 
 import com.dopachiru.core.action.types.BlockAction
-import com.dopachiru.core.condition.types.UsageBudgetCondition
-import com.dopachiru.core.engine.BudgetReset
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.OneShotLimit
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.model.Rules
 import com.dopachiru.core.model.Target
+import com.dopachiru.core.param.Params
+import com.dopachiru.core.preset.RulePresets
 import org.junit.Before
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -16,12 +16,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/**
- * その場で決める「◯時間使ったら◯分休憩」。
- *
- * 肝は **窓 = 使う + 休む** であること(休憩用の条件を別に持たない)と、
- * **明日には消える**こと。
- */
+/** 「今日だけ」のルール。肝は**明日の朝には消える**こと。 */
 class OneShotLimitTest {
 
     private val zone = ZoneId.of("Asia/Tokyo")
@@ -29,42 +24,14 @@ class OneShotLimitTest {
     @Before
     fun setUp() = DopaCore.registerAll()
 
-    private val youtube = Target(packages = setOf("com.google.android.youtube"))
-
-    @Test
-    fun `使う時間と休む時間の合計が窓になる`() {
-        val rule = OneShotLimit.build(youtube, useMinutes = 120, restMinutes = 60)
-        val leaf = rule.condition as ConditionNode.Leaf
-        assertEquals(UsageBudgetCondition.id, leaf.typeId)
-        assertEquals(BudgetReset.WINDOW.name, leaf.params.string(UsageBudgetCondition.KEY_RESET, ""))
-        // 窓が「使う + 休む」でないと、休憩が始まる前に窓が明けて休憩が消える
-        assertEquals(180, leaf.params.int(UsageBudgetCondition.KEY_WINDOW_MINUTES, 0))
-        assertEquals(120, leaf.params.int(UsageBudgetCondition.KEY_BUDGET_MINUTES, 0))
-    }
-
-    @Test
-    fun `閉じるだけではなく塞ぎ続ける`() {
-        // 「閉じるだけ」だと開き直せる。条件が続くあいだ塞ぐ側でないと休憩にならない
-        assertEquals(BlockAction.id, OneShotLimit.build(youtube).actionId)
-    }
-
-    @Test
-    fun `無茶な数字は丸める`() {
-        val tiny = OneShotLimit.build(youtube, useMinutes = 0, restMinutes = 0)
-        val leaf = tiny.condition as ConditionNode.Leaf
-        assertEquals(OneShotLimit.MIN_USE_MINUTES, leaf.params.int(UsageBudgetCondition.KEY_BUDGET_MINUTES, 0))
-        assertEquals(
-            OneShotLimit.MIN_USE_MINUTES + OneShotLimit.MIN_REST_MINUTES,
-            leaf.params.int(UsageBudgetCondition.KEY_WINDOW_MINUTES, 0),
-        )
-    }
-
-    @Test
-    fun `名前は読んで分かる形にする`() {
-        assertEquals("2時間使ったら1時間休憩", OneShotLimit.label(120, 60))
-        assertEquals("1時間30分使ったら20分休憩", OneShotLimit.label(90, 20))
-        assertEquals("30分使ったら5分休憩", OneShotLimit.label(30, 5))
-    }
+    private fun rule(expiresAtSec: Long = 0L, name: String = "YouTube") = Rule(
+        name = name,
+        target = Target(packages = setOf("com.google.android.youtube")),
+        condition = ConditionNode.AllOf(),
+        actionId = BlockAction.id,
+        actionParams = Params.EMPTY,
+        expiresAtSec = expiresAtSec,
+    )
 
     // ---- 今日の終わり --------------------------------------------------
 
@@ -88,11 +55,22 @@ class OneShotLimitTest {
         )
     }
 
+    @Test
+    fun `どの雛形でも今日だけにできる`() {
+        // 前は「◯時間使ったら◯分休憩」しか今日だけにできなかった
+        val noon = LocalDateTime.of(2026, 9, 20, 12, 0)
+        RulePresets.all.forEach { preset ->
+            val today = OneShotLimit.forToday(preset.build(setOf("com.example")), noon, zone)
+            assertTrue(today.isTemporary, preset.id)
+            assertEquals(OneShotLimit.endOfDay(noon, zone), today.expiresAtSec)
+        }
+    }
+
     // ---- 期限 ----------------------------------------------------------
 
     @Test
     fun `期限を過ぎたら消える`() {
-        val rule = OneShotLimit.build(youtube, expiresAtSec = 1000L)
+        val rule = rule(expiresAtSec = 1000L)
         assertTrue(rule.isTemporary)
         assertFalse(rule.isExpiredAt(999L))
         assertTrue(rule.isExpiredAt(1000L))
@@ -101,16 +79,16 @@ class OneShotLimitTest {
 
     @Test
     fun `期限なしは消えない`() {
-        val rule = OneShotLimit.build(youtube)
+        val rule = rule()
         assertFalse(rule.isTemporary)
         assertFalse(rule.isExpiredAt(Long.MAX_VALUE))
     }
 
     @Test
     fun `掃除は期限切れだけを落とす`() {
-        val forever: Rule = OneShotLimit.build(youtube).copy(name = "ずっと")
-        val dead = OneShotLimit.build(youtube, expiresAtSec = 500L)
-        val alive = OneShotLimit.build(youtube, expiresAtSec = 2000L)
+        val forever = rule(name = "ずっと")
+        val dead = rule(expiresAtSec = 500L)
+        val alive = rule(expiresAtSec = 2000L)
         val all = listOf(forever, dead, alive)
 
         assertTrue(Rules.hasExpired(all, 1000L))

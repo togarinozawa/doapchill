@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -23,7 +22,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -51,6 +49,7 @@ import com.dopachiru.core.model.ConditionTree
 import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.NodePath
 import com.dopachiru.core.model.Rule
+import com.dopachiru.core.sync.RuleCatalog
 import com.dopachiru.core.action.types.DeclareAction
 import com.dopachiru.core.action.types.IntentionAction
 import com.dopachiru.core.action.types.RadioAction
@@ -96,76 +95,41 @@ fun RuleEditorDialog(
                     onChange = { draft = draft.copy(target = it) },
                 )
 
-                // どの端末で効かせるか。端末が2台以上あるときだけ聞く ──
-                // 1台しかない人に端末の話をさせない
-                val roster = DesktopRuntime.ruleFile.collectAsState().value.devices
+                // どの端末で効くかは選ばせない ── ルールはこの端末にしか無いので。
+                // 聞くのは連動の相手だけで、端末が2台以上あるときだけ出す
+                val file = DesktopRuntime.ruleFile.collectAsState().value
+                val roster = file.devices
                 val me = DesktopRuntime.myDeviceId()
-                if (roster.size >= 2) {
+                // ルールを配っていた頃に「スマホだけ」と決めたものが、配られた先に残っている
+                val stranded = draft.devices.isNotEmpty() && me !in draft.devices
+                if (roster.size >= 2 || stranded) {
                     Spacer(Modifier.height(16.dp))
-                    Text("どの端末で", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
-                    Spacer(Modifier.height(4.dp))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = draft.devices.isEmpty(),
-                            onClick = { draft = draft.copy(devices = emptySet()) },
-                            label = { Text("すべての端末") },
-                        )
-                        roster.sortedBy { it.displayName }.forEach { device ->
-                            FilterChip(
-                                selected = device.deviceId in draft.devices,
-                                onClick = {
-                                    draft = draft.copy(
-                                        devices = if (device.deviceId in draft.devices) {
-                                            draft.devices - device.deviceId
-                                        } else {
-                                            draft.devices + device.deviceId
-                                        },
-                                    )
-                                },
-                                label = {
-                                    Text(
-                                        device.displayName +
-                                            if (device.deviceId == me) "(この端末)" else "",
-                                    )
-                                },
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(
-                            checked = RuleLinks.contains(draft.condition),
-                            onCheckedChange = { on ->
-                                draft = draft.copy(
-                                    condition = if (on) {
-                                        RuleLinks.withLink(draft.condition)
-                                    } else {
-                                        RuleLinks.withoutLink(draft.condition)
-                                    },
-                                )
-                            },
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Column {
-                            Text("端末をまたいで効かせる", style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                // ルールを配っても「使った時間」は配られない。
-                                // 効いているという事実のほうを配って塞ぐ
-                                "どれかの端末でこのルールが効いているあいだ、ほかの端末でも効きます。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-
-                    if (draft.devices.isNotEmpty() && me !in draft.devices) {
-                        Spacer(Modifier.height(4.dp))
+                    Text(
+                        "この端末" +
+                            (roster.firstOrNull { it.deviceId == me }?.let { "(" + it.displayName + ")" } ?: "") +
+                            "で効きます",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    if (stranded) {
                         Text(
-                            "このルールはこの端末では効きません。",
+                            "以前の端末の指定が残っていて、このルールはいまどこでも効いていません。",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = MaterialTheme.colorScheme.error,
                         )
+                        TextButton(onClick = { draft = draft.copy(devices = emptySet()) }) {
+                            Text("この端末で効かせる")
+                        }
                     }
+                }
+                if (roster.size >= 2) {
+                    Spacer(Modifier.height(8.dp))
+                    LinkPicker(
+                        condition = draft.condition,
+                        names = roster.associate { it.deviceId to it.displayName },
+                        catalogs = file.ruleCatalogs.filter { it.deviceId != me },
+                        onChange = { draft = draft.copy(condition = it) },
+                    )
                 }
 
                 Spacer(Modifier.height(20.dp))
@@ -395,6 +359,61 @@ fun RuleEditorDialog(
     )
 }
 
+/**
+ * 連動の相手を選ぶ。相手はほかの端末の名札から。
+ *
+ * 使いすぎを止めるルールは端末を替えれば逃げられる ── 持ち時間が端末ごとに
+ * 1本ずつあるため。効いているという事実のほうを配って塞ぐ。
+ */
+@Composable
+private fun LinkPicker(
+    condition: ConditionNode,
+    names: Map<String, String>,
+    catalogs: List<RuleCatalog>,
+    onChange: (ConditionNode) -> Unit,
+) {
+    val link = remember(condition) { RuleLinks.linkOf(condition) }
+    val candidates = remember(catalogs) {
+        catalogs.flatMap { catalog -> catalog.rules.map { catalog.deviceId to it } }
+    }
+
+    Text("端末をまたいで効かせる", style = MaterialTheme.typography.bodyMedium)
+    Text(
+        when {
+            link == null -> "いまはこの端末だけで数えます。PC で使い切っても、スマホでは数え直しになります。"
+            link.first.isBlank() -> "以前の形の連動です(同じルールが両方の端末にあった頃のもの)。"
+            else -> "選んだルールが向こうで効いているあいだ、ここでも効きます。"
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(4.dp))
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = link == null,
+            onClick = { onChange(RuleLinks.withoutLink(condition)) },
+            label = { Text("連動しない") },
+        )
+        if (link != null && link.first.isBlank()) {
+            FilterChip(selected = true, onClick = {}, label = { Text("以前の連動") })
+        }
+        candidates.forEach { (deviceId, card) ->
+            FilterChip(
+                selected = link?.first == card.uid,
+                onClick = { onChange(RuleLinks.linkTo(condition, card.uid, deviceId)) },
+                label = { Text((names[deviceId] ?: deviceId) + "・" + card.name) },
+            )
+        }
+    }
+    if (candidates.isEmpty()) {
+        Text(
+            "ほかの端末のルールがまだ届いていません。向こうで同期すると出てきます。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 // ----------------------------------------------------------------------
 
 /**
@@ -474,7 +493,12 @@ fun ConditionTreeEditor(
                                 items(groups, key = { it.first.name }) { (group, types) ->
                                     Card(
                                         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                        onClick = { opened = group },
+                                        // 中身が1つしか無い棚は開かずにそのまま選ぶ。
+                                        // 1つを見せるためだけにもう1回押させる意味が無い
+                                        onClick = {
+                                            val only = types.singleOrNull()
+                                            if (only != null) pick(only) else opened = group
+                                        },
                                     ) {
                                         Column(Modifier.padding(14.dp)) {
                                             Text(
@@ -487,12 +511,14 @@ fun ConditionTreeEditor(
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             )
-                                            Spacer(Modifier.height(4.dp))
-                                            Text(
-                                                "${types.size}種類",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            )
+                                            if (types.size > 1) {
+                                                Spacer(Modifier.height(4.dp))
+                                                Text(
+                                                    "${types.size}種類",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
                                         }
                                     }
                                 }

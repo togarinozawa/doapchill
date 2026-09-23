@@ -17,9 +17,9 @@ import kotlinx.serialization.json.jsonPrimitive
  * 配るのは **タグ・アプリの名札・使用実績・端末の名簿・予約・頼みごと・
  * ルールが効いているかという事実**。
  *
- * **ルールそのものは配りません。** 各端末で直接作ります。連動させたいときは
- * 同じ uid のルールを両端末に置き、「効いているか」だけを配って揃えます
- * ([SyncKinds.RULE_STATES])。
+ * **ルールそのものは配りません。** 各端末で直接作ります。ほかの端末のルールを
+ * 予約や連動で指すための名札([RuleCatalog])と、「効いているか」
+ * ([SyncKinds.RULE_STATES])だけを配ります。
  *
  * **ゲートと変更リクエストも配りません。** ゲート(変更に摩擦をかける仕組み)は
  * 端末ごとの自分との約束で、変更リクエストはその端末で承認待ちのものです。
@@ -117,6 +117,20 @@ object SyncMapper {
     fun ruleStateOf(envelope: Envelope): RuleState? = runCatching {
         SyncApi.JSON.decodeFromJsonElement(RuleState.serializer(), envelope.payload)
     }.getOrNull()?.takeIf { it.ruleUid.isNotBlank() && it.deviceId.isNotBlank() }
+
+    // ---- ルールの名札 -----------------------------------------------------
+
+    /** 鍵は deviceId。1台ぶんをまるごと置き換えるので、墓標は要らない。 */
+    fun catalogEnvelope(catalog: RuleCatalog, updatedAt: Long): Envelope = Envelope(
+        uid = catalog.deviceId,
+        updatedAt = updatedAt,
+        payload = DopaCore.json.encodeToJsonElement(RuleCatalog.serializer(), catalog) as JsonObject,
+    )
+
+    fun catalogOf(envelope: Envelope): RuleCatalog? = runCatching {
+        DopaCore.json.decodeFromJsonElement(RuleCatalog.serializer(), envelope.payload)
+            .copy(deviceId = envelope.uid)
+    }.getOrNull()?.takeIf { it.deviceId.isNotBlank() }
 
     // ---- 予約 -------------------------------------------------------------
 

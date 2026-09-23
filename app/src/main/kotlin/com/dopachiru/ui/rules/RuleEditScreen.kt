@@ -31,7 +31,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -66,6 +65,8 @@ import com.dopachiru.core.model.RuleLinks
 import com.dopachiru.core.model.Consequence
 import com.dopachiru.core.model.RuleOverlap
 import com.dopachiru.core.sync.DeviceInfo
+import com.dopachiru.core.sync.RuleCatalog
+import com.dopachiru.core.model.OneShotLimit
 import com.dopachiru.core.model.RuleCheck
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.model.RulePhrase
@@ -82,6 +83,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.LocalDateTime
 
 /**
  * 対象の指し方。3つは**排他ではなく入口**で、
@@ -116,12 +118,22 @@ data class RuleEditState(
     val availableTags: List<String> = emptyList(),
     val mode: TargetMode = TargetMode.APPS,
 
-    /** どの端末で効かせるか。空ならどの端末でも。 */
+    /**
+     * どの端末で効かせるか。空ならどの端末でも。
+     *
+     * ルールを配っていた頃の名残で、**画面では選ばせない。** ルールはこの端末にしか
+     * 無いので、ほかの端末を選ぶと「どこでも効かないルール」になる。
+     * 古いルールに残っていたときだけ、外すボタンを出す。
+     */
     val devices: Set<String> = emptySet(),
-    /** 選べる端末の名簿。同期を設定していなければ空で、欄ごと出さない。 */
+    /** 端末の名簿。同期を設定していなければ空で、端末の欄ごと出さない。 */
     val knownDevices: List<DeviceInfo> = emptyList(),
-    /** この端末の deviceId。名簿に「この端末」と出すため。 */
+    /** この端末の deviceId。 */
     val myDeviceId: String = "",
+    /** ほかの端末のルールの名札。連動の相手を選ぶため。 */
+    val catalogs: List<RuleCatalog> = emptyList(),
+    /** 消える時刻。0 なら消えない。「今日だけ」で作ったルールが持つ。 */
+    val expiresAtSec: Long = 0L,
 
     /** 1組目に重ねる覚え書き(経過表示・目的のチップ)。 */
     val extraActions: List<ActionSpec> = emptyList(),
@@ -166,13 +178,17 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
     var lastSaveWasQueued: Boolean = false
         private set
 
-    fun load(ruleId: Long) {
+    /**
+     * @param today 新しく作るルールを「今日だけ」にする。明日の朝に消える。
+     */
+    fun load(ruleId: Long, today: Boolean = false) {
         if (_state.value.loaded) return
         viewModelScope.launch {
             val tags = DopaRuntime.rules.tags.first()
             val policy = DopaRuntime.settings.pointPolicy.first()
             val roster = DopaRuntime.devices.first()
             val me = DopaRuntime.myDeviceId
+            val catalogs = DopaRuntime.settings.ruleCatalogs.first().filter { it.deviceId != me }
             val everything = DopaRuntime.rules.getAll()
             val rule = if (ruleId == 0L) null else DopaRuntime.rules.getById(ruleId)
             if (rule == null) {
@@ -182,7 +198,9 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
                         pointPolicy = policy,
                         knownDevices = roster,
                         myDeviceId = me,
+                        catalogs = catalogs,
                         allRules = everything,
+                        expiresAtSec = if (today) OneShotLimit.endOfDay(LocalDateTime.now()) else 0L,
                         loaded = true,
                     )
                 }
@@ -209,6 +227,9 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
                 devices = rule.devices,
                 knownDevices = roster,
                 myDeviceId = me,
+                catalogs = catalogs,
+                // 持ち越さないと、今日だけのルールを直した瞬間に期限が消えて居座る
+                expiresAtSec = rule.expiresAtSec,
                 allRules = everything,
                 mode = when {
                     rule.target.matchAll -> TargetMode.ALL
@@ -222,14 +243,8 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setName(value: String) = _state.update { it.copy(name = value) }
 
-    /** どの端末で効かせるか。空にすると「すべての端末」に戻る。 */
-    fun toggleDevice(deviceId: String) = _state.update {
-        it.copy(
-            devices = if (deviceId in it.devices) it.devices - deviceId else it.devices + deviceId,
-        )
-    }
-
-    fun setEverywhere() = _state.update { it.copy(devices = emptySet()) }
+    /** 古いルールに残っていた端末の指定を外して、この端末で効かせる。 */
+    fun clearDevices() = _state.update { it.copy(devices = emptySet()) }
 
     fun setStep(step: Int) = _state.update { it.copy(step = step.coerceIn(0, LAST_STEP)) }
 
@@ -288,16 +303,21 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
     fun setExtraClauses(clauses: List<Clause>) = _state.update { it.copy(extraClauses = clauses) }
 
     /**
-     * 「ほかの端末で効いているあいだ、この端末でも効かせる」。
+     * 「ほかの端末のこのルールが効いているあいだ、この端末でも効かせる」。
      *
      * 使いすぎを止めるルールは端末を替えれば逃げられる ── 持ち時間が端末ごとに
-     * 1本ずつあるため。ルールを配っても直りません(配られるのは決まりごとであって、
-     * 使った時間ではない)。効いているという事実のほうを見る条件を、
-     * 元の条件との **OR** で足します。[RuleLinks]
+     * 1本ずつあるため。効いているという事実のほうを見る条件を、
+     * 元の条件との **OR** で足します。相手は向こうの名札から選ぶ。[RuleLinks]
+     *
+     * @param ruleUid 空なら連動を外す。
      */
-    fun setLinked(on: Boolean) = _state.update {
+    fun linkTo(ruleUid: String, deviceId: String) = _state.update {
         it.copy(
-            condition = if (on) RuleLinks.withLink(it.condition) else RuleLinks.withoutLink(it.condition),
+            condition = if (ruleUid.isBlank()) {
+                RuleLinks.withoutLink(it.condition)
+            } else {
+                RuleLinks.linkTo(it.condition, ruleUid, deviceId)
+            },
         )
     }
 
@@ -346,6 +366,7 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
                 actionParams = current.actionParams,
                 consequence = current.consequence,
                 devices = current.devices,
+                expiresAtSec = current.expiresAtSec,
             )
             val isNew = current.id == 0L
             val gates = if (isNew) emptyList() else DopaRuntime.settings.gates.first()
@@ -396,6 +417,7 @@ class RuleEditViewModel(app: Application) : AndroidViewModel(app) {
 fun RuleEditScreen(
     ruleId: Long,
     onDone: () -> Unit,
+    today: Boolean = false,
     viewModel: RuleEditViewModel = viewModel(),
 ) {
     val state by viewModel.state.collectAsState()
@@ -403,15 +425,28 @@ fun RuleEditScreen(
     var queuedNotice by remember { mutableStateOf(false) }
     val labelOf: (String) -> String = { InstalledApps.labelOf(context, it) }
 
-    androidx.compose.runtime.LaunchedEffect(ruleId) { viewModel.load(ruleId) }
+    androidx.compose.runtime.LaunchedEffect(ruleId) { viewModel.load(ruleId, today) }
 
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Text(
-                if (ruleId == 0L) "新しいルール" else "ルールを編集",
+                when {
+                    state.expiresAtSec > 0L && ruleId == 0L -> "今日だけのルール"
+                    ruleId == 0L -> "新しいルール"
+                    else -> "ルールを編集"
+                },
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
             )
+            if (state.expiresAtSec > 0L) {
+                Text(
+                    java.time.Instant.ofEpochSecond(state.expiresAtSec)
+                        .atZone(java.time.ZoneId.systemDefault())
+                        .format(java.time.format.DateTimeFormatter.ofPattern("M/d HH:mm")) + "に消えます。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Spacer(Modifier.height(10.dp))
             RuleSentence(state, labelOf)
             Spacer(Modifier.height(12.dp))
@@ -526,67 +561,95 @@ private fun BottomBar(
 // ---- 1. 何を -----------------------------------------------------------
 
 /**
- * 「どの端末で効かせるか」。
+ * 端末の欄。**どの端末で効くかは選ばせません** ── ルールはこの端末にしか無いので。
  *
+ * 聞くのは「ほかの端末のルールと連動させるか」だけ。相手は向こうの名札から選ぶ。
  * 同期を設定していなければ**欄ごと出しません** ── 端末が1台しかない人に
- * 端末の話をさせない。名簿は同期で届くので、届いていなければ選びようもない。
+ * 端末の話をさせない。
  */
 @Composable
 private fun DeviceScopeSection(state: RuleEditState, viewModel: RuleEditViewModel) {
-    if (state.knownDevices.size < 2) return
+    val me = state.knownDevices.firstOrNull { it.deviceId == state.myDeviceId }
+    val strandedHere = state.devices.isNotEmpty() && state.myDeviceId !in state.devices
+    if (state.knownDevices.size < 2 && !strandedHere) return
 
-    Text("どの端末で", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+    Text(
+        "この端末" + (me?.let { "(" + it.displayName + ")" } ?: "") + "で効きます",
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.Medium,
+    )
+    // ルールを配っていた頃に「PC だけ」と決めたものが、配られた先に残っている。
+    // このままだとどこでも効かないので、外す道を出す
+    if (strandedHere) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "以前の端末の指定が残っていて、このルールはいまどこでも効いていません。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        TextButton(onClick = viewModel::clearDevices) { Text("この端末で効かせる") }
+    }
+
+    if (state.knownDevices.size >= 2) {
+        Spacer(Modifier.height(12.dp))
+        LinkPicker(state, viewModel)
+    }
+
+    Spacer(Modifier.height(20.dp))
+}
+
+/**
+ * 連動の相手を選ぶ。
+ *
+ * 使いすぎを止めるルールは端末を替えれば逃げられる ── 持ち時間が端末ごとに
+ * 1本ずつあるため。効いているという事実のほうを配って塞ぐ。
+ */
+@Composable
+private fun LinkPicker(state: RuleEditState, viewModel: RuleEditViewModel) {
+    val link = remember(state.condition) { RuleLinks.linkOf(state.condition) }
+    val names = remember(state.knownDevices) {
+        state.knownDevices.associate { it.deviceId to it.displayName }
+    }
+    val candidates = remember(state.catalogs) {
+        state.catalogs.flatMap { catalog -> catalog.rules.map { catalog.deviceId to it } }
+    }
+
+    Text("端末をまたいで効かせる", style = MaterialTheme.typography.bodyLarge)
+    Text(
+        when {
+            link == null -> "いまはこの端末だけで数えます。スマホで使い切っても、PC では数え直しになります。"
+            link.first.isBlank() -> "以前の形の連動です(同じルールが両方の端末にあった頃のもの)。"
+            else -> "選んだルールが向こうで効いているあいだ、ここでも効きます。" +
+                "同期が届かないあいだは、この端末の中だけで判定します。"
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
     Spacer(Modifier.height(6.dp))
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FilterChip(
-            selected = state.devices.isEmpty(),
-            onClick = viewModel::setEverywhere,
-            label = { Text("すべての端末") },
+            selected = link == null,
+            onClick = { viewModel.linkTo("", "") },
+            label = { Text("連動しない") },
         )
-        state.knownDevices.forEach { device ->
+        if (link != null && link.first.isBlank()) {
+            FilterChip(selected = true, onClick = {}, label = { Text("以前の連動") })
+        }
+        candidates.forEach { (deviceId, card) ->
             FilterChip(
-                selected = device.deviceId in state.devices,
-                onClick = { viewModel.toggleDevice(device.deviceId) },
-                label = {
-                    Text(
-                        device.displayName +
-                            if (device.deviceId == state.myDeviceId) "(この端末)" else "",
-                    )
-                },
+                selected = link?.first == card.uid,
+                onClick = { viewModel.linkTo(card.uid, deviceId) },
+                label = { Text((names[deviceId] ?: deviceId) + "・" + card.name) },
             )
         }
     }
-    if (state.devices.isNotEmpty() && state.myDeviceId !in state.devices) {
-        Spacer(Modifier.height(4.dp))
+    if (candidates.isEmpty()) {
         Text(
-            "このルールはこの端末では効きません。名簿に入れた端末にだけかかります。",
+            "ほかの端末のルールがまだ届いていません。向こうで同期すると出てきます。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
-
-    Spacer(Modifier.height(12.dp))
-    val linked = remember(state.condition) { RuleLinks.contains(state.condition) }
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text("端末をまたいで効かせる", style = MaterialTheme.typography.bodyLarge)
-            Text(
-                // ルールを配っても「使った時間」は配られない。
-                // 効いているという事実のほうを配って塞ぐ
-                if (linked) {
-                    "どれかの端末でこのルールが効いているあいだ、ほかの端末でも効きます。" +
-                        "同期が届かないあいだは、それぞれの端末の中だけで判定します。"
-                } else {
-                    "いまは端末ごとに別々です。スマホで使い切っても、PC では数え直しになります。"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Switch(checked = linked, onCheckedChange = viewModel::setLinked)
-    }
-
-    Spacer(Modifier.height(20.dp))
 }
 
 @Composable

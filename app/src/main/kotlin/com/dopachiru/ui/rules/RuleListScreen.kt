@@ -9,13 +9,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FloatingActionButton
@@ -44,9 +42,6 @@ import com.dopachiru.core.gate.ChangeKind
 import com.dopachiru.core.model.ConditionTree
 import com.dopachiru.core.model.DeviceScope
 import com.dopachiru.core.model.Rule
-import com.dopachiru.core.preset.PresetGroup
-import com.dopachiru.core.preset.RulePreset
-import com.dopachiru.core.preset.RulePresets
 import com.dopachiru.runtime.DopaRuntime
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -75,11 +70,8 @@ class RuleListViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * まるごと写して1本増やす。
-     *
-     * 同期でルールは全端末に配られるので、**端末ごとに違う中身にしたいときは
-     * 2本に分ける**しかありません。そのための複製です。番号と uid は新しく振ります
-     * ── 引き継ぐと、写した先が元を上書きします。
+     * まるごと写して1本増やす。少しだけ違うものを作るときの近道。
+     * 番号と uid は新しく振ります ── 引き継ぐと、写した先が元を上書きします。
      *
      * 新規作成なので関門は通しません(縛りを増やす方向)。
      */
@@ -96,10 +88,9 @@ class RuleListViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     /** 雛形から作る。新規作成なのでゲートは通さず即時反映。 */
-    fun createFromPreset(preset: RulePreset, packages: Set<String>) {
-        if (packages.isEmpty() && !preset.allowEmptyApps) return
+    fun create(rule: Rule) {
         viewModelScope.launch {
-            DopaRuntime.changes.request(ChangeKind.CREATE, preset.build(packages), emptyList())
+            DopaRuntime.changes.request(ChangeKind.CREATE, rule, emptyList())
         }
     }
 }
@@ -116,9 +107,6 @@ fun RuleListScreen(
     val context = LocalContext.current
 
     var pickingPreset by remember { mutableStateOf(false) }
-    var presetAwaitingApps by remember { mutableStateOf<RulePreset?>(null) }
-    var presetPackages by remember { mutableStateOf(emptySet<String>()) }
-    var showPresetAppPicker by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize()) {
         if (rules.isEmpty()) {
@@ -205,9 +193,6 @@ fun RuleListScreen(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
-                                // 端末ごとに別々に持ちたいときのための複製。
-                                // 同期でルールは全端末に配られるので、分けたいときは
-                                // 2本に増やして、それぞれ宛先を変えることになる
                                 TextButton(onClick = { viewModel.duplicate(rule) }) { Text("複製") }
                             }
                             Switch(
@@ -231,140 +216,8 @@ fun RuleListScreen(
     }
 
     if (pickingPreset) {
-        PresetPickerDialog(
-            onPick = {
-                pickingPreset = false
-                presetPackages = emptySet()
-                presetAwaitingApps = it
-            },
-            onDismiss = { pickingPreset = false },
-        )
+        PresetFlow(onBuilt = viewModel::create, onDismiss = { pickingPreset = false })
     }
-
-    presetAwaitingApps?.let { preset ->
-        AlertDialog(
-            onDismissRequest = { presetAwaitingApps = null },
-            title = { Text(preset.name) },
-            text = {
-                Column {
-                    Text(preset.description, style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        if (presetPackages.isEmpty()) {
-                            preset.appPrompt
-                        } else {
-                            presetPackages.joinToString("、") { InstalledApps.labelOf(context, it) }
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(onClick = { showPresetAppPicker = true }) { Text("アプリを選ぶ") }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        viewModel.createFromPreset(preset, presetPackages)
-                        presetAwaitingApps = null
-                    },
-                    enabled = presetPackages.isNotEmpty() || preset.allowEmptyApps,
-                ) { Text("作る") }
-            },
-            dismissButton = {
-                TextButton(onClick = { presetAwaitingApps = null }) { Text("やめる") }
-            },
-        )
-    }
-
-    if (showPresetAppPicker) {
-        AppPickerDialog(
-            selected = presetPackages,
-            onToggle = { pkg ->
-                presetPackages =
-                    if (pkg in presetPackages) presetPackages - pkg else presetPackages + pkg
-            },
-            onDismiss = { showPresetAppPicker = false },
-        )
-    }
-}
-
-@Composable
-private fun PresetPickerDialog(
-    onPick: (RulePreset) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    // 弱いものから順に並べる。強い介入ほど効くが、いちばん助けが要る人ほど拒む
-    // (依存傾向が高い群の41.7%が最弱を選好した)。上から目に入る順番が既定になる。
-    val grouped = remember { RulePresets.all.groupBy { it.group } }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("雛形を選ぶ") },
-        text = {
-            LazyColumn(Modifier.heightIn(max = 440.dp)) {
-                item {
-                    Text(
-                        "上ほど軽く、下ほど強い措置です。強いものから始めると、" +
-                            "だいたい続かないか、目標のほうを緩めることになります。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                }
-
-                PresetGroup.entries.forEach { group ->
-                    val presets = grouped[group].orEmpty()
-                    if (presets.isEmpty()) return@forEach
-
-                    item(key = "header-${group.name}") {
-                        Spacer(Modifier.height(10.dp))
-                        Text(
-                            group.label,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Text(
-                            group.help,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(4.dp))
-                    }
-
-                    items(presets, key = { it.id }) { preset ->
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            onClick = { onPick(preset) },
-                        ) {
-                            Column(Modifier.padding(12.dp)) {
-                                Text(preset.name, style = MaterialTheme.typography.titleSmall)
-                                Spacer(Modifier.height(2.dp))
-                                Text(
-                                    preset.description,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                // なぜ効くのかを添える。理由の分かる縛りのほうが守られる
-                                if (preset.evidence.isNotBlank()) {
-                                    Spacer(Modifier.height(6.dp))
-                                    Text(
-                                        preset.evidence,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            .copy(alpha = 0.75f),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("やめる") } },
-    )
 }
 
 private fun describeTarget(context: android.content.Context, rule: Rule): String {

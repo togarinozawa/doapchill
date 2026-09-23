@@ -80,10 +80,9 @@ import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.points.PointEvent
 import com.dopachiru.core.points.PointPolicy
-import com.dopachiru.core.preset.RulePreset
-import com.dopachiru.core.preset.RulePresets
 import com.dopachiru.core.model.Target
 import com.dopachiru.core.model.ReservationRules
+import com.dopachiru.core.model.BookingCheck
 import com.dopachiru.desktop.DesktopRuntime
 import com.dopachiru.desktop.update.DesktopUpdater
 import com.dopachiru.desktop.platform.BlockStrength
@@ -131,9 +130,6 @@ fun DesktopApp() = DopaTheme {
 private fun RulesTab() {
     val file by DesktopRuntime.ruleFile.collectAsState()
     var pickingPreset by remember { mutableStateOf(false) }
-    var presetAwaitingApps by remember { mutableStateOf<RulePreset?>(null) }
-    var presetProcesses by remember { mutableStateOf(emptySet<String>()) }
-    var showAppPicker by remember { mutableStateOf(false) }
 
     // ゼロから組むときの下書き。null なら編集していない
     var drafting by remember { mutableStateOf<Rule?>(null) }
@@ -166,79 +162,7 @@ private fun RulesTab() {
     }
 
     if (pickingPreset) {
-        AlertDialog(
-            onDismissRequest = { pickingPreset = false },
-            title = { Text("雛形を選ぶ") },
-            text = {
-                LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                    items(RulePresets.all, key = { it.id }) { preset ->
-                        Card(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            onClick = {
-                                pickingPreset = false
-                                presetProcesses = emptySet()
-                                presetAwaitingApps = preset
-                            },
-                        ) {
-                            Column(Modifier.padding(12.dp)) {
-                                Text(preset.name, style = MaterialTheme.typography.titleSmall)
-                                Spacer(Modifier.height(2.dp))
-                                Text(
-                                    preset.description,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { pickingPreset = false }) { Text("やめる") } },
-        )
-    }
-
-    presetAwaitingApps?.let { preset ->
-        AlertDialog(
-            onDismissRequest = { presetAwaitingApps = null },
-            title = { Text(preset.name) },
-            text = {
-                Column {
-                    Text(preset.description, style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        if (presetProcesses.isEmpty()) preset.appPrompt
-                        else presetProcesses.joinToString("、") { ForegroundApp.labelFor(it) },
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(onClick = { showAppPicker = true }) { Text("アプリを選ぶ") }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = presetProcesses.isNotEmpty() || preset.allowEmptyApps,
-                    onClick = {
-                        DesktopRuntime.addRule(preset.build(presetProcesses))
-                        presetAwaitingApps = null
-                    },
-                ) { Text("作る") }
-            },
-            dismissButton = {
-                TextButton(onClick = { presetAwaitingApps = null }) { Text("やめる") }
-            },
-        )
-    }
-
-    if (showAppPicker) {
-        AppPickerDialog(
-            selected = presetProcesses,
-            onToggle = { process ->
-                presetProcesses =
-                    if (process in presetProcesses) presetProcesses - process
-                    else presetProcesses + process
-            },
-            onDismiss = { showAppPicker = false },
-        )
+        PresetFlow(onBuilt = DesktopRuntime::addRule, onDismiss = { pickingPreset = false })
     }
 
     drafting?.let { draft ->
@@ -261,7 +185,7 @@ private fun RulesTab() {
  * 対象も条件も空。**空の対象は何にも当たらない**ので、保存しても事故にはならない
  * (当たらないルールが1本増えるだけ)。既定の措置だけ「使えなくする」に寄せてある。
  */
-private fun blankRule(): Rule = Rule(
+internal fun blankRule(): Rule = Rule(
     id = 0L,
     name = "新しいルール",
     target = Target(),
@@ -312,7 +236,6 @@ private fun RuleCard(rule: Rule) {
             Spacer(Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(onClick = { editing = true }) { Text("条件と罰を編集") }
-                // 端末ごとに違う中身にしたいときは、2本に分けてそれぞれ宛先を変える
                 TextButton(onClick = { DesktopRuntime.duplicateRule(rule) }) { Text("複製") }
                 TextButton(onClick = { confirmDelete = true }) {
                     Text("削除", color = MaterialTheme.colorScheme.error)
@@ -1982,16 +1905,38 @@ private fun ReservationSection() {
     val unlockable = remember(ruleFile, me) {
         ReservationRules.unlockableOn(ruleFile.rules, me)
     }
-    var pickedRuleUid by remember { mutableStateOf("") }
-    val picked = remember(unlockable, pickedRuleUid) {
-        unlockable.firstOrNull { it.uid == pickedRuleUid }
+    // ほかの端末の、予約で開くルール。ルールは配らないので向こうの名札から並べる。
+    // 取った枠は同期で向こうに届き、向こうのルールの穴になる
+    val foreign = remember(ruleFile, me) {
+        ruleFile.ruleCatalogs
+            .filter { it.deviceId != me }
+            .map { catalog -> catalog.deviceId to catalog.rules.filter { it.enabled && it.reservation != null } }
+            .filter { it.second.isNotEmpty() }
+    }
+    val deviceNames = remember(ruleFile) { ruleFile.devices.associate { it.deviceId to it.displayName } }
+
+    // 選んだ枠。(端末, ルールの uid)。この端末のルールなら端末は me
+    var pickedKey by remember { mutableStateOf<Pair<String, String>?>(null) }
+    val pickedMine = remember(unlockable, pickedKey) {
+        pickedKey?.takeIf { it.first == me }?.let { key -> unlockable.firstOrNull { it.uid == key.second } }
+    }
+    val pickedForeign = remember(foreign, pickedKey) {
+        pickedKey?.takeIf { it.first != me }?.let { key ->
+            foreign.firstOrNull { it.first == key.first }?.second?.firstOrNull { it.uid == key.second }
+        }
     }
     var startSec by remember { mutableStateOf(0L) }
     var durationMinutes by remember { mutableStateOf(30) }
-    var refused by remember { mutableStateOf(false) }
+    var refused by remember { mutableStateOf("") }
+
+    // ほかの端末の枠は、向こうで決めた数字(何分前から・長さ)で縛る
+    val foreignPolicy = pickedForeign?.reservation
+    val lead = foreignPolicy?.minLeadMinutes ?: leadMinutes
+    val maxDuration = foreignPolicy?.maxDurationMinutes ?: (8 * 60)
+    if (durationMinutes > maxDuration) durationMinutes = maxDuration
 
     val now = System.currentTimeMillis() / 1000
-    val earliest = ((now + leadMinutes * 60L + 1799L) / 1800L) * 1800L
+    val earliest = ((now + lead * 60L + 1799L) / 1800L) * 1800L
     if (startSec < earliest) startSec = earliest
 
     Text(
@@ -2038,20 +1983,44 @@ private fun ReservationSection() {
     } else {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             unlockable.forEach { rule ->
+                val key = me to rule.uid
                 FilterChip(
-                    selected = rule.uid == pickedRuleUid,
-                    onClick = { pickedRuleUid = if (rule.uid == pickedRuleUid) "" else rule.uid },
+                    selected = pickedKey == key,
+                    onClick = { pickedKey = if (pickedKey == key) null else key },
                     label = { Text(rule.name) },
                 )
             }
         }
-        picked?.let {
+        pickedMine?.let {
             Text(
                 "通るのは " + it.target.packages.joinToString("・").ifBlank { "(対象なし)" },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+
+    foreign.forEach { (deviceId, cards) ->
+        Spacer(Modifier.height(10.dp))
+        Text((deviceNames[deviceId] ?: deviceId) + " の枠", style = MaterialTheme.typography.labelLarge)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            cards.forEach { card ->
+                val key = deviceId to card.uid
+                FilterChip(
+                    selected = pickedKey == key,
+                    onClick = { pickedKey = if (pickedKey == key) null else key },
+                    label = { Text(card.name) },
+                )
+            }
+        }
+    }
+    pickedForeign?.let { card ->
+        Text(
+            // 数字は向こうの端末で決めたもの。ここでは直せない(取る側で直せると緩くなる)
+            (card.reservation?.describe() ?: "") + "  ・数字は向こうの端末で直せます",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 
     Spacer(Modifier.height(12.dp))
@@ -2075,29 +2044,44 @@ private fun ReservationSection() {
         ) { Text("−") }
         Text(durationMinutes.toString() + " 分", style = MaterialTheme.typography.titleMedium)
         TextButton(
-            onClick = { durationMinutes = (durationMinutes + 5).coerceAtMost(8 * 60) },
-            enabled = durationMinutes < 8 * 60,
+            onClick = { durationMinutes = (durationMinutes + 5).coerceAtMost(maxDuration) },
+            enabled = durationMinutes < maxDuration,
         ) { Text("+") }
     }
 
     Spacer(Modifier.height(12.dp))
     Button(
         onClick = {
-            val rule = picked ?: return@Button
-            val booked = DesktopRuntime.book(
-                target = rule.target,
-                startEpochSec = startSec,
-                endEpochSec = startSec + durationMinutes * 60L,
-                minLeadMinutes = leadMinutes,
-            )
-            refused = booked == null
-            if (booked != null) pickedRuleUid = ""
+            val end = startSec + durationMinutes * 60L
+            val mine = pickedMine
+            val card = pickedForeign
+            refused = when {
+                mine != null -> {
+                    val booked = DesktopRuntime.book(
+                        target = mine.target,
+                        startEpochSec = startSec,
+                        endEpochSec = end,
+                        minLeadMinutes = leadMinutes,
+                    )
+                    if (booked == null) "その時刻には取れません。もう少し先にしてください。" else ""
+                }
+
+                card?.reservation != null -> {
+                    when (val verdict = DesktopRuntime.bookFor(card.reservation!!, pickedKey!!.first, startSec, end)) {
+                        is BookingCheck.Ok -> ""
+                        is BookingCheck.Refused -> verdict.reason
+                    }
+                }
+
+                else -> return@Button
+            }
+            if (refused.isBlank()) pickedKey = null
         },
-        enabled = picked != null,
+        enabled = pickedMine != null || pickedForeign != null,
     ) { Text("予約する") }
-    if (refused) {
+    if (refused.isNotBlank()) {
         Text(
-            "その時刻には取れません。もう少し先にしてください。",
+            refused,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
         )

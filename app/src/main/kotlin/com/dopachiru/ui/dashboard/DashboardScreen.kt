@@ -177,10 +177,6 @@ fun DashboardScreen(
 
         item { FocusCard(viewModel) }
 
-        // 決めたくなるのは使う直前。ルールの画面まで行かせると、
-        // 行き着くころには決める気が消えている
-        item { OneShotCard() }
-
         item { ReservationCard(onOpen = onOpenReservations) }
 
         item { DeviceCard(onOpen = onOpenDevices) }

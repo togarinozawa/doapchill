@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS dopachiru_meta (
 -- ここのスキーマは変わらない(ドパチル本体が条件を JSON 1本で持っているのと同じ考え)。
 CREATE TABLE IF NOT EXISTS dopachiru_entities (
   user_id    INTEGER NOT NULL DEFAULT 1,
-  kind       TEXT    NOT NULL,              -- 'tags' | 'apps' | 'devices' | 'reservations' | 'commands' | 'ruleStates'
+  kind       TEXT    NOT NULL,              -- 'tags' | 'apps' | 'devices' | 'reservations' | 'commands' | 'ruleStates' | 'ruleCatalogs'
   uid        TEXT    NOT NULL,              -- 端末をまたいで一意な ID
   updated_at INTEGER NOT NULL,              -- 端末が付けた時刻(ミリ秒)。衝突解決はこれで
   deleted    INTEGER NOT NULL DEFAULT 0,    -- 墓標。行は消さない

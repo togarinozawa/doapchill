@@ -6,6 +6,7 @@ import com.dopachiru.core.model.Command
 import com.dopachiru.core.model.FocusSettings
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.sync.DeviceInfo
+import com.dopachiru.core.sync.RuleCatalog
 import com.dopachiru.core.sync.RuleState
 import com.dopachiru.core.sync.SyncSettings
 import com.dopachiru.core.model.Reservation
@@ -151,6 +152,13 @@ data class RuleFile(
      * 締め切りつきなので、古いものを残す意味はない。
      */
     val ruleStates: List<RuleState> = emptyList(),
+
+    /**
+     * ほかの端末のルールの名札。自分のぶんは入れない。
+     *
+     * ルールは配らないので、スマホのルールを予約や連動で指すにはこれが要る。
+     */
+    val ruleCatalogs: List<RuleCatalog> = emptyList(),
 
     /**
      * 同期の覚え書き。Android の `sync_state` 表にあたるもの。
