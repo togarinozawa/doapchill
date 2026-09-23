@@ -462,9 +462,22 @@ async function latestVersions(request, env) {
     // ── APK だけ出した版があると、MSI が道連れで見えなくなるため
     for (const release of releases) {
       if (!release || release.draft || release.prerelease) continue;
+      // 一覧の中の assets が空のまま戻らないことがある(v0.33.0 で25分以上続いた。
+      // 個別に引くと入っている)。空なら取り直す ── 取り直さないと一つ前の版を配り続ける
+      let assets = release.assets || [];
+      if (assets.length === 0 && release.assets_url) {
+        try {
+          const res = await fetch(release.assets_url, {
+            headers: { 'user-agent': 'dopachiru-sync', accept: 'application/vnd.github+json' },
+          });
+          if (res.ok) assets = (await res.json()) || [];
+        } catch (_) {
+          // 取れなければ空のまま。一つ前の版に落ちるだけで、壊れはしない
+        }
+      }
       for (const [platform, pattern] of Object.entries(ASSETS)) {
         if (body[platform]) continue;
-        const asset = (release.assets || []).find((a) => pattern.test(a.name || ''));
+        const asset = assets.find((a) => pattern.test(a.name || ''));
         if (!asset) continue;
         const version = asset.name.match(pattern)[1];
         if (PINNED[platform] && compareVersions(version, PINNED[platform]) > 0) continue;
