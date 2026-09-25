@@ -251,4 +251,8 @@ interface SyncStateDao {
      */
     @Query("DELETE FROM sync_state WHERE deleted = 1 AND updatedAt < :beforeEpochSec")
     suspend fun purgeTombstones(beforeEpochSec: Long)
+
+    /** 連携をやめたとき。前の区画の覚え書きを次の区画へ持ち込まないため。 */
+    @Query("DELETE FROM sync_state")
+    suspend fun clear()
 }

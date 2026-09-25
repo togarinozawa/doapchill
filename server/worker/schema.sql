@@ -88,3 +88,20 @@ CREATE TABLE IF NOT EXISTS dopachiru_device_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_dopachiru_device_tokens_device
   ON dopachiru_device_tokens (user_id, device_id);
+
+-- 合言葉から利用者を引くための索引。利用者が複数になって、合言葉だけで引くようになった
+CREATE INDEX IF NOT EXISTS idx_dopachiru_device_tokens_token
+  ON dopachiru_device_tokens (token);
+
+-- 利用者。**行はすべて user_id で分けてあり、合言葉から引いた利用者の行しか触らない。**
+--
+-- 名前もメールも持たない。配った相手について、端末が名乗った名前以上のことを
+-- サーバーが知る理由が無いので。「新しく始める」を押した端末がここに1行作る。
+-- IP も覚えない。荒らし対策は1日に作れる数の上限(index.js の SIGNUPS_PER_DAY)だけ。
+CREATE TABLE IF NOT EXISTS dopachiru_users (
+  user_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at INTEGER NOT NULL                -- ミリ秒。1日の上限を数えるのに使う
+);
+
+-- 持ち主(元の合言葉 DOPA_TOKEN の利用者)。既存の行はすべて user_id = 1 に居る
+INSERT OR IGNORE INTO dopachiru_users (user_id, created_at) VALUES (1, 0);

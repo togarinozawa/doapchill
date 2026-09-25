@@ -1,4 +1,3 @@
-import java.util.Properties
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -10,43 +9,7 @@ plugins {
 }
 
 /** Windows 版の版番号。持ち運び版の名前と MSI の両方で使う。 */
-val desktopVersion = "1.27.0"
-
-/**
- * サーバーに自動で繋ぐための入口の鍵。`local.properties` の `dopa.enrollKey`。
- *
- * **リポジトリには置きません**(公開しているので)。無ければ空のまま入り、
- * 自動で繋ぐ機能だけが黙って止まります ── 手で合言葉を入れる道は残るので、
- * 鍵を持っていない人がクローンしてもビルドは通ります。Android 側と同じ扱い。
- */
-val enrollKey: String = rootProject.file("local.properties").let { file ->
-    if (!file.exists()) "" else Properties()
-        .apply { file.inputStream().use { load(it) } }
-        .getProperty("dopa.enrollKey", "")
-}
-
-/**
- * 鍵を持ち物として同梱する。ソースに書かないのは、**書いた瞬間に公開される**ため。
- *
- * 生成物の中には入るので、配ったものからは読めます。そこは Android と同じ割り切り。
- */
-val enrollKeyResource: Provider<RegularFile> =
-    layout.buildDirectory.file("generated/enroll/dopachiru-enroll.txt")
-
-tasks.register("writeEnrollKey") {
-    val out = enrollKeyResource
-    val key = enrollKey
-    outputs.file(out)
-    doLast {
-        val file = out.get().asFile
-        file.parentFile.mkdirs()
-        file.writeText(key)
-    }
-}
-
-sourceSets["main"].resources.srcDir(layout.buildDirectory.dir("generated/enroll"))
-
-tasks.named("processResources") { dependsOn("writeEnrollKey") }
+val desktopVersion = "1.28.0"
 
 kotlin {
     jvmToolchain(21)

@@ -71,7 +71,7 @@ fun DeviceScreen() {
         if (me.isBlank()) {
             item {
                 Text(
-                    "同期を設定すると、ここに端末が並びます。設定 → 端末間の同期。",
+                    "ほかの端末とつなぐと、ここに並びます。設定 → 端末の連携。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

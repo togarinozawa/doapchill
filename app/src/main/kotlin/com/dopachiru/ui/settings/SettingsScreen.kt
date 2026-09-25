@@ -57,6 +57,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -89,7 +90,8 @@ import com.dopachiru.core.model.FocusTemplate
 import com.dopachiru.focus.FocusShortcutActivity
 import com.dopachiru.ui.rules.AppPickerDialog
 import com.dopachiru.ui.rules.InstalledApps
-import androidx.compose.ui.text.input.VisualTransformation
+import com.dopachiru.core.sync.Joining
+import com.dopachiru.core.sync.SyncDefaults
 import com.dopachiru.core.sync.SyncSettings
 import com.dopachiru.data.SyncManager
 import com.dopachiru.runtime.DopaRuntime
@@ -206,7 +208,7 @@ enum class SettingsPage(
     Focus("focus", "集中モード", "その場で手を止める。ホーム画面に置くボタン", Icons.Filled.Timer),
     Guard("guard", "変更をしにくくする", "緩める変更にかける関門、パスワード、引き止め", Icons.Filled.Lock),
     Screen("screen", "待ち受け・ホーム画面", "ロックを解除した直後に出す問いかけ", Icons.Filled.Home),
-    Sync("sync", "端末間の同期", "スマホと Windows で同じルールを使う", Icons.Filled.Sync),
+    Sync("sync", "端末の連携", "予約や連動をほかの端末とつなぐ", Icons.Filled.Sync),
     Study("study", "学習予定・カレンダー", "予定の前後で強める。助走枠", Icons.Filled.Event),
     Points("points", "ポイント", "押し切りの相場と、解禁券の値段", Icons.Filled.Stars),
     Battery("battery", "電池", "判定を見に来る間隔", Icons.Filled.BatteryFull),
@@ -1865,187 +1867,37 @@ private fun MinuteStepper(label: String, minutes: Int, onChange: (Int) -> Unit) 
 }
 
 /**
- * 端末間の同期。
+ * 端末の連携。
  *
- * **既定で切ってあります。** 住所と合言葉を入れて初めて動きます。
+ * **押すまで何も送りません。** 「新しく始める」か「コードで参加」を押したときに
+ * 初めてサーバーにつながり、区画は人ごとに分かれています(ほかの人の予約や
+ * 頼みごとは見えないし、触れない)。1台だけで使う人は、押さなくて構いません。
  *
  * 何が出るかを画面に書いてあるのは、**権限の一覧を見ても分からない**ためです。
  * INTERNET を持っているアプリが「何を送っているか」は、外からは確かめられません。
  */
 @Composable
 private fun SyncCard() {
-    val scope = rememberCoroutineScope()
     val settings by DopaRuntime.settings.syncSettings.collectAsState(initial = SyncSettings())
-    var url by remember(settings.baseUrl) { mutableStateOf(settings.baseUrl) }
-    var token by remember(settings.token) { mutableStateOf(settings.token) }
-    var device by remember(settings.deviceId) { mutableStateOf(settings.deviceId) }
-    var showToken by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf("") }
-
-    /** PC に出した短い合言葉。引き換えると本物が [token] に入る。 */
-    var invite by remember { mutableStateOf("") }
-
-    fun save(transform: (SyncSettings) -> SyncSettings) {
-        scope.launch { DopaRuntime.settings.setSyncSettings(transform(settings)) }
-    }
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Text(
-                "別の端末とルールを揃えます。制限そのものはここに依存しません ── " +
+                "ほかの端末とつなぐと、予約をほかの端末から取ったり、ルールを端末をまたいで" +
+                    "効かせたりできます。制限そのものはつなぐかどうかに関係なく効きます ── " +
                     "圏外でもサーバーが落ちていても、縛りは効いたままです。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(16.dp))
 
-            OutlinedTextField(
-                value = url,
-                onValueChange = { url = it },
-                label = { Text("サーバーの住所") },
-                placeholder = { Text("https://dopa.togar.dev") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(8.dp))
-
-            // 短い合言葉で繋ぐ道。
-            //
-            // 48文字の合言葉を PC から写すのが面倒、というのがそもそもの動機。
-            // PC 側で「合言葉を出す」を押すと8文字が出るので、それをここに打つ。
-            // **2分で切れて1回しか使えない**ので、切れたら出し直してもらう。
-            OutlinedTextField(
-                value = invite,
-                onValueChange = { invite = it.uppercase().take(12) },
-                label = { Text("短い合言葉で繋ぐ") },
-                placeholder = { Text("PC に出た8文字") },
-                singleLine = true,
-                supportingText = {
-                    Text(
-                        "Windows の設定 → 端末間の同期 →「合言葉を出す」。" +
-                            "48文字のほうを写す必要はありません。",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                },
-                trailingIcon = {
-                    TextButton(
-                        onClick = {
-                            busy = true
-                            result = "引き換えています…"
-                            scope.launch {
-                                val got = DopaRuntime.claimInvite(url.trim(), invite.trim())
-                                result = got.fold(
-                                    onSuccess = { claimed ->
-                                        token = claimed
-                                        invite = ""
-                                        "繋がりました。下の「保存する」を押してください"
-                                    },
-                                    onFailure = { it.message ?: "引き換えられませんでした" },
-                                )
-                                busy = false
-                            }
-                        },
-                        enabled = !busy && url.isNotBlank() && invite.trim().length >= 6,
-                    ) { Text("引き換える") }
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(8.dp))
-
-            OutlinedTextField(
-                value = token,
-                onValueChange = { token = it },
-                label = { Text("合言葉") },
-                singleLine = true,
-                visualTransformation = if (showToken) {
-                    VisualTransformation.None
-                } else {
-                    PasswordVisualTransformation()
-                },
-                trailingIcon = {
-                    TextButton(onClick = { showToken = !showToken }) {
-                        Text(if (showToken) "隠す" else "見る")
-                    }
-                },
-                supportingText = {
-                    Text(
-                        "英数字と記号だけ。日本語は通信の見出しに載らないので使えません。",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(8.dp))
-
-            OutlinedTextField(
-                value = device,
-                onValueChange = { device = it },
-                label = { Text("この端末の名前") },
-                placeholder = { Text("pixel") },
-                singleLine = true,
-                supportingText = {
-                    Text(
-                        "実績を端末ごとに分けて見るときの見出しになります。端末ごとに違う名前を。",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            Spacer(Modifier.height(12.dp))
-            OutlinedButton(
-                onClick = {
-                    save { it.copy(baseUrl = url.trim(), token = token.trim(), deviceId = device.trim()) }
-                    result = "保存しました"
-                },
-            ) { Text("保存する") }
-
-            Spacer(Modifier.height(16.dp))
-            HorizontalDivider()
-            Spacer(Modifier.height(16.dp))
-
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("同期する", style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        if (settings.isConfigured) {
-                            "オンにすると、開いたときと保存したときに揃えます。"
-                        } else {
-                            "住所・合言葉・端末名を入れて保存すると使えます。"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(
-                    checked = settings.enabled,
-                    enabled = settings.isConfigured,
-                    onCheckedChange = { on -> save { it.copy(enabled = on) } },
-                )
+            if (settings.isConfigured) {
+                ConnectedSection(settings, busy, onBusy = { busy = it }, onResult = { result = it })
+            } else {
+                JoinSection(settings, busy, onBusy = { busy = it }, onResult = { result = it })
             }
-
-            Spacer(Modifier.height(12.dp))
-            Button(
-                onClick = {
-                    busy = true
-                    result = "同期しています…"
-                    scope.launch {
-                        result = when (val out = DopaRuntime.sync.syncNow()) {
-                            is SyncManager.Outcome.Done ->
-                                "受け取り ${out.pulled} 件 / 送り ${out.pushed} 件"
-                            is SyncManager.Outcome.NotConfigured -> "まだ設定できていません"
-                            is SyncManager.Outcome.Failed -> out.message
-                        }
-                        busy = false
-                    }
-                },
-                enabled = settings.isConfigured && settings.enabled && !busy,
-            ) { Text("いま同期する") }
 
             if (result.isNotBlank()) {
                 Spacer(Modifier.height(8.dp))
@@ -2062,11 +1914,268 @@ private fun SyncCard() {
 
             Spacer(Modifier.height(16.dp))
             Text(
-                "出るもの: ルール・タグ・アプリ名・1日ごとの使用時間\n" +
-                    "出ないもの: 反省文以外の記録、どの瞬間に何を見ていたか、ゲート、変更リクエスト",
+                "つないだら出るもの: 端末の名前・タグ・アプリ名・ルールの名札(名前と対象と予約の数字)・" +
+                    "予約・ほかの端末への頼みごと・ルールがいま効いているか・1日ごとの使用時間\n" +
+                    "出ないもの: ルールの条件や反省文、どの瞬間に何を見ていたか、関門、変更の申請",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+/** まだつないでいない端末。新しく始めるか、ほかの端末で出したコードで参加する。 */
+@Composable
+private fun JoinSection(
+    settings: SyncSettings,
+    busy: Boolean,
+    onBusy: (Boolean) -> Unit,
+    onResult: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var name by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf("") }
+    var showAdvanced by remember { mutableStateOf(false) }
+    var url by remember(settings.baseUrl) { mutableStateOf(settings.baseUrl) }
+    LaunchedEffect(Unit) { if (name.isBlank()) name = DopaRuntime.defaultDeviceName() }
+
+    fun connect(withCode: String) {
+        onBusy(true)
+        onResult(if (withCode.isBlank()) "始めています…" else "参加しています…")
+        scope.launch {
+            // 住所を変えていればそれを使う。空なら既定(dopa.togar.dev)
+            if (url.trim() != settings.baseUrl) {
+                DopaRuntime.settings.setSyncSettings(settings.copy(baseUrl = url.trim()))
+            }
+            onResult(
+                when (val out = DopaRuntime.connect(name.trim(), withCode)) {
+                    is Joining.Result.Ok -> "つながりました"
+                    is Joining.Result.Failed -> out.message
+                },
+            )
+            onBusy(false)
+        }
+    }
+
+    OutlinedTextField(
+        value = name,
+        onValueChange = { name = it.take(32) },
+        label = { Text("この端末の名前") },
+        singleLine = true,
+        supportingText = {
+            Text("ほかの端末の画面に出ます。「スマホ」「しごとPC」など見分けのつく名前を。")
+        },
+        modifier = Modifier.fillMaxWidth(),
+    )
+
+    Spacer(Modifier.height(12.dp))
+    Text("はじめての端末なら", style = MaterialTheme.typography.labelLarge)
+    Button(onClick = { connect("") }, enabled = !busy && name.isNotBlank()) { Text("新しく始める") }
+
+    Spacer(Modifier.height(16.dp))
+    Text("ほかの端末でもう使っているなら", style = MaterialTheme.typography.labelLarge)
+    Text(
+        "そちらの「端末の連携」→「コードを出す」で出た8文字を入れてください。2分で切れます。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(4.dp))
+    OutlinedTextField(
+        value = code,
+        onValueChange = { code = it.uppercase().take(12) },
+        label = { Text("コード") },
+        singleLine = true,
+        trailingIcon = {
+            TextButton(
+                onClick = { connect(code) },
+                enabled = !busy && name.isNotBlank() && code.trim().length >= 6,
+            ) { Text("参加する") }
+        },
+        modifier = Modifier.fillMaxWidth(),
+    )
+
+    Spacer(Modifier.height(8.dp))
+    TextButton(onClick = { showAdvanced = !showAdvanced }) {
+        Text(if (showAdvanced) "詳しい設定を閉じる" else "詳しい設定")
+    }
+    if (showAdvanced) {
+        OutlinedTextField(
+            value = url,
+            onValueChange = { url = it },
+            label = { Text("サーバーの住所") },
+            placeholder = { Text(SyncDefaults.BASE_URL) },
+            singleLine = true,
+            supportingText = { Text("空なら既定のサーバー。自分でサーバーを立てたときだけ変えます。") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/** つながっている端末。同期・ほかの端末を足す・連携をやめる。 */
+@Composable
+private fun ConnectedSection(
+    settings: SyncSettings,
+    busy: Boolean,
+    onBusy: (Boolean) -> Unit,
+    onResult: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val name by DopaRuntime.settings.deviceName.collectAsState(initial = "")
+    var invite by remember { mutableStateOf("") }
+    var inviteLeft by remember { mutableIntStateOf(0) }
+    var confirmLeave by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    // 残り時間を見せる。切れたことが見えないと、切れたコードを打ち込んで悩む
+    LaunchedEffect(invite) {
+        while (inviteLeft > 0) {
+            kotlinx.coroutines.delay(1_000)
+            inviteLeft -= 1
+        }
+    }
+
+    Text(
+        "つながっています" + if (name.isNotBlank()) "(この端末: $name)" else "",
+        style = MaterialTheme.typography.bodyLarge,
+    )
+
+    Spacer(Modifier.height(12.dp))
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("同期する", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "切っているあいだは何も送らず、何も受け取りません。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = settings.enabled,
+            onCheckedChange = { on ->
+                scope.launch { DopaRuntime.settings.setSyncSettings(settings.copy(enabled = on)) }
+            },
+        )
+    }
+
+    Spacer(Modifier.height(8.dp))
+    Button(
+        onClick = {
+            onBusy(true)
+            onResult("同期しています…")
+            scope.launch {
+                onResult(
+                    when (val out = DopaRuntime.sync.syncNow()) {
+                        is SyncManager.Outcome.Done -> "受け取り ${out.pulled} 件 / 送り ${out.pushed} 件"
+                        is SyncManager.Outcome.NotConfigured -> "まだつないでいません"
+                        is SyncManager.Outcome.Failed -> out.message
+                    },
+                )
+                onBusy(false)
+            }
+        },
+        enabled = settings.enabled && !busy,
+    ) { Text("いま同期する") }
+
+    Spacer(Modifier.height(16.dp))
+    HorizontalDivider()
+    Spacer(Modifier.height(16.dp))
+
+    Text("ほかの端末をつなぐ", style = MaterialTheme.typography.bodyLarge)
+    Text(
+        "コードを出して、つなぎたい端末の「端末の連携」→「コードで参加」に入れてください。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (invite.isNotBlank()) {
+        Spacer(Modifier.height(8.dp))
+        Text(invite, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Medium)
+        Text(
+            if (inviteLeft > 0) "あと ${inviteLeft} 秒で切れます" else "切れました。出し直してください",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (inviteLeft > 0) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.error
+            },
+        )
+    }
+    Spacer(Modifier.height(4.dp))
+    OutlinedButton(
+        onClick = {
+            onBusy(true)
+            scope.launch {
+                DopaRuntime.newInvite().fold(
+                    onSuccess = { (code, seconds) ->
+                        invite = code
+                        inviteLeft = seconds
+                        onResult("")
+                    },
+                    onFailure = { onResult(it.message ?: "コードを出せませんでした") },
+                )
+                onBusy(false)
+            }
+        },
+        enabled = !busy,
+    ) { Text(if (invite.isBlank()) "コードを出す" else "出し直す") }
+
+    Spacer(Modifier.height(16.dp))
+    HorizontalDivider()
+    Spacer(Modifier.height(8.dp))
+    TextButton(onClick = { confirmLeave = true }, enabled = !busy) { Text("この端末だけ連携をやめる") }
+    TextButton(onClick = { confirmDelete = true }, enabled = !busy) {
+        Text("すべての端末で連携をやめて、サーバーの記録を消す", color = MaterialTheme.colorScheme.error)
+    }
+
+    if (confirmLeave) {
+        AlertDialog(
+            onDismissRequest = { confirmLeave = false },
+            title = { Text("この端末だけ連携をやめますか") },
+            text = {
+                Text("ほかの端末はつながったままです。この端末のルールと記録はそのまま残ります。")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmLeave = false
+                    scope.launch {
+                        DopaRuntime.leave()
+                        onResult("この端末の連携をやめました")
+                    }
+                }) { Text("やめる") }
+            },
+            dismissButton = { TextButton(onClick = { confirmLeave = false }) { Text("戻る") } },
+        )
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("サーバーの記録を消しますか") },
+            text = {
+                Text(
+                    "つないでいるすべての端末の連携が切れ、サーバーに置いた予約・名札・使用時間が" +
+                        "消えます。元に戻せません。各端末のルールと記録はそのまま残ります。",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = false
+                    onBusy(true)
+                    scope.launch {
+                        onResult(
+                            DopaRuntime.deleteEverywhere().fold(
+                                onSuccess = { "サーバーの記録を消しました" },
+                                onFailure = { it.message ?: "消せませんでした" },
+                            ),
+                        )
+                        onBusy(false)
+                    }
+                }) { Text("消す", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("戻る") } },
+        )
     }
 }

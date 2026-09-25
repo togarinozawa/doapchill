@@ -87,21 +87,25 @@ class SyncApi(
     ) { JSON.decodeFromString(LatestRelease.serializer(), it) }
 
     /**
-     * この端末を名簿に載せて、**この端末ぶんの合言葉**を受け取る。
+     * 新しい区画を作って、**この端末ぶんの合言葉**を受け取る。
      *
-     * まだ合言葉を持っていない端末が叩くので、認証は通しません。代わりに
-     * アプリに焼いてある入口の鍵を見出しに載せます。鍵は配っているアプリの中に
-     * あるので、**中を開けた人は止められません** ── 引き受けているのはそこまでで、
-     * 代わりに配るものを端末ごとに分けて、1台だけ止められるようにしてあります。
+     * まだ合言葉を持っていない端末が叩くので、認証は通しません。誰でも叩けますが、
+     * 作られるのは空の区画で、受け取る合言葉はその区画しか開けません。
      */
-    fun enroll(enrollKey: String, deviceId: String, name: String, platform: String): Outcome<EnrollResponse> =
+    fun signup(deviceId: String, name: String, platform: String): Outcome<EnrollResponse> =
         request(
             "POST",
-            "/enroll",
+            "/signup",
             JSON.encodeToString(EnrollRequest.serializer(), EnrollRequest(deviceId, name, platform)),
             withToken = false,
-            headers = mapOf("X-Dopa-Enroll" to enrollKey),
         ) { JSON.decodeFromString(EnrollResponse.serializer(), it) }
+
+    /**
+     * この区画をサーバーから**まるごと消す**。すべての端末の連携が切れる。
+     *
+     * 端末の中のルールや記録には触りません(サーバーには元から無い)。
+     */
+    fun deleteAccount(): Outcome<Unit> = request("POST", "/account/delete", "{}") { }
 
     // ---- 短い合言葉で繋ぐ ------------------------------------------------
 
@@ -118,17 +122,19 @@ class SyncApi(
     ) { JSON.decodeFromString(InviteResponse.serializer(), it) }
 
     /**
-     * コードと引き換えに本物の合言葉を受け取る。**これから繋ぐ端末から呼びます。**
+     * コードと引き換えに、**コードを出した人の区画に**この端末ぶんの合言葉を作ってもらう。
+     * **これから繋ぐ端末から呼びます。**
      *
      * 合言葉をまだ持っていないので、ここだけ認証を通しません
      * (サーバー側で2分・使い切りに絞ってあります)。
      */
-    fun claimInvite(code: String): Outcome<ClaimResponse> = request(
-        "POST",
-        "/invite/claim",
-        JSON.encodeToString(ClaimRequest.serializer(), ClaimRequest(code)),
-        withToken = false,
-    ) { JSON.decodeFromString(ClaimResponse.serializer(), it) }
+    fun claimInvite(code: String, deviceId: String, name: String, platform: String): Outcome<EnrollResponse> =
+        request(
+            "POST",
+            "/invite/claim",
+            JSON.encodeToString(ClaimRequest.serializer(), ClaimRequest(code, deviceId, name, platform)),
+            withToken = false,
+        ) { JSON.decodeFromString(EnrollResponse.serializer(), it) }
 
     // ------------------------------------------------------------------
 

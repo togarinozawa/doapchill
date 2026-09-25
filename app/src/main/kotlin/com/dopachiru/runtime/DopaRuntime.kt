@@ -32,9 +32,9 @@ import com.dopachiru.core.param.Params
 import com.dopachiru.core.points.PointPolicy
 import com.dopachiru.core.points.PointReason
 import android.os.Build
-import com.dopachiru.BuildConfig
 import com.dopachiru.core.sync.DeviceInfo
-import com.dopachiru.core.sync.Enrollment
+import com.dopachiru.core.sync.Joining
+import com.dopachiru.core.sync.SyncDefaults
 import com.dopachiru.core.sync.SyncApi
 import com.dopachiru.core.sync.RuleCatalogs
 import com.dopachiru.core.sync.RuleState
@@ -243,7 +243,6 @@ object DopaRuntime {
                 recomputeRuleScope()
             }
         }
-        enrollIfNeeded()
         scope.launch { rules.tagsByPackage.collect { tagCache = it } }
         scope.launch { settings.ruleStates.collect { ruleStateCache = it } }
         scope.launch {
@@ -261,45 +260,89 @@ object DopaRuntime {
         scope.launch { settings.passUntilEpochSec.collect { passUntilSec = it } }
     }
 
+    // ---- 端末をつなぐ ----------------------------------------------------
+    //
+    // 押すまで何も送らない。前は起動しただけで持ち主のサーバーに繋がっていたが、
+    // 配った相手にそれをやると持ち主の区画に入ってしまう。[Joining]
+
+    /** 名簿に出すこの端末の名前の既定。 */
+    suspend fun defaultDeviceName(): String =
+        settings.deviceName.first().ifBlank { Build.MODEL.orEmpty().ifBlank { "Android" } }
+
     /**
-     * まだ繋いでいなければ、自分で名簿に載りにいく。
+     * 端末をつなぐ。
      *
-     * ## なぜ手で合言葉を入れさせないのか
-     *
-     * 使うのが一人だからです。端末を足すたびに48文字を写すより、入れた直後から
-     * 同じルールが載っているほうが、実際に使う形に近い。
-     *
-     * ## 何を引き換えにしているか
-     *
-     * 入口の鍵は APK の中にあり、APK は公開の場に置いてあります。**中を開けた人は
-     * ここを叩けます。** 代わりにサーバーが配るのは端末ごとに別の合言葉なので、
-     * 名簿に見慣れない名前が出たら、その1台だけ止められます。[Enrollment]
-     *
-     * ## 失敗しても黙ります
-     *
-     * 圏外で起動しただけで画面に赤字が出るのは行儀が悪い。次の起動でまた試します。
-     * **繋がらなくても制限は効いたまま**なので、急ぐ理由もありません。
+     * @param code 空なら新しく始める。ほかの端末で出したコードがあれば、その人の区画に入る。
      */
-    private fun enrollIfNeeded() {
-        val key = BuildConfig.ENROLL_KEY
-        scope.launch {
-            val current = settings.syncSettings.first()
-            if (!Enrollment.needed(current, key)) return@launch
-
-            val name = settings.deviceName.first().ifBlank { Build.MODEL.orEmpty().ifBlank { "Android" } }
-            // deviceId は実績の見出しでもあるので、一度決めたら変えない
-            val deviceId = current.deviceId.ifBlank {
-                "android-" + UUID.randomUUID().toString().take(8)
-            }
-
-            val result = withContext(Dispatchers.IO) {
-                Enrollment.run(current, key, deviceId, name, "android")
-            }
-            if (result is Enrollment.Result.Ok) {
-                settings.setSyncSettings(result.settings)
-                if (settings.deviceName.first().isBlank()) settings.setDeviceName(name)
-            }
+    suspend fun connect(name: String, code: String = ""): Joining.Result = withContext(Dispatchers.IO) {
+        val current = settings.syncSettings.first()
+        // deviceId は実績の見出しでもあるので、一度決めたら変えない
+        val deviceId = current.deviceId.ifBlank { Joining.newDeviceId("android") }
+        val url = current.baseUrl.ifBlank { SyncDefaults.BASE_URL }
+        val result = if (code.isBlank()) {
+            Joining.startNew(current, deviceId, name, "android", url)
+        } else {
+            Joining.joinWithCode(current, code, deviceId, name, "android", url)
         }
+        if (result is Joining.Result.Ok) {
+            // 前の区画から届いたものを次の区画へ持ち込まない
+            forgetSharedData(deviceId)
+            settings.setDeviceName(name)
+            settings.setSyncSettings(result.settings)
+            lastSyncAtMs = 0L
+        }
+        result
+    }
+
+    /** ほかの端末をつなぐための短いコード(2分・使い切り)。 */
+    suspend fun newInvite(): Result<Pair<String, Int>> = withContext(Dispatchers.IO) {
+        val current = settings.syncSettings.first()
+        if (!current.isConfigured) return@withContext Result.failure(IllegalStateException("まだつないでいません"))
+        when (val out = SyncApi(current.baseUrl, current.token).newInvite()) {
+            is SyncApi.Outcome.Ok -> Result.success(out.value.code to out.value.ttlSeconds.coerceAtLeast(1))
+            is SyncApi.Outcome.Rejected -> Result.failure(IllegalStateException(out.message))
+            is SyncApi.Outcome.Unreachable -> Result.failure(IllegalStateException(out.message))
+            is SyncApi.Outcome.Malformed -> Result.failure(IllegalStateException(out.message))
+        }
+    }
+
+    /** この端末だけ連携をやめる。サーバーの記録とほかの端末はそのまま。 */
+    suspend fun leave() {
+        val current = settings.syncSettings.first()
+        forgetSharedData(current.deviceId)
+        settings.setSyncSettings(current.copy(enabled = false, token = "", since = 0L, lastError = ""))
+    }
+
+    /**
+     * すべての端末の連携をやめ、サーバーの記録を消す。消えたらこの端末も連携をやめる。
+     * ほかの端末は次の同期で弾かれて、つながっていない状態に戻る。
+     */
+    suspend fun deleteEverywhere(): Result<Unit> = withContext(Dispatchers.IO) {
+        val current = settings.syncSettings.first()
+        if (!current.isConfigured) return@withContext Result.failure(IllegalStateException("まだつないでいません"))
+        when (val out = SyncApi(current.baseUrl, current.token).deleteAccount()) {
+            is SyncApi.Outcome.Ok -> {
+                leave()
+                Result.success(Unit)
+            }
+            is SyncApi.Outcome.Rejected -> Result.failure(IllegalStateException(out.message))
+            is SyncApi.Outcome.Unreachable -> Result.failure(IllegalStateException(out.message))
+            is SyncApi.Outcome.Malformed -> Result.failure(IllegalStateException(out.message))
+        }
+    }
+
+    /**
+     * ほかの端末から届いたものを忘れる。この端末の予約だけは残す(ここで使うものなので)。
+     */
+    private suspend fun forgetSharedData(myDeviceId: String) {
+        settings.setDevices(emptyList())
+        settings.setRuleCatalogs(emptyList())
+        settings.setRuleStates(emptyList())
+        settings.setCommands(emptyList())
+        settings.setReservations(
+            settings.reservations.first().filter { it.devices.isEmpty() || myDeviceId in it.devices },
+        )
+        sync.forget()
     }
 
     /**
@@ -1092,37 +1135,6 @@ object DopaRuntime {
         if (changed) settings.setRuleStates(RuleStates.prune(states, now))
         return changed
     }
-
-    /**
-     * 短い合言葉と引き換えに、本物の合言葉を受け取る。
-     *
-     * 48文字の合言葉を PC から写すのが面倒、というだけのための道です。
-     * カメラも権限も要らない代わりに、サーバー側で**2分・使い切り**に絞ってあります。
-     */
-    suspend fun claimInvite(baseUrl: String, code: String): Result<String> =
-        withContext(Dispatchers.IO) {
-            if (baseUrl.isBlank()) return@withContext Result.failure(
-                IllegalArgumentException("先にサーバーの住所を入れてください"),
-            )
-            // 合言葉をまだ持っていないので、空のまま呼ぶ(この口だけ認証が要らない)
-            when (val out = SyncApi(baseUrl, "").claimInvite(code)) {
-                is SyncApi.Outcome.Ok ->
-                    out.value.token.takeIf { it.isNotBlank() }
-                        ?.let { Result.success(it) }
-                        ?: Result.failure(IllegalStateException("サーバーが合言葉を持っていません"))
-
-                is SyncApi.Outcome.Rejected ->
-                    // 見つからないのと切れたのをサーバーは区別しない(総当たりの手掛かりになる)
-                    Result.failure(
-                        IllegalStateException(
-                            if (out.code == 404) "その合言葉は見つかりません。切れているかもしれません" else out.message,
-                        ),
-                    )
-
-                is SyncApi.Outcome.Unreachable -> Result.failure(IllegalStateException(out.message))
-                is SyncApi.Outcome.Malformed -> Result.failure(IllegalStateException(out.message))
-            }
-        }
 
     /** 名簿。画面で相手を選ぶために使う。 */
     val devices: Flow<List<DeviceInfo>> get() = settings.devices

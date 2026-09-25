@@ -1,22 +1,4 @@
-import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-
-/**
- * サーバーに自動で繋ぐための入口の鍵。`local.properties` の `dopa.enrollKey`。
- *
- * **リポジトリには置きません**(公開しているので)。無ければ空のまま焼かれ、
- * 自動で繋ぐ機能だけが黙って止まります ── 手で合言葉を入れる道は残るので、
- * 鍵を持っていない人がクローンしてもビルドは通ります。
- *
- * 焼いた先は APK の中なので、**中を開けた人には読めます。** 防いでいるのは
- * 「住所を知っているだけの人」まで。その先はサーバー側で端末ごとに
- * 合言葉を分け、1台だけ止められるようにして受けています。
- */
-val enrollKey: String = rootProject.file("local.properties").let { file ->
-    if (!file.exists()) "" else Properties()
-        .apply { file.inputStream().use { load(it) } }
-        .getProperty("dopa.enrollKey", "")
-}
 
 plugins {
     alias(libs.plugins.android.application)
@@ -42,10 +24,8 @@ android {
          */
         minSdk = 29
         targetSdk = 36
-        versionCode = 40
-        versionName = "0.33.0"
-
-        buildConfigField("String", "ENROLL_KEY", "\"" + enrollKey + "\"")
+        versionCode = 41
+        versionName = "0.34.0"
     }
 
     signingConfigs {
@@ -86,8 +66,6 @@ android {
 
     buildFeatures {
         compose = true
-        // 入口の鍵を焼き込むため。値そのものはリポジトリに無い
-        buildConfig = true
     }
 
     packaging {

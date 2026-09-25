@@ -55,8 +55,19 @@ const KINDS = [
   'ruleCatalogs',
 ];
 
-/** いまは単一利用者。列だけ先に持たせてある。 */
-const USER_ID = 1;
+/**
+ * 最初の利用者(持ち主)。元の合言葉(DOPA_TOKEN)はこの利用者として扱う。
+ *
+ * 利用者は複数いる。**どの行も user_id で分けてあり、合言葉から引いた利用者の行しか
+ * 読み書きしない** ── 配った相手の端末が、持ち主の予約や頼みごとに触れないように。
+ */
+const OWNER_USER_ID = 1;
+
+/**
+ * 1日に作れる新しい利用者の数。荒らしで D1 が埋まるのを止めるだけの上限。
+ * IP は覚えない(配った相手の居場所を記録したくない)ので、全体の数で絞る。
+ */
+const SIGNUPS_PER_DAY = 20;
 
 export default {
   async fetch(request, env) {
@@ -83,25 +94,29 @@ export default {
       return cors(await latestVersions(request, env));
     }
 
-    // 端末を名簿に載せて、その端末ぶんの合言葉を配る口。**合言葉の前に置く**
-    // ── まだ持っていない端末が叩くため。詳しくは enroll を見ること
-    if (path === '/enroll' && request.method === 'POST') {
-      return cors(await enroll(request, env));
+    // 新しい利用者として始める口。**合言葉をまだ持っていない端末が叩く**ので認証の前。
+    // 誰でも叩けるが、作られるのは空の区画で、ほかの利用者の行には届かない
+    if (path === '/signup' && request.method === 'POST') {
+      return cors(await signup(request, env));
     }
 
-    if (!(await authorized(request, env))) {
+    const auth = await authorized(request, env);
+    if (!auth) {
       return cors(json({ error: 'unauthorized' }, 401));
     }
 
     if (path === '/invite/new' && request.method === 'POST') {
-      return cors(await newInvite(env));
+      return cors(await newInvite(env, auth));
     }
 
     try {
-      if (path === '/ping' && request.method === 'GET') return cors(await ping(env));
-      if (path === '/sync' && request.method === 'POST') return cors(await sync(request, env));
-      if (path === '/usage' && request.method === 'POST') return cors(await putUsage(request, env));
-      if (path === '/usage' && request.method === 'GET') return cors(await getUsage(url, env));
+      if (path === '/ping' && request.method === 'GET') return cors(await ping(env, auth));
+      if (path === '/sync' && request.method === 'POST') return cors(await sync(request, env, auth));
+      if (path === '/usage' && request.method === 'POST') return cors(await putUsage(request, env, auth));
+      if (path === '/usage' && request.method === 'GET') return cors(await getUsage(url, env, auth));
+      if (path === '/account/delete' && request.method === 'POST') {
+        return cors(await deleteAccount(env, auth));
+      }
       return cors(json({ error: 'not_found' }, 404));
     } catch (err) {
       console.error('dopachiru-sync', path, err && err.message);
@@ -113,34 +128,38 @@ export default {
 // ---- 門番 -----------------------------------------------------------------
 
 /**
- * 合言葉ひとつ。端末が3台の個人用なので、これで足ります。
+ * 合言葉から「誰の、どの端末か」を引く。引けなければ null。
+ *
+ * 返した userId で**すべての読み書きを絞る**。ここを通さずに行を触る口を作ると、
+ * 配った相手が持ち主の行を読めるようになる。
  *
  * 長さの違いで漏れないよう固定時間で比べます。合言葉を設定していなければ
  * **全部断る** ── 空と空が一致して素通しになるほうが危ない。
  */
 async function authorized(request, env) {
   const given = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
-  if (!given) return false;
+  if (!given) return null;
 
+  // 元の合言葉。持ち主が手で入れた端末のためだけに残してある
   const expected = env.DOPA_TOKEN || '';
-  if (expected && timingSafeEqual(expected, given)) return true;
+  if (expected && timingSafeEqual(expected, given)) return { userId: OWNER_USER_ID, deviceId: '' };
 
   // 端末ごとに配った合言葉。**止められる**のが元の合言葉との違い。
   // 見慣れない名前が名簿に出たら、その行の revoked を立てれば締め出せる
   const row = await env.DB.prepare(
-    'SELECT device_id FROM dopachiru_device_tokens WHERE user_id = ? AND token = ? AND revoked = 0',
+    'SELECT user_id, device_id FROM dopachiru_device_tokens WHERE token = ? AND revoked = 0',
   )
-    .bind(USER_ID, given)
+    .bind(given)
     .first();
-  if (!row) return false;
+  if (!row) return null;
 
   // 最後に来た時刻。使われていない行を見分けるため(消す判断は手で)
   await env.DB.prepare(
     'UPDATE dopachiru_device_tokens SET last_seen_at = ? WHERE user_id = ? AND token = ?',
   )
-    .bind(Date.now(), USER_ID, given)
+    .bind(Date.now(), row.user_id, given)
     .run();
-  return true;
+  return { userId: row.user_id, deviceId: row.device_id };
 }
 
 function timingSafeEqual(a, b) {
@@ -174,7 +193,7 @@ function newCode() {
   return [...bytes].map((b) => INVITE_ALPHABET[b % INVITE_ALPHABET.length]).join('');
 }
 
-async function newInvite(env) {
+async function newInvite(env, auth) {
   const code = newCode();
   const expires = Date.now() + INVITE_TTL_MS;
   await env.DB.batch([
@@ -182,39 +201,132 @@ async function newInvite(env) {
     env.DB.prepare('DELETE FROM dopachiru_invites WHERE expires_at < ?').bind(Date.now()),
     env.DB.prepare(
       'INSERT INTO dopachiru_invites (user_id, code, expires_at) VALUES (?1, ?2, ?3)',
-    ).bind(USER_ID, code, expires),
+    ).bind(auth.userId, code, expires),
   ]);
   return json({ code, expiresAt: expires, ttlSeconds: Math.floor(INVITE_TTL_MS / 1000) });
 }
 
 /**
- * コードと引き換えに本物の合言葉を渡す。
+ * コードと引き換えに、**コードを出した人の区画に**この端末ぶんの合言葉を作って渡す。
  *
  * **引き換えは1回だけ。** 先に消してから渡すので、同じコードで2台は繋がらない。
  * D1 の DELETE ... RETURNING が使えるので、読んでから消すまでの隙間が無い。
+ *
+ * 前は元の合言葉(DOPA_TOKEN)をそのまま渡していた。利用者が1人のうちはそれで
+ * よかったが、今それをやると**コードを出したのが誰でも持ち主の区画に入れてしまう。**
  */
 async function claimInvite(request, env) {
   const body = await readJson(request);
   const code = String(body.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (code.length < 6) return json({ error: 'bad_code' }, 400);
+  const device = deviceOf(body);
+  // 古いアプリは端末を名乗らずに来る。元の合言葉はもう渡さないので、更新してもらう
+  if (!device.deviceId) return json({ error: 'update_required' }, 426);
 
   const row = await env.DB.prepare(
-    'DELETE FROM dopachiru_invites WHERE user_id = ?1 AND code = ?2 AND expires_at > ?3' +
-      ' RETURNING code',
+    'DELETE FROM dopachiru_invites WHERE code = ?1 AND expires_at > ?2 RETURNING user_id',
   )
-    .bind(USER_ID, code, Date.now())
+    .bind(code, Date.now())
     .first();
 
   // 見つからないのと期限切れを区別しない。区別すると総当たりの手掛かりになる
   if (!row) return json({ error: 'not_found' }, 404);
-  return json({ token: env.DOPA_TOKEN || '' });
+
+  const issued = await issueDeviceToken(env, row.user_id, device);
+  if (issued.error) return json({ error: issued.error }, 403);
+  return json({ token: issued.token, deviceId: device.deviceId });
+}
+
+// ---- 新しく始める -----------------------------------------------------------
+
+/**
+ * 新しい利用者を作り、この端末ぶんの合言葉を渡す。
+ *
+ * 誰でも叩ける。それで困らないのは、**作られるのが空の区画で、合言葉がその区画しか
+ * 開けない**から。荒らしで D1 が埋まるのだけは困るので、1日の数に上限を置く。
+ */
+async function signup(request, env) {
+  const device = deviceOf(await readJson(request));
+  if (!device.deviceId) return json({ error: 'device_id_required' }, 400);
+
+  const since = Date.now() - 24 * 60 * 60 * 1000;
+  const recent = await env.DB.prepare('SELECT COUNT(*) AS n FROM dopachiru_users WHERE created_at > ?')
+    .bind(since)
+    .first();
+  if (recent && recent.n >= SIGNUPS_PER_DAY) return json({ error: 'busy' }, 429);
+
+  const user = await env.DB.prepare('INSERT INTO dopachiru_users (created_at) VALUES (?) RETURNING user_id')
+    .bind(Date.now())
+    .first();
+  const userId = user.user_id;
+  await env.DB.prepare('INSERT OR IGNORE INTO dopachiru_meta (user_id, rev) VALUES (?, 0)').bind(userId).run();
+
+  const issued = await issueDeviceToken(env, userId, device);
+  if (issued.error) return json({ error: issued.error }, 403);
+  return json({ token: issued.token, deviceId: device.deviceId });
+}
+
+/** 本文から、端末が名乗ったものを取り出す。長さは切り詰める。 */
+function deviceOf(body) {
+  return {
+    deviceId: String((body && body.deviceId) || '').slice(0, 64),
+    name: String((body && body.name) || '').slice(0, 64),
+    platform: String((body && body.platform) || '').slice(0, 32),
+  };
+}
+
+/**
+ * その利用者の区画に、この端末の合言葉を作る。
+ *
+ * すでに載っている端末なら同じ合言葉を返す。**入れ直すたびに行が増えると、
+ * 名簿が使い物にならなくなる** ── 見慣れない名前に気づけるのが要なので。
+ */
+async function issueDeviceToken(env, userId, device) {
+  const existing = await env.DB.prepare(
+    'SELECT token, revoked FROM dopachiru_device_tokens WHERE user_id = ? AND device_id = ? ORDER BY created_at DESC LIMIT 1',
+  )
+    .bind(userId, device.deviceId)
+    .first();
+  if (existing) {
+    if (existing.revoked) return { error: 'revoked' };
+    return { token: existing.token };
+  }
+
+  const token = newToken();
+  await env.DB.prepare(
+    'INSERT INTO dopachiru_device_tokens (user_id, token, device_id, name, platform, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+  )
+    .bind(userId, token, device.deviceId, device.name, device.platform, Date.now())
+    .run();
+  return { token };
+}
+
+// ---- 消す -----------------------------------------------------------------
+
+/**
+ * その利用者の行を**全部**消す。すべての端末の連携が切れる。
+ *
+ * 墓標も残さない。配った相手が「やめたい」と言ったとき、サーバーに何も残らないことを
+ * 約束できるようにするため。端末の中のルールや記録には触らない(ここには元から無い)。
+ */
+async function deleteAccount(env, auth) {
+  const id = auth.userId;
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM dopachiru_entities WHERE user_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM dopachiru_usage WHERE user_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM dopachiru_invites WHERE user_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM dopachiru_device_tokens WHERE user_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM dopachiru_meta WHERE user_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM dopachiru_users WHERE user_id = ?').bind(id),
+  ]);
+  return json({ ok: true });
 }
 
 // ---- 疎通 -----------------------------------------------------------------
 
-async function ping(env) {
+async function ping(env, auth) {
   const row = await env.DB.prepare('SELECT rev FROM dopachiru_meta WHERE user_id = ?')
-    .bind(USER_ID)
+    .bind(auth.userId)
     .first();
   return json({ ok: true, rev: row ? row.rev : 0, serverTime: Date.now() });
 }
@@ -229,7 +341,7 @@ async function ping(env) {
  *
  * since は前回受け取った rev。初回は 0(全件)。
  */
-async function sync(request, env) {
+async function sync(request, env, auth) {
   const body = await readJson(request);
   const deviceId = String(body.deviceId || '').slice(0, 64);
   const since = Number(body.since) || 0;
@@ -247,7 +359,7 @@ async function sync(request, env) {
     for (const item of list) {
       if (!item || typeof item.uid !== 'string' || !item.uid) continue;
       statements.push(
-        upsertEntity(env, {
+        upsertEntity(env, auth.userId, {
           kind,
           uid: item.uid,
           updatedAt: Number(item.updatedAt) || 0,
@@ -264,7 +376,9 @@ async function sync(request, env) {
     // 版数の繰り上げを先頭に置く。batch はひとまとまりで順に走るので、
     // 続く INSERT のサブクエリは繰り上げ後の値を読む
     await env.DB.batch([
-      env.DB.prepare('UPDATE dopachiru_meta SET rev = rev + 1 WHERE user_id = ?').bind(USER_ID),
+      // 版数の行が無い利用者(区画を消したあと元の合言葉で来た持ち主など)にも書けるように
+      env.DB.prepare('INSERT OR IGNORE INTO dopachiru_meta (user_id, rev) VALUES (?, 0)').bind(auth.userId),
+      env.DB.prepare('UPDATE dopachiru_meta SET rev = rev + 1 WHERE user_id = ?').bind(auth.userId),
       ...statements,
     ]);
   }
@@ -273,7 +387,7 @@ async function sync(request, env) {
     'SELECT kind, uid, updated_at, deleted, payload FROM dopachiru_entities' +
       ' WHERE user_id = ? AND rev > ? ORDER BY rev',
   )
-    .bind(USER_ID, since)
+    .bind(auth.userId, since)
     .all();
 
   const changes = {};
@@ -291,7 +405,7 @@ async function sync(request, env) {
   }
 
   const revRow = await env.DB.prepare('SELECT rev FROM dopachiru_meta WHERE user_id = ?')
-    .bind(USER_ID)
+    .bind(auth.userId)
     .first();
 
   return json({ rev: revRow ? revRow.rev : 0, serverTime: Date.now(), changes });
@@ -304,7 +418,7 @@ async function sync(request, env) {
  * 読んでから書くまでに他の端末が割り込む隙間を作らないため。
  * rev もサブクエリで引くので、値を先に知る必要がありません。
  */
-function upsertEntity(env, e) {
+function upsertEntity(env, userId, e) {
   return env.DB.prepare(
     `INSERT INTO dopachiru_entities
        (user_id, kind, uid, updated_at, deleted, payload, rev, device_id)
@@ -317,13 +431,13 @@ function upsertEntity(env, e) {
        rev        = excluded.rev,
        device_id  = excluded.device_id
      WHERE excluded.updated_at > dopachiru_entities.updated_at`,
-  ).bind(USER_ID, e.kind, e.uid, e.updatedAt, e.deleted, e.payload, e.deviceId);
+  ).bind(userId, e.kind, e.uid, e.updatedAt, e.deleted, e.payload, e.deviceId);
 }
 
 // ---- 使用実績 -------------------------------------------------------------
 
 /** 自分の端末ぶんを差し替える。他の端末の行には触りません。 */
-async function putUsage(request, env) {
+async function putUsage(request, env, auth) {
   const body = await readJson(request);
   const deviceId = String(body.deviceId || '').slice(0, 64);
   const days = Array.isArray(body.days) ? body.days : [];
@@ -346,7 +460,7 @@ async function putUsage(request, env) {
            override_count    = excluded.override_count,
            updated_at        = excluded.updated_at`,
       ).bind(
-        USER_ID,
+        auth.userId,
         deviceId,
         d.date,
         Number(d.totalMinutes) || 0,
@@ -367,7 +481,7 @@ async function putUsage(request, env) {
  * 上書きで合算にすると「スマホ30分 + PC20分」の日が 20分になります。
  * 分けて持てば、「全端末で1日30分」も「PC だけで1日2時間」も同じデータから出せます。
  */
-async function getUsage(url, env) {
+async function getUsage(url, env, auth) {
   const from = String(url.searchParams.get('from') || '0000-01-01');
   const to = String(url.searchParams.get('to') || '9999-12-31');
 
@@ -375,7 +489,7 @@ async function getUsage(url, env) {
     'SELECT device_id, date, total_minutes, per_app, block_shown_count, override_count' +
       ' FROM dopachiru_usage WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date',
   )
-    .bind(USER_ID, from, to)
+    .bind(auth.userId, from, to)
     .all();
 
   const byDate = new Map();
@@ -511,69 +625,6 @@ function compareVersions(a, b) {
     if (diff) return diff > 0 ? 1 : -1;
   }
   return 0;
-}
-
-// ---- 端末を載せる ---------------------------------------------------------
-
-/**
- * 端末を名簿に載せて、その端末ぶんの合言葉を配る。
- *
- * ## なぜ自動で繋げるのか
- *
- * 使うのが一人なので、端末を足すたびに合言葉を写す手間のほうが重い。
- * 入れた直後から同期が効いているほうが、実際に使う形に近い。
- *
- * ## その代わり、何が緩むのか
- *
- * **入口の鍵([ENROLL_KEY])は配っているアプリの中にあります。** 公開している
- * APK から抜けるので、抜いた人はここを叩けます。防いでいるのは
- * 「住所を知っているだけの人」までで、**中を開けた人は止められません**。
- *
- * 引き受けているのはそこまでで、代わりに次の2つを用意してあります。
- *
- *  1. 配る合言葉は**端末ごとに別**。怪しい行1つを止めれば済む
- *  2. 名乗った名前が名簿に出る。見慣れない名前が増えれば気づける
- *
- * 気づいたら止めます:
- *
- *     wrangler d1 execute dopachiru --remote  *       --command "UPDATE dopachiru_device_tokens SET revoked = 1 WHERE name = '見慣れない名前'"
- *
- * 入口ごと閉じるなら `wrangler secret delete ENROLL_KEY`。
- * 閉じても、すでに配った合言葉は生きたままです(繋ぎ直しは起きない)。
- */
-async function enroll(request, env) {
-  const key = env.ENROLL_KEY || '';
-  // 鍵を置いていなければ**閉じている**。空と空が一致して素通しになるほうが危ない
-  if (!key) return json({ error: 'enroll_closed' }, 403);
-
-  const given = request.headers.get('x-dopa-enroll') || '';
-  if (!timingSafeEqual(key, given)) return json({ error: 'unauthorized' }, 401);
-
-  const body = await readJson(request);
-  const deviceId = String(body.deviceId || '').slice(0, 64);
-  if (!deviceId) return json({ error: 'device_id_required' }, 400);
-  const name = String(body.name || '').slice(0, 64);
-  const platform = String(body.platform || '').slice(0, 32);
-
-  // すでに載っている端末なら、同じ合言葉を返す。**入れ直すたびに行が増えると、
-  // 名簿が使い物にならなくなる** ── 見慣れない名前に気づけるのが要なので
-  const existing = await env.DB.prepare(
-    'SELECT token, revoked FROM dopachiru_device_tokens WHERE user_id = ? AND device_id = ? ORDER BY created_at DESC LIMIT 1',
-  )
-    .bind(USER_ID, deviceId)
-    .first();
-  if (existing) {
-    if (existing.revoked) return json({ error: 'revoked' }, 403);
-    return json({ token: existing.token, deviceId });
-  }
-
-  const token = newToken();
-  await env.DB.prepare(
-    'INSERT INTO dopachiru_device_tokens (user_id, token, device_id, name, platform, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-  )
-    .bind(USER_ID, token, deviceId, name, platform, Date.now())
-    .run();
-  return json({ token, deviceId });
 }
 
 /** 端末ごとの合言葉。元の合言葉と同じ長さ(48文字)にしてある。 */

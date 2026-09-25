@@ -124,12 +124,14 @@ data class InviteResponse(
     val ttlSeconds: Int = 0,
 )
 
+/** コードと、引き換える端末の名乗り。端末ごとに別の合言葉を作ってもらうため。 */
 @Serializable
-data class ClaimRequest(val code: String)
-
-/** 引き換えた本物の合言葉。 */
-@Serializable
-data class ClaimResponse(val token: String = "")
+data class ClaimRequest(
+    val code: String,
+    val deviceId: String = "",
+    val name: String = "",
+    val platform: String = "",
+)
 
 /**
  * アプリの名札。

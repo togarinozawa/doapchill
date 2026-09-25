@@ -33,6 +33,18 @@ class ReservationRepository(
     /** 画面表示用。終わった予約は落としてある。 */
     val reservations: StateFlow<List<Reservation>> = _flow.asStateFlow()
 
+    init {
+        // 同期は店([SettingsStore])に直接書く。追いかけないと、ほかの端末から取られた枠が
+        // 次に起動するまで効かず、そのあいだにこちらで予約すると古い手元の一覧で上書きしてしまう
+        scope.launch {
+            store.reservations.collect { stored ->
+                val pruned = Reservations.prune(stored, nowSec())
+                cache = pruned
+                _flow.value = pruned
+            }
+        }
+    }
+
     /** 起動直後に読み込む。 */
     suspend fun warmUp() {
         val now = nowSec()

@@ -251,6 +251,9 @@ class SyncManager(
         )
     }
 
+    /** 覚え書きを全部忘れる。連携をやめたとき・別の区画につなぎ直すとき。 */
+    suspend fun forget() = syncStateDao.clear()
+
     /** 消したことを覚える。残さないと、次の同期で別の端末から送り返されて生き返ります。 */
     suspend fun tombstone(kind: String, uid: String) {
         if (uid.isBlank()) return

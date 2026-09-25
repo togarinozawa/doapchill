@@ -69,11 +69,11 @@ import com.dopachiru.desktop.platform.WindowControl
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.util.UUID
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import com.dopachiru.core.sync.DeviceInfo
-import com.dopachiru.core.sync.Enrollment
+import com.dopachiru.core.sync.Joining
+import com.dopachiru.core.sync.SyncDefaults
 import com.dopachiru.core.sync.SyncApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -447,43 +447,86 @@ object DesktopRuntime {
 
         // 立ち上げ直後に1回。PC を開いた瞬間に、寝ているあいだの頼みごとが届く
         scope.launch {
-            enrollIfNeeded()
             val sync = _settings.value.sync
             if (sync.enabled && sync.isConfigured) runCatching { syncNow() }
         }
     }
 
+    // ---- 端末をつなぐ ----------------------------------------------------
+    //
+    // 押すまで何も送らない。前は起動しただけで持ち主のサーバーに繋がっていたが、
+    // 配った相手にそれをやると持ち主の区画に入ってしまう。[Joining]
+
+    /** 名簿に出すこの端末の名前の既定。 */
+    fun defaultDeviceName(): String = _settings.value.deviceName.ifBlank {
+        System.getenv("COMPUTERNAME").orEmpty().ifBlank { "Windows" }
+    }
+
     /**
-     * まだ繋いでいなければ、自分で名簿に載りにいく。
+     * 端末をつなぐ。**呼ぶ側が別スレッドへ。**
      *
-     * 入口の鍵は持ち物として同梱されていて、配っているものから読めます。
-     * 引き換えに、サーバーが配るのは端末ごとに別の合言葉なので、
-     * 名簿に見慣れない名前が出たら1台だけ止められます。[Enrollment]
-     *
-     * 失敗しても黙ります ── 立ち上げのたびに試すので、
-     * 回線が来てから繋がれば十分。**繋がらなくても制限は効いたまま**です。
+     * @param code 空なら新しく始める。ほかの端末で出したコードがあれば、その人の区画に入る。
      */
-    private suspend fun enrollIfNeeded() {
-        val key = EnrollKey.value
+    fun connect(name: String, code: String = "", baseUrl: String = ""): Joining.Result {
         val current = _settings.value.sync
-        if (!Enrollment.needed(current, key)) return
-
-        val name = _settings.value.deviceName.ifBlank {
-            System.getenv("COMPUTERNAME").orEmpty().ifBlank { "Windows" }
-        }
         // deviceId は実績の見出しでもあるので、一度決めたら変えない
-        val deviceId = current.deviceId.ifBlank {
-            "windows-" + UUID.randomUUID().toString().take(8)
+        val deviceId = current.deviceId.ifBlank { Joining.newDeviceId("windows") }
+        val url = baseUrl.trim().ifBlank { current.baseUrl }.ifBlank { SyncDefaults.BASE_URL }
+        val result = if (code.isBlank()) {
+            Joining.startNew(current, deviceId, name, "windows", url)
+        } else {
+            Joining.joinWithCode(current, code, deviceId, name, "windows", url)
         }
+        if (result is Joining.Result.Ok) {
+            // 前の区画から届いたものを次の区画へ持ち込まない
+            forgetSharedData(deviceId)
+            updateSettings { it.copy(sync = result.settings, deviceName = name) }
+        }
+        return result
+    }
 
-        val result = withContext(Dispatchers.IO) {
-            Enrollment.run(current, key, deviceId, name, "windows")
+    /** この端末だけ連携をやめる。サーバーの記録とほかの端末はそのまま。 */
+    fun leave() {
+        forgetSharedData(_settings.value.sync.deviceId)
+        updateSettings {
+            it.copy(sync = it.sync.copy(enabled = false, token = "", since = 0L, lastError = ""))
         }
-        if (result is Enrollment.Result.Ok) {
-            updateSettings {
-                it.copy(sync = result.settings, deviceName = it.deviceName.ifBlank { name })
+    }
+
+    /**
+     * すべての端末の連携をやめ、サーバーの記録を消す。**呼ぶ側が別スレッドへ。**
+     * ほかの端末は次の同期で弾かれて、つながっていない状態に戻る。
+     *
+     * @return 失敗したら理由。成功なら null。
+     */
+    fun deleteEverywhere(): String? {
+        val sync = _settings.value.sync
+        if (!sync.isConfigured) return "まだつないでいません"
+        return when (val out = SyncApi(sync.baseUrl, sync.token).deleteAccount()) {
+            is SyncApi.Outcome.Ok -> {
+                leave()
+                null
             }
+            is SyncApi.Outcome.Rejected -> out.message
+            is SyncApi.Outcome.Unreachable -> out.message
+            is SyncApi.Outcome.Malformed -> out.message
         }
+    }
+
+    /** ほかの端末から届いたものを忘れる。この端末の予約だけは残す(ここで使うものなので)。 */
+    private fun forgetSharedData(myDeviceId: String) {
+        updateRules {
+            it.copy(
+                devices = emptyList(),
+                ruleCatalogs = emptyList(),
+                ruleStates = emptyList(),
+                commands = emptyList(),
+                syncState = emptyMap(),
+            )
+        }
+        val mine = _reservations.value.filter { it.devices.isEmpty() || myDeviceId in it.devices }
+        _reservations.value = mine
+        Stores.reservations.save(mine)
     }
 
     /**
@@ -1036,7 +1079,7 @@ object DesktopRuntime {
      */
     fun newInvite(): InviteResult {
         val sync = _settings.value.sync
-        if (!sync.isConfigured) return InviteResult.Failed("先に住所と合言葉を保存してください")
+        if (!sync.isConfigured) return InviteResult.Failed("まだつないでいません")
         val api = SyncApi(sync.baseUrl, sync.token)
         return when (val out = api.newInvite()) {
             is SyncApi.Outcome.Ok ->
