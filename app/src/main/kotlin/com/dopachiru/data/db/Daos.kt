@@ -84,6 +84,9 @@ interface ChangeRequestDao {
     @Query("SELECT * FROM change_requests WHERE status = 'PENDING' ORDER BY createdAtEpochSec")
     fun observePending(): Flow<List<ChangeRequestEntity>>
 
+    @Query("SELECT * FROM change_requests WHERE createdAtEpochSec >= :sinceEpochSec ORDER BY createdAtEpochSec")
+    suspend fun allSince(sinceEpochSec: Long): List<ChangeRequestEntity>
+
     @Query("SELECT * FROM change_requests WHERE id = :id")
     suspend fun getById(id: Long): ChangeRequestEntity?
 
@@ -105,6 +108,9 @@ interface DeclarationDao {
     @Insert
     suspend fun insert(declaration: DeclarationEntity): Long
 
+    @Query("SELECT * FROM declarations WHERE declaredAtEpochSec >= :sinceEpochSec ORDER BY declaredAtEpochSec")
+    suspend fun allSince(sinceEpochSec: Long): List<DeclarationEntity>
+
     @Query("UPDATE declarations SET consumedSec = :consumedSec WHERE id = :id")
     suspend fun updateConsumed(id: Long, consumedSec: Long)
 
@@ -125,6 +131,9 @@ interface BlockLogDao {
 
     @Insert
     suspend fun insert(log: BlockLogEntity): Long
+
+    @Query("SELECT * FROM block_logs WHERE atEpochSec >= :sinceEpochSec ORDER BY atEpochSec")
+    suspend fun allSince(sinceEpochSec: Long): List<BlockLogEntity>
 
     @Query("UPDATE block_logs SET insteadNote = :note WHERE id = :id")
     suspend fun setNote(id: Long, note: String)
@@ -220,6 +229,9 @@ interface PointEventDao {
 interface DayStatDao {
     @Query("SELECT * FROM day_stats ORDER BY epochDay DESC LIMIT :limit")
     fun observeRecent(limit: Int): Flow<List<DayStatEntity>>
+
+    @Query("SELECT * FROM day_stats WHERE epochDay >= :sinceEpochDay ORDER BY epochDay")
+    suspend fun since(sinceEpochDay: Long): List<DayStatEntity>
 
     @Query("SELECT * FROM day_stats WHERE epochDay = :epochDay")
     suspend fun get(epochDay: Long): DayStatEntity?

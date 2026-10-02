@@ -50,6 +50,7 @@ object UsageReport {
         days: Int,
         deviceName: String,
         zone: ZoneId = ZoneId.systemDefault(),
+        history: HistoryData? = null,
     ): String {
         val nowSec = now.atZone(zone).toEpochSecond()
         val fromSec = nowSec - days * 24L * 3600
@@ -77,7 +78,8 @@ object UsageReport {
         appendHourly(out, clipped, labelOf, zone)
         appendWeekly(out, clipped, labelOf, zone)
         appendRules(out, rules, tags)
-        appendAsk(out)
+        if (history != null) HistoryExport.appendHistory(out, history, labelOf, zone)
+        appendAsk(out, withHistory = history != null && !history.isEmpty)
         return out.toString()
     }
 
@@ -265,7 +267,7 @@ object UsageReport {
     }
 
     /** 渡した相手(Claude)への注文。**人が書き足さなくて済むように**ここに入れておく。 */
-    private fun appendAsk(out: StringBuilder) {
+    private fun appendAsk(out: StringBuilder, withHistory: Boolean) {
         out.appendLine("---")
         out.appendLine()
         out.appendLine("## Claude へ")
@@ -277,6 +279,15 @@ object UsageReport {
         out.appendLine("3. いきなり強くしないこと。**短く始めて足せる**形にする")
         out.appendLine("4. 「なぜこの数字なのか」を1行ずつ添えること")
         out.appendLine()
+        if (withHistory) {
+            out.appendLine("### 押し切りの記録があるので、あわせて")
+            out.appendLine()
+            out.appendLine("- ルールごとに「**強める / そのまま / 弱める**」のどれかを、押し切り率と理由つきで示すこと")
+            out.appendLine("- 強めるときも弱めるときも、**一度に動かす幅は小さく**(例: 制限時間を10〜15分、時間帯を30分)。数週間かけて習慣を変える前提で")
+            out.appendLine("- 弱める提案は、「守れた日」が続いているルールに限ること。押し切りの多いルールを緩めるだけの案は出さない")
+            out.appendLine("- 「ルールを変えた申請」に緩める動きが続いていたら、そのことを指摘すること")
+            out.appendLine()
+        }
         out.appendLine(
             "取り込める形(`.rules`)で出してもらえれば、ルールタブの「取り込む」から入れられます。" +
                 "使える条件と動作の目録は、ルールの書き出しに入っています。",
