@@ -932,6 +932,51 @@ object DopaRuntime {
         return ms.coerceIn(floorMs, ceilMs)
     }
 
+    /** 予約された閉じる前の知らせ1件。[key] は同じ一続きで二度出さないための印。 */
+    data class PlannedReminder(
+        val key: String,
+        val fireAtMillis: Long,
+        val closesAtMillis: Long,
+        val reminder: com.dopachiru.core.model.Reminder,
+    )
+
+    /**
+     * このアプリで、これから出す閉じる前の知らせを、出す時刻の早い順に。
+     *
+     * 閉じる時刻は使い続けた場合の見込みで、使い方が変われば動く。だから予約は**毎回引き直し**、
+     * 出す直前にも引き直して、まだ閉じる見込みのものだけを出す(外れた見込みで「あと3分」と言わない)。
+     * 閉じるのは「閉じる」と「しばらく閉め出す」だけ。ほかの措置に閉じる時刻は無い。
+     */
+    fun plannedReminders(packageName: String): List<PlannedReminder> {
+        if (!initialized) return emptyList()
+        val now = now()
+        val nowMs = System.currentTimeMillis()
+        val seed = sessionSeed()
+        val out = ArrayList<PlannedReminder>()
+        val ups = engine.upcomingCloses(ruleCache, buildContext(packageName, now)) {
+            tagCache[it] ?: emptySet()
+        }
+        for (up in ups) {
+            val id = up.action.actionId
+            if (id != com.dopachiru.core.action.types.BlockAction.id && id != LockoutAction.id) continue
+            val list = com.dopachiru.core.model.Reminders.decode(
+                up.action.params.string(com.dopachiru.core.action.ActionExtras.KEY_REMINDERS),
+            )
+            if (list.isEmpty()) continue
+            val closeMs = nowMs + Duration.between(now, up.at).toMillis()
+            list.forEachIndexed { i, r ->
+                val secs = r.resolveSeconds(seed xor (up.rule.id * 131L + up.clause.id * 17L + i))
+                out += PlannedReminder(
+                    key = "${up.rule.id}|${up.clause.id}|$i|$seed",
+                    fireAtMillis = closeMs - secs * 1000L,
+                    closesAtMillis = closeMs,
+                    reminder = r,
+                )
+            }
+        }
+        return out.sortedBy { it.fireAtMillis }
+    }
+
     // ------------------------------------------------------------------
 
     /**

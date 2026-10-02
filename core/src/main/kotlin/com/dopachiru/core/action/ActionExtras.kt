@@ -25,6 +25,9 @@ object ActionExtras {
 
     const val MAX_PREWARN_SECONDS = 30
 
+    /** 閉じる前の知らせの一覧(JSON 文字列)。形は [com.dopachiru.core.model.Reminders]。 */
+    const val KEY_REMINDERS = "reminders"
+
     fun prewarnSeconds(params: Params): Int =
         params.int(KEY_PREWARN_SECONDS, 0).coerceIn(0, MAX_PREWARN_SECONDS)
 }

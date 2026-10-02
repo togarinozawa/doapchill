@@ -72,4 +72,14 @@ interface ConditionType {
      * 「もう変わらない」場合も遠い未来を返してよい(呼び出し側で上限に丸められる)。
      */
     fun nextChangeAt(p: Params, ctx: EvalContext): LocalDateTime? = null
+
+    /**
+     * いま成立していない条件が、このまま使い続けると**成立する**時刻。
+     * 成立済み・見通せない・時間では成立しない場合は null。
+     *
+     * [nextChangeAt] は「見に来なくてよい最早」で、成立する時刻ではない(下限であって予告ではない)。
+     * 「あと3分で閉じます」と言うには、成立する時刻そのものが要るので別に持つ。
+     * 実装しなければ予告は出ない ── 当てずっぽうで嘘の予告を出すよりよい。
+     */
+    fun closesAt(p: Params, ctx: EvalContext): LocalDateTime? = null
 }

@@ -4,12 +4,21 @@ import com.dopachiru.core.action.ActionRegistry
 import com.dopachiru.core.action.ActionType
 import com.dopachiru.core.condition.ConditionRegistry
 import com.dopachiru.core.model.ActionSpec
+import com.dopachiru.core.model.Clause
 import com.dopachiru.core.model.Clauses
 import com.dopachiru.core.model.ConditionNode
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.param.Params
 import java.time.LocalDateTime
+
+/** これから閉じることになる組と、その時刻。 */
+data class UpcomingClose(
+    val rule: Rule,
+    val clause: Clause,
+    val action: ActionSpec,
+    val at: LocalDateTime,
+)
 
 /** 評価の結果、そのアプリをどう扱うか。 */
 sealed interface Decision {
@@ -209,6 +218,58 @@ class RuleEngine {
 
         is ConditionNode.AllOf -> earliestOf(node.children, ctx)
         is ConditionNode.AnyOf -> earliestOf(node.children, ctx)
+    }
+
+    /**
+     * 条件の木が、このまま使い続けると成立する時刻。信用できないときは null。
+     *
+     * 葉は条件ごとの [ConditionType.closesAt]。AllOf は成立していない子が**全部**成立する時刻
+     * (いちばん遅いもの)、AnyOf は最も早いもの。成立済みの子が途中で外れる可能性は
+     * ここでは見ない ── 出す直前に呼び側が再評価して、外れていたら出さない。
+     */
+    fun closeEta(node: ConditionNode, ctx: EvalContext): LocalDateTime? = when (node) {
+        is ConditionNode.Leaf -> ConditionRegistry[node.typeId]?.closesAt(node.params, ctx)
+        is ConditionNode.Not -> null
+        is ConditionNode.AllOf -> {
+            var latest: LocalDateTime? = null
+            var ok = node.children.isNotEmpty()
+            for (child in node.children) {
+                if (evaluate(child, ctx)) continue
+                val at = closeEta(child, ctx)
+                if (at == null) { ok = false; break }
+                if (latest == null || at.isAfter(latest)) latest = at
+            }
+            if (ok) latest else null
+        }
+        is ConditionNode.AnyOf -> {
+            if (node.children.any { evaluate(it, ctx) }) null
+            else node.children.mapNotNull { closeEta(it, ctx) }.minOrNull()
+        }
+    }
+
+    /**
+     * このアプリについて、これから閉じることになる組と時刻を、早い順に。予告の予約に使う。
+     * 主措置が1つある組だけ(閉じるかどうかの判断は呼び側が措置の種類で行う)。
+     */
+    fun upcomingCloses(
+        rules: List<Rule>,
+        ctx: EvalContext,
+        tagsOf: (String) -> Set<String>,
+    ): List<UpcomingClose> {
+        val tags by lazy { tagsOf(ctx.packageName) }
+        val out = ArrayList<UpcomingClose>()
+        for (rule in rules) {
+            if (!rule.enabled) continue
+            if (!rule.target.matches(ctx.packageName, tags, ctx.url)) continue
+            for (clause in rule.clauses) {
+                val spec = clause.mainAction ?: continue
+                val cctx = ctx.forClause(rule, clause)
+                if (evaluate(clause.condition, cctx)) continue
+                val at = closeEta(clause.condition, cctx) ?: continue
+                out += UpcomingClose(rule, clause, spec, at)
+            }
+        }
+        return out.sortedBy { it.at }
     }
 
     private fun earliestOf(children: List<ConditionNode>, ctx: EvalContext): LocalDateTime? {

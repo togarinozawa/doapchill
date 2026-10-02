@@ -110,6 +110,11 @@ class DopaAccessibilityService : AccessibilityService() {
     /** そっと知らせ(閉じる前の予告)を出し終えた一続き。同じ使用では二度出さない。 */
     private val prewarnDone = HashSet<String>()
 
+    /** 閉じる前の知らせを出し終えたもの。同じ一続きで二度出さない。 */
+    private val remindersDone = HashSet<String>()
+
+    private val reminderTick = Runnable { fireDueReminders() }
+
     /** いま予告を数えている最中の一続き。数え終わるまで本番の閉じるを出さない。 */
     private val prewarnPending = HashSet<String>()
 
@@ -180,10 +185,66 @@ class DopaAccessibilityService : AccessibilityService() {
         val ceiling = if (DopaRuntime.batterySaverMode) CHECK_CEILING_SAVER_MS else CHECK_CEILING_MS
         val delay = DopaRuntime.nextCheckDelayMs(pkg, CHECK_FLOOR_MS, ceiling)
         handler.postDelayed(evaluateOnce, delay)
+        scheduleReminder(pkg)
+    }
+
+    /**
+     * 次の「閉じる前の知らせ」の時刻に起きるよう予約する。
+     *
+     * 判定の間隔(最長で数十秒〜数分)に任せると、「3分前」が2分前に出たりするので、
+     * 知らせだけは出す時刻ちょうどに起こす。
+     */
+    private fun scheduleReminder(pkg: String) {
+        handler.removeCallbacks(reminderTick)
+        val next = DopaRuntime.plannedReminders(pkg)
+            .firstOrNull { it.key !in remindersDone && it.fireAtMillis > System.currentTimeMillis() - REMINDER_GRACE_MS }
+            ?: return
+        val wait = (next.fireAtMillis - System.currentTimeMillis()).coerceAtLeast(0)
+        handler.postDelayed(reminderTick, wait)
+    }
+
+    private fun fireDueReminders() {
+        val pkg = foregroundPackage ?: return
+        if (!DopaRuntime.screenOn || pkg in launcherPackages || pkg in settingsPackages) return
+        val now = System.currentTimeMillis()
+        val due = DopaRuntime.plannedReminders(pkg).filter {
+            it.key !in remindersDone &&
+                it.fireAtMillis <= now + 300 &&
+                it.fireAtMillis > now - REMINDER_GRACE_MS &&
+                it.closesAtMillis > now
+        }
+        // 重なったら、閉じるのにいちばん近いものを1つだけ。1度に何枚も出さない
+        val pick = due.minByOrNull { it.closesAtMillis - it.fireAtMillis }
+        due.forEach { remindersDone.add(it.key) }
+        if (pick != null) showReminder(pkg, pick)
+        scheduleReminder(pkg)
+    }
+
+    private fun showReminder(pkg: String, p: DopaRuntime.PlannedReminder) {
+        val r = p.reminder
+        if (r.kind == com.dopachiru.core.model.ReminderKind.VIBRATE) {
+            vibrate()
+            return
+        }
+        // 他の覆い(閉じる・警告など)が出ているあいだは割り込まない
+        val key = "$pkg|reminder|${p.key}"
+        if (overlay.isShowing && overlay.currentKey?.contains("|reminder|") != true) return
+        overlay.show(key, OverlayMode.PASS_THROUGH) {
+            com.dopachiru.block.ReminderScreen(r.kind, p.closesAtMillis, r.text)
+        }
+        val shownMs = if (r.kind == com.dopachiru.core.model.ReminderKind.WORDS) 10_000L else 7_000L
+        handler.postDelayed({ if (overlay.currentKey == key) overlay.hide() }, shownMs)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun vibrate() {
+        val v = getSystemService(android.os.Vibrator::class.java) ?: return
+        v.vibrate(android.os.VibrationEffect.createWaveform(longArrayOf(0, 200, 120, 200, 120, 400), -1))
     }
 
     private fun onScreenOff() {
         handler.removeCallbacks(evaluateOnce)
+        handler.removeCallbacks(reminderTick)
         overlay.hide()
         DopaRuntime.onScreenOff()
     }
@@ -242,6 +303,8 @@ class DopaAccessibilityService : AccessibilityService() {
         // 予告の途中で離れたら取りやめ。次に開いたらまた予告から
         prewarnPending.clear()
         prewarnDone.clear()
+        remindersDone.clear()
+        handler.removeCallbacks(reminderTick)
         foregroundPackage = pkg
         // 前の画面の目印・覗き猶予を持ち越さない。別アプリをショート扱いして塞ぐ事故を防ぐ
         DopaRuntime.currentScreenSignals = emptySet()
@@ -339,7 +402,9 @@ class DopaAccessibilityService : AccessibilityService() {
         }
 
         when (decision) {
-            is Decision.Allow -> if (overlay.currentKey?.startsWith("$pkg|") == true) overlay.hide()
+            is Decision.Allow -> if (overlay.currentKey?.startsWith("$pkg|") == true &&
+                overlay.currentKey?.startsWith("$pkg|reminder|") != true
+            ) overlay.hide()
             is Decision.Act -> present(pkg, decision)
             is Decision.Locked -> Unit // 上で処理済み
         }
@@ -1005,6 +1070,9 @@ class DopaAccessibilityService : AccessibilityService() {
         }
 
         /** これより短い間隔では見に来ない。 */
+        /** 出す時刻を少し過ぎて起きても、この範囲なら出す(判定と重なって遅れた分)。 */
+        private const val REMINDER_GRACE_MS = 20_000L
+
         private const val CHECK_FLOOR_MS = 3_000L
 
         /** 条件が「いつ変わるか分からない」と答えたときの間隔。 */

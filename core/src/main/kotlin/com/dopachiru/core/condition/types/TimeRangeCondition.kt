@@ -64,6 +64,15 @@ object TimeRangeCondition : ConditionType {
         }
     }
 
+    override fun closesAt(p: Params, ctx: EvalContext): LocalDateTime? {
+        if (evaluate(p, ctx)) return null
+        val start = p.int(KEY_START)
+        val nowMinute = ctx.now.hour * 60 + ctx.now.minute
+        val midnight = ctx.now.toLocalDate().atStartOfDay()
+        return if (start > nowMinute) midnight.plusMinutes(start.toLong())
+        else midnight.plusDays(1).plusMinutes(start.toLong())
+    }
+
     /** 次に境界をまたぐ時刻。それまでは成否が変わらない。 */
     override fun nextChangeAt(p: Params, ctx: EvalContext): LocalDateTime {
         val nowMinute = ctx.now.hour * 60 + ctx.now.minute

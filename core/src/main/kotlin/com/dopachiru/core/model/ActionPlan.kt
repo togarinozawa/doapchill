@@ -47,6 +47,9 @@ data class ActionPlan(
     /** 閉じる前にそっと知らせる秒数。0 = 出さない。CLOSE のときだけ効く。 */
     val prewarnSeconds: Int = 0,
 
+    /** 閉じる前の知らせ(複数・ランダム可)。CLOSE のときだけ効く。 */
+    val reminders: List<Reminder> = emptyList(),
+
     /** ADVANCED のときに使う措置の id(しばらく閉め出す・音だけ・目的を書く…)。 */
     val advancedActionId: String = RadioAction.id,
 ) {
@@ -75,6 +78,7 @@ data class ActionPlan(
             BlockAction.id -> base.with(
                 BlockAction.KEY_ALLOW_OVERRIDE to soft,
                 ActionExtras.KEY_PREWARN_SECONDS to prewarnSeconds,
+                ActionExtras.KEY_REMINDERS to Reminders.encode(reminders),
             )
             else -> base
         }
@@ -88,6 +92,7 @@ data class ActionPlan(
                 main = MainAction.CLOSE,
                 soft = params.bool(BlockAction.KEY_ALLOW_OVERRIDE, true),
                 prewarnSeconds = ActionExtras.prewarnSeconds(params),
+                reminders = Reminders.decode(params.string(ActionExtras.KEY_REMINDERS)),
             )
 
             DelayAction.id -> ActionPlan(main = MainAction.DELAY)

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -53,6 +54,9 @@ import com.dopachiru.core.action.ActionType
 import com.dopachiru.core.action.types.BlockAction
 import com.dopachiru.core.action.types.DelayAction
 import com.dopachiru.core.action.types.LockoutAction
+import com.dopachiru.core.model.Reminders
+import com.dopachiru.core.model.ReminderKind
+import com.dopachiru.core.model.Reminder
 import com.dopachiru.core.action.types.WarnAction
 import com.dopachiru.core.model.ActionPlan
 import com.dopachiru.core.model.MainAction
@@ -1105,6 +1109,10 @@ private fun ActionStep(
             )
         }
 
+        ReminderEditor(
+            reminders = plan.reminders,
+            onChange = { viewModel.setPlan(plan.copy(reminders = it)) },
+        )
     }
 
     // --- くわしい動作 ---
@@ -1406,4 +1414,99 @@ fun AppPickerDialog(
         text = { AppPickerList(selected = selected, onToggle = onToggle) },
         confirmButton = { TextButton(onClick = onDismiss) { Text("閉じる") } },
     )
+}
+
+/**
+ * 閉じる前の知らせの一覧。何分前に・いつ(固定かランダムか)・どんな形で、を1件ずつ決める。
+ *
+ * 知らせは閉じる時刻を動かさない。「あと1回」を頼む窓口にすると、そこが抜け道になるため。
+ */
+@Composable
+private fun ReminderEditor(
+    reminders: List<Reminder>,
+    onChange: (List<Reminder>) -> Unit,
+) {
+    Spacer(Modifier.height(12.dp))
+    Text("閉じる前の知らせ", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+    Text(
+        "「閉じる」までの時間が見通せるとき(時間帯・持ち時間・宣言)に、閉じる前に何度でも出せます。" +
+            "下のアプリは操作できます。閉じる時刻は変わりません。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    reminders.forEachIndexed { index, r ->
+        fun update(next: Reminder) = onChange(reminders.toMutableList().also { it[index] = next })
+        Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+            Column(Modifier.padding(12.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ReminderKind.entries.forEach { kind ->
+                        FilterChip(
+                            selected = r.kind == kind,
+                            onClick = { update(r.copy(kind = kind)) },
+                            label = { Text(kind.label) },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("閉じる", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.width(8.dp))
+                    AmountStepper(
+                        value = r.beforeSeconds / 60,
+                        min = 1,
+                        max = Reminders.MAX_SECONDS / 60,
+                        step = 1,
+                        suffix = "分前",
+                        onChange = { m ->
+                            val before = m * 60
+                            update(
+                                r.copy(
+                                    beforeSeconds = before,
+                                    randomUntilSeconds = if (r.isRandom) maxOf(r.randomUntilSeconds, before + 60) else 0,
+                                ),
+                            )
+                        },
+                    )
+                }
+                CheckRow(
+                    checked = r.isRandom,
+                    title = "時刻をばらつかせる",
+                    onToggle = { on ->
+                        update(r.copy(randomUntilSeconds = if (on) minOf(r.beforeSeconds + 180, Reminders.MAX_SECONDS) else 0))
+                    },
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("〜", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.width(8.dp))
+                        AmountStepper(
+                            value = r.randomUntilSeconds / 60,
+                            min = r.beforeSeconds / 60 + 1,
+                            max = Reminders.MAX_SECONDS / 60,
+                            step = 1,
+                            suffix = "分前のどこか",
+                            onChange = { update(r.copy(randomUntilSeconds = it * 60)) },
+                        )
+                    }
+                }
+                if (r.kind == ReminderKind.WORDS) {
+                    OutlinedTextField(
+                        value = r.text,
+                        onValueChange = { update(r.copy(text = it.take(Reminders.MAX_TEXT))) },
+                        label = { Text("出す文(例: あと1試合で終わる)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    )
+                }
+                TextButton(onClick = { onChange(reminders.filterIndexed { i, _ -> i != index }) }) {
+                    Text("この知らせを消す")
+                }
+            }
+        }
+    }
+    if (reminders.size < Reminders.MAX_COUNT) {
+        OutlinedButton(
+            onClick = { onChange(reminders + Reminder(beforeSeconds = 5 * 60)) },
+            modifier = Modifier.padding(top = 8.dp),
+        ) { Text("知らせを足す") }
+    }
 }

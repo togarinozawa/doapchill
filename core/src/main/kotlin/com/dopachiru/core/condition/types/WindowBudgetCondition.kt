@@ -80,6 +80,16 @@ object WindowBudgetCondition : ConditionType {
     override fun summarize(p: Params): String =
         "使い始めて${p.int(KEY_WINDOW_MINUTES, 60)}分のうち${p.int(KEY_BUDGET_MINUTES, 15)}分を使い切った"
 
+    override fun closesAt(p: Params, ctx: EvalContext): LocalDateTime? {
+        if (evaluate(p, ctx)) return null
+        val budget = p.int(KEY_BUDGET_MINUTES, 15)
+        val usage = ctx.windowUsageOf(ctx.currentRuleId, p.int(KEY_WINDOW_MINUTES, 60))
+        if (!usage.open) return ctx.now.plusMinutes(budget.toLong())
+        val leftSeconds = budget * 60L - usage.usedSeconds
+        if (usage.remainingSeconds < leftSeconds) return null
+        return ctx.now.plusSeconds(leftSeconds.coerceAtLeast(1))
+    }
+
     /**
      * 窓が張られていなければ、持ち時間を使い切るまで最短でも持ち時間ぶんかかる。
      * 張られていれば、使い切る時刻か窓が明ける時刻の早いほう。

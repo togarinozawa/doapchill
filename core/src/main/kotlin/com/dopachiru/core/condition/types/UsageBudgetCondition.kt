@@ -150,6 +150,16 @@ object UsageBudgetCondition : ConditionType {
         else -> minutes.toString() + "分"
     }
 
+    override fun closesAt(p: Params, ctx: EvalContext): LocalDateTime? {
+        val budget = p.int(KEY_BUDGET_MINUTES, 120)
+        if (budget <= 0 || evaluate(p, ctx)) return null
+        val usage = ctx.budgetUsageOf(queryOf(p, ctx))
+        val leftSeconds = budget * 60L - usage.usedSeconds
+        // 使い切る前に窓が明けるなら、このまま使っても閉じない
+        if (usage.open && usage.remainingSeconds < leftSeconds) return null
+        return ctx.now.plusSeconds(leftSeconds.coerceAtLeast(1))
+    }
+
     /**
      * 使い切るまでの最短か、数え直しの時刻の早いほう。
      *
