@@ -323,6 +323,19 @@ class DopaAccessibilityService : AccessibilityService() {
         }
         evaluate(pkg)
         scheduleNextEvaluation()
+        maybeShowMemo(pkg)
+    }
+
+    /**
+     * 閉じられずに開けたとき、前に書いた「次に開いたらやること」を見せる。
+     * 閉じる画面が出ているときは、その画面が前回のメモを出すので、ここでは何もしない。
+     */
+    private fun maybeShowMemo(pkg: String) {
+        if (overlay.isShowing) return
+        val memo = DopaRuntime.takeNextMemo(pkg) ?: return
+        val key = "$pkg|memo|"
+        overlay.show(key, OverlayMode.PASS_THROUGH) { com.dopachiru.block.MemoNoticeScreen(memo) }
+        handler.postDelayed({ if (overlay.currentKey == key) overlay.hide() }, 12_000L)
     }
 
     /**
@@ -403,7 +416,8 @@ class DopaAccessibilityService : AccessibilityService() {
 
         when (decision) {
             is Decision.Allow -> if (overlay.currentKey?.startsWith("$pkg|") == true &&
-                overlay.currentKey?.startsWith("$pkg|reminder|") != true
+                overlay.currentKey?.startsWith("$pkg|reminder|") != true &&
+                overlay.currentKey?.startsWith("$pkg|memo|") != true
             ) overlay.hide()
             is Decision.Act -> present(pkg, decision)
             is Decision.Locked -> Unit // 上で処理済み
@@ -845,6 +859,8 @@ class DopaAccessibilityService : AccessibilityService() {
                 overrideCost = cost,
                 balance = balance,
                 penaltyNote = penaltyNote(rule),
+                previousMemo = DopaRuntime.peekNextMemo(pkg),
+                onMemo = { DopaRuntime.saveNextMemo(pkg, it) },
                 releaseEffort = rule.actionParams.string(
                     BlockAction.KEY_RELEASE_EFFORT,
                     BlockAction.Effort.TAP,

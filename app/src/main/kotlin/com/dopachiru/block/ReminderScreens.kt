@@ -85,6 +85,12 @@ fun ReminderScreen(kind: ReminderKind, closesAtMillis: Long, words: String) = Do
     }
 }
 
+/** 前回の「次に開いたらやること」を、開いた直後にそっと見せる。下は操作できる。 */
+@Composable
+fun MemoNoticeScreen(memo: String) = DopaBlockTheme {
+    Band("前回のメモ: $memo", 0xCC_1E1E2E, big = true)
+}
+
 @Composable
 private fun Band(text: String, argb: Long, big: Boolean = false) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {

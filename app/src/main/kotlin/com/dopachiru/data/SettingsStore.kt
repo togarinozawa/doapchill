@@ -46,6 +46,7 @@ class SettingsStore(private val context: Context) {
 
     private object Keys {
         val setupDone = booleanPreferencesKey("setup_done")
+        val nextMemosJson = stringPreferencesKey("next_memos_json")
         val passwordHash = stringPreferencesKey("password_hash")
         val passwordSalt = stringPreferencesKey("password_salt")
         val gatesJson = stringPreferencesKey("gates_json")
@@ -316,6 +317,25 @@ class SettingsStore(private val context: Context) {
                 raw,
             )
         }.getOrDefault(emptyMap())
+    }
+
+    /** 覆う画面で書いた「次に開いたらやること」。アプリ(パッケージ)ごとに1件。端末の外へは出さない。 */
+    val nextMemos: Flow<Map<String, String>> = context.dataStore.data.map { prefs ->
+        val raw = prefs[Keys.nextMemosJson] ?: return@map emptyMap()
+        runCatching {
+            DopaCore.json.decodeFromString(
+                MapSerializer(String.serializer(), String.serializer()),
+                raw,
+            )
+        }.getOrDefault(emptyMap())
+    }
+
+    suspend fun setNextMemos(memos: Map<String, String>) {
+        val encoded = DopaCore.json.encodeToString(
+            MapSerializer(String.serializer(), String.serializer()),
+            memos,
+        )
+        context.dataStore.edit { it[Keys.nextMemosJson] = encoded }
     }
 
     suspend fun setFocusScheduleRuns(runs: Map<String, String>) {

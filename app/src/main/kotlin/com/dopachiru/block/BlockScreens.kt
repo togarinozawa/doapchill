@@ -78,9 +78,15 @@ fun BlockScreen(
     releaseEffort: String = BlockAction.Effort.TAP,
     rotationNote: String = "",
     onAbortStudy: (() -> Unit)? = null,
+    previousMemo: String = "",
+    onMemo: ((String) -> Unit)? = null,
     onDismiss: () -> Unit,
     onOverride: () -> Unit,
 ) = DopaBlockTheme {
+    // 閉じる・押し切るのどちらの道でも、書いたメモは残す
+    var memo by remember { mutableStateOf("") }
+    val dismissWithMemo = { onMemo?.invoke(memo); onDismiss() }
+    val overrideWithMemo = { onMemo?.invoke(memo); onOverride() }
     val canAfford = overrideCost <= 0 || balance >= overrideCost
     var showEffortGate by remember(reflection) { mutableStateOf(false) }
     var remaining by remember { mutableIntStateOf(minSeconds) }
@@ -129,7 +135,28 @@ fun BlockScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            Spacer(Modifier.height(56.dp))
+            if (previousMemo.isNotBlank()) {
+                Spacer(Modifier.height(20.dp))
+                Text(
+                    text = "前回のメモ: $previousMemo",
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            if (onMemo != null) {
+                Spacer(Modifier.height(20.dp))
+                OutlinedTextField(
+                    value = memo,
+                    onValueChange = { memo = it.take(120) },
+                    label = { Text("次に開いたらやること(任意)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            Spacer(Modifier.height(36.dp))
 
             // 「やめる」は**待たせない**。
             //
@@ -138,7 +165,7 @@ fun BlockScreen(
             // それは**逃げる側**に必要な摩擦であって、素直にやめる側にまでかけると
             // ただの罰になる。同意している人を待たせても、抑止は1ミリも増えない。
             Button(
-                onClick = onDismiss,
+                onClick = dismissWithMemo,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
             ) {
@@ -162,7 +189,7 @@ fun BlockScreen(
                             // 1タップで通れる警告は92%が無視される。手を動かさせる
                             onClick = {
                                 if (releaseEffort == BlockAction.Effort.TAP) {
-                                    onOverride()
+                                    overrideWithMemo()
                                 } else {
                                     showEffortGate = true
                                 }
@@ -257,7 +284,7 @@ fun BlockScreen(
         ReleaseEffortGate(
             effort = releaseEffort,
             onCancel = { showEffortGate = false },
-            onPass = { showEffortGate = false; onOverride() },
+            onPass = { showEffortGate = false; overrideWithMemo() },
         )
     }
 }

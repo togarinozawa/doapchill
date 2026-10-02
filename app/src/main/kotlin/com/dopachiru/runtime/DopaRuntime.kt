@@ -188,6 +188,7 @@ object DopaRuntime {
         protectedApps = ProtectedApps(app)
         db = DopaDatabase.get(app)
         settings = SettingsStore(app)
+        scope.launch { nextMemos.putAll(settings.nextMemos.first()) }
         rules = RuleRepository(db.ruleDao(), db.appTagDao())
         usage = UsageTracker(db.usageDao(), scope)
         declarations = DeclarationManager(db.declarationDao(), scope)
@@ -930,6 +931,34 @@ object DopaRuntime {
 
         val ms = listOfNotNull(lockLiftsInMs, ruleChangeInMs).minOrNull() ?: return ceilMs
         return ms.coerceIn(floorMs, ceilMs)
+    }
+
+    /**
+     * 覆う画面で書いた「次に開いたらやること」。起動時に読み、書き換えのたびに保存する。
+     * 画面を出す瞬間に同期で引けるよう、手元に持つ(DataStore は suspend)。
+     */
+    private const val MAX_MEMO_LENGTH = 120
+    private val nextMemos = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    fun peekNextMemo(packageName: String): String = nextMemos[packageName].orEmpty()
+
+    fun saveNextMemo(packageName: String, text: String) {
+        val t = text.trim().take(MAX_MEMO_LENGTH)
+        if (t.isBlank()) return
+        nextMemos[packageName] = t
+        persistNextMemos()
+    }
+
+    /** 見せたら消す。何度も同じメモを見せない。 */
+    fun takeNextMemo(packageName: String): String? {
+        val t = nextMemos.remove(packageName) ?: return null
+        persistNextMemos()
+        return t
+    }
+
+    private fun persistNextMemos() {
+        val snapshot = HashMap(nextMemos)
+        scope.launch { settings.setNextMemos(snapshot) }
     }
 
     /** 予約された閉じる前の知らせ1件。[key] は同じ一続きで二度出さないための印。 */
