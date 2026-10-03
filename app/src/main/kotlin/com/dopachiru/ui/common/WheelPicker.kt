@@ -21,6 +21,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,6 +56,11 @@ fun WheelPicker(
     // 上下に half 個ぶんの余白を入れてあるので、先頭に見えている項目が中央に来る
     val centeredIndex by remember { derivedStateOf { listState.firstVisibleItemIndex } }
 
+    // 集める側は最初の描画で1回だけ立ち上がるので、値と受け口はいつも最新を読む。
+    // 直に掴むと最初の値のままになり、時を回すと分が、分を回すと時が既定に戻っていた
+    val currentValue by rememberUpdatedState(value)
+    val currentOnChange by rememberUpdatedState(onValueChange)
+
     // 指が離れて落ち着いたところで確定させる
     LaunchedEffect(listState, values) {
         snapshotFlow { listState.isScrollInProgress }
@@ -62,7 +68,7 @@ fun WheelPicker(
             .collect { scrolling ->
                 if (!scrolling) {
                     values.getOrNull(listState.firstVisibleItemIndex)?.let {
-                        if (it != value) onValueChange(it)
+                        if (it != currentValue) currentOnChange(it)
                     }
                 }
             }
