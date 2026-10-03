@@ -2103,6 +2103,14 @@ private fun ConnectedSection(
             },
         )
     }
+    // コードを出しているあいだは、相手が入ったのを拾えるよう短い刻みで同期する
+    androidx.compose.runtime.LaunchedEffect(invite) {
+        if (invite.isBlank()) return@LaunchedEffect
+        repeat(18) {
+            kotlinx.coroutines.delay(10_000)
+            DopaRuntime.syncForRoster()
+        }
+    }
     Spacer(Modifier.height(4.dp))
     OutlinedButton(
         onClick = {

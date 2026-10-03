@@ -62,6 +62,14 @@ fun DeviceScreen() {
 
     val others = roster.filter { it.deviceId != me }
 
+    androidx.compose.runtime.LaunchedEffect(me) {
+        if (me.isBlank()) return@LaunchedEffect
+        while (true) {
+            DopaRuntime.syncForRoster()
+            kotlinx.coroutines.delay(10_000)
+        }
+    }
+
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -82,8 +90,8 @@ fun DeviceScreen() {
         if (others.isEmpty()) {
             item {
                 Text(
-                    "ほかの端末がまだ届いていません。向こうでも同期を設定して、" +
-                        "一度つないでください。",
+                    "ほかの端末がまだ届いていません。向こうでコードを入れたあと、" +
+                        "この画面を開いたままにすると10秒おきに探します。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

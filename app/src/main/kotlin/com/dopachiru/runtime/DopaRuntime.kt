@@ -290,7 +290,9 @@ object DopaRuntime {
             forgetSharedData(deviceId)
             settings.setDeviceName(name)
             settings.setSyncSettings(result.settings)
-            lastSyncAtMs = 0L
+            // 5分の刻みを待たせない。自分の名札を置かないと、向こうの名簿に出ない
+            lastSyncAtMs = System.currentTimeMillis()
+            scope.launch { runCatching { sync.syncNow() } }
         }
         result
     }
@@ -1117,6 +1119,15 @@ object DopaRuntime {
      * 画面が消えているあいだは [tick] 自体が呼ばれないので、ここも止まります。
      * スマホは主に**頼む側**なので、受け取りが遅れても困りません。
      */
+    /**
+     * 端末の画面を開いているあいだ・コードを出しているあいだだけ使う、短い刻みの同期。
+     * 名簿は「お互いが一度ずつ同期する」まで埋まらず、5分刻みでは繋がったのか分からない。
+     */
+    suspend fun syncForRoster() {
+        lastSyncAtMs = System.currentTimeMillis()
+        runCatching { sync.syncNow() }
+    }
+
     private fun syncIfDue() {
         val now = System.currentTimeMillis()
         if (now - lastSyncAtMs < SYNC_EVERY_MS) return
