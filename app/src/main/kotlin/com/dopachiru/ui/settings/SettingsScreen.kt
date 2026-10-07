@@ -24,6 +24,8 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Stars
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -208,6 +210,8 @@ enum class SettingsPage(
 ) {
     Required("required", "動作に必要な設定", "ユーザー補助と電池の除外。ここが欠けると何も検知できない", Icons.Filled.Accessibility),
     Focus("focus", "集中モード", "その場で手を止める。ホーム画面に置くボタン", Icons.Filled.Timer),
+    Shorts("shorts", "ショートを戻す", "YouTube・Instagram などのショートを開いたら一つ前へ", Icons.Filled.Block),
+    Overuse("overuse", "使い過ぎの見張り", "ルールが無くても、いつもより長いときに知らせる", Icons.Filled.Visibility),
     Guard("guard", "変更をしにくくする", "緩める変更にかける関門、パスワード、引き止め", Icons.Filled.Lock),
     Screen("screen", "待ち受け・ホーム画面", "ロックを解除した直後に出す問いかけ", Icons.Filled.Home),
     Sync("sync", "端末の連携", "予約や連動をほかの端末とつなぐ", Icons.Filled.Sync),
@@ -330,6 +334,8 @@ fun SettingsPageScreen(
                         Spacer(Modifier.height(16.dp))
                         FocusScheduleCard()
                     }
+                    SettingsPage.Shorts -> ShortsGuardSection()
+                    SettingsPage.Overuse -> OveruseSection()
                     SettingsPage.Guard -> GuardSection(viewModel)
                     SettingsPage.Screen -> ScreenSection(viewModel)
                     SettingsPage.Sync -> SyncCard()

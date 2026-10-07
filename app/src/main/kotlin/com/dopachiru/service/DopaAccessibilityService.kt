@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.os.PowerManager
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
@@ -43,7 +44,11 @@ import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.model.ScreenSignals
 import com.dopachiru.core.points.PointReason
+import com.dopachiru.block.EdgeNoticeScreen
 import com.dopachiru.block.FocusControls
+import com.dopachiru.block.OveruseScreen
+import com.dopachiru.core.model.OveruseAlert
+import com.dopachiru.core.model.OveruseReaction
 import com.dopachiru.block.PeekControls
 import com.dopachiru.core.model.PeekCheck
 import com.dopachiru.core.model.Focus
@@ -117,6 +122,27 @@ class DopaAccessibilityService : AccessibilityService() {
 
     private val reminderTick = Runnable { fireDueReminders() }
 
+    /** 中身の変化を最後に見た時刻。変化は秒に何十回も来るので間引く。 */
+    private var lastContentCheckMs = 0L
+    private var contentCheckPending = false
+    private val contentCheck = Runnable {
+        contentCheckPending = false
+        lastContentCheckMs = SystemClock.uptimeMillis()
+        foregroundPackage?.let { onScreenContent(it) }
+    }
+
+    /** ショートを戻した時刻と、続けて戻した回数。戻しても抜けないときにホームへ出すため。 */
+    private var lastKickMs = 0L
+    private var kicksInRow = 0
+
+    /** 使い過ぎを1分ごとに見る。ルールが無くても回す ── ルールの無いアプリが相手なので。 */
+    private val overuseTick = object : Runnable {
+        override fun run() {
+            checkOveruse()
+            handler.postDelayed(this, OVERUSE_TICK_MS)
+        }
+    }
+
     /** いま予告を数えている最中の一続き。数え終わるまで本番の閉じるを出さない。 */
     private val prewarnPending = HashSet<String>()
 
@@ -169,6 +195,7 @@ class DopaAccessibilityService : AccessibilityService() {
             },
         )
         runCatching { MonitorService.start(this) }
+        handler.postDelayed(overuseTick, OVERUSE_TICK_MS)
     }
 
     /**
@@ -260,11 +287,133 @@ class DopaAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        event ?: return
         val pkg = event.packageName?.toString() ?: return
         if (pkg == packageName) return
         if (pkg in IGNORED_PACKAGES || pkg in imePackages) return
-        handleForeground(pkg)
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> handleForeground(pkg)
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> onContentChanged(pkg)
+        }
+    }
+
+    /**
+     * アプリの中で画面が変わった。タブの切り替えは窓の切り替わりにならないので、ここで拾う。
+     *
+     * 見に行くのは、画面の目印を持つアプリか、目印を調べている最中だけ。
+     * ほかのアプリの中身の変化は数が多いうえに、見ても何も変わらない。
+     */
+    private fun onContentChanged(pkg: String) {
+        if (pkg != foregroundPackage) return
+        val capturing = DopaRuntime.markerCapture.value?.running == true
+        if (!capturing && !ScreenMarkers.hasMarkers(pkg, DopaRuntime.shortsGuard)) return
+        if (contentCheckPending) return
+        val wait = (lastContentCheckMs + CONTENT_CHECK_GAP_MS - SystemClock.uptimeMillis()).coerceAtLeast(0L)
+        contentCheckPending = true
+        handler.postDelayed(contentCheck, wait)
+    }
+
+    private fun onScreenContent(pkg: String) {
+        if (DopaRuntime.markerCapture.value?.running == true) captureMarkers(pkg)
+        if (!ScreenMarkers.hasMarkers(pkg, DopaRuntime.shortsGuard)) return
+        val signals = detectScreenSignals(pkg)
+        if (kickShortsIfNeeded(pkg, signals)) return
+        // 画面ルールは、目印が変わったときだけ見直す。同じ画面で何度も判定しない
+        if (signals != DopaRuntime.currentScreenSignals && DopaRuntime.isTargeted(pkg)) evaluate(pkg)
+    }
+
+    /**
+     * ショートなら戻す。戻したら true。
+     *
+     * 塞がずに**戻すだけ**にしてあるのは、YouTube や Instagram のほかの画面は
+     * 普通に使いたいため。ショートの入口を踏んだ瞬間に一つ前へ返す。
+     * 戻しても抜けない(2回続けて戻した)ときはホームへ出す ── 戻るを
+     * 何度押しても同じ画面、という作りのアプリで押し続けないように。
+     */
+    private fun kickShortsIfNeeded(pkg: String, signals: Set<String>): Boolean {
+        val target = ShortsTarget.forPackage(pkg) ?: return false
+        val guard = DopaRuntime.shortsGuard
+        if (!guard.isOn(target)) return false
+        if (!target.wholeApp && target.signal !in signals) return false
+
+        val now = SystemClock.uptimeMillis()
+        if (now - lastKickMs < KICK_GAP_MS) return true
+        kicksInRow = if (now - lastKickMs < KICK_STREAK_MS) kicksInRow + 1 else 1
+        lastKickMs = now
+
+        val home = target.wholeApp || kicksInRow >= 3
+        performGlobalAction(if (home) GLOBAL_ACTION_HOME else GLOBAL_ACTION_BACK)
+        showEdgeNotice(pkg, "shorts", "${target.label}は閉じました", EDGE_SHORT_MS)
+        DopaRuntime.scope.launch {
+            DopaRuntime.stats.recordBlockShown(pkg, SHORTS_RULE_ID, target.label, "shorts_back")
+        }
+        return true
+    }
+
+    /** 画面の上に薄く出して、しばらくしたら消す。下のアプリはそのまま触れる。 */
+    private fun showEdgeNotice(pkg: String, kind: String, text: String, durationMs: Long) {
+        val key = "$pkg|$kind|${SystemClock.uptimeMillis()}"
+        overlay.show(key, OverlayMode.PASS_THROUGH) { EdgeNoticeScreen(text) }
+        handler.postDelayed({ if (overlay.currentKey == key) overlay.hide() }, durationMs)
+    }
+
+    /** いま見えている画面の resource-id を拾う。目印を調べる道具から使う。 */
+    private fun captureMarkers(pkg: String) {
+        if (pkg in launcherPackages) return
+        val root = runCatching { rootInActiveWindow }.getOrNull() ?: return
+        val ids = HashSet<String>()
+        val stack = ArrayDeque<android.view.accessibility.AccessibilityNodeInfo>()
+        stack.addLast(root)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < CAPTURE_NODE_LIMIT) {
+            val node = stack.removeLast()
+            visited++
+            node.viewIdResourceName?.let { ids.add(it) }
+            for (i in 0 until node.childCount) {
+                runCatching { node.getChild(i) }.getOrNull()?.let { stack.addLast(it) }
+            }
+        }
+        DopaRuntime.addCapturedMarkers(pkg, ids)
+    }
+
+    // ------------------------------------------------------------------
+    // 使い過ぎ
+
+    private fun checkOveruse() {
+        val pkg = foregroundPackage ?: return
+        if (!DopaRuntime.screenOn) return
+        if (pkg in launcherPackages || pkg in settingsPackages) return
+        // ほかの画面が覆っているあいだは割り込まない。重ねても読めない
+        val key = overlay.currentKey
+        if (overlay.isShowing && key != null && key.startsWith("$pkg|") &&
+            !key.contains("|reminder|") && !key.contains("|memo|")
+        ) return
+
+        val alert = DopaRuntime.checkOveruse(pkg) ?: return
+        val reactions = DopaRuntime.overuseSettings.reactions
+        val label = appLabel(pkg)
+        val message = alert.message(label)
+        if (OveruseReaction.NOTIFY in reactions) OveruseNotifier.notify(this, pkg, label, message)
+        when {
+            OveruseReaction.INTERRUPT in reactions -> showOveruseInterrupt(pkg, label, message, alert)
+            OveruseReaction.EDGE in reactions -> showEdgeNotice(pkg, "overuse", message, EDGE_OVERUSE_MS)
+        }
+    }
+
+    private fun showOveruseInterrupt(pkg: String, label: String, message: String, alert: OveruseAlert) {
+        val key = "$pkg|overuse|${alert.currentMinutes}"
+        overlay.show(key, OverlayMode.BLOCKING) {
+            OveruseScreen(
+                appLabel = label,
+                message = message,
+                waitSeconds = DopaRuntime.overuseSettings.interruptSeconds,
+                onStop = {
+                    overlay.hide()
+                    performGlobalAction(GLOBAL_ACTION_HOME)
+                },
+                onContinue = { overlay.hide() },
+            )
+        }
     }
 
     override fun onInterrupt() = Unit
@@ -272,6 +421,8 @@ class DopaAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         live = null
         handler.removeCallbacks(evaluateOnce)
+        handler.removeCallbacks(overuseTick)
+        handler.removeCallbacks(contentCheck)
         pendingIgnoreChecks.values.forEach { handler.removeCallbacks(it) }
         pendingIgnoreChecks.clear()
         runCatching { unregisterReceiver(systemReceiver) }
@@ -390,7 +541,9 @@ class DopaAccessibilityService : AccessibilityService() {
 
         // いまの画面の目印を、判定の直前に見ておく。「ショートだけ」のような
         // 画面ルールが読む。ノードツリーは軽く舐めるだけ(下の detectScreenSignals)
-        DopaRuntime.currentScreenSignals = detectScreenSignals(pkg)
+        val signals = detectScreenSignals(pkg)
+        if (kickShortsIfNeeded(pkg, signals)) return
+        DopaRuntime.currentScreenSignals = signals
 
         val decision = DopaRuntime.decide(pkg)
 
@@ -417,9 +570,9 @@ class DopaAccessibilityService : AccessibilityService() {
         }
 
         when (decision) {
+            // 見張り(知らせ・メモ・ショート・使い過ぎ)が出したものは、ルールの判定では下げない
             is Decision.Allow -> if (overlay.currentKey?.startsWith("$pkg|") == true &&
-                overlay.currentKey?.startsWith("$pkg|reminder|") != true &&
-                overlay.currentKey?.startsWith("$pkg|memo|") != true
+                WATCHER_KINDS.none { overlay.currentKey?.startsWith("$pkg|$it|") == true }
             ) overlay.hide()
             is Decision.Act -> present(pkg, decision)
             is Decision.Locked -> Unit // 上で処理済み
@@ -671,12 +824,14 @@ class DopaAccessibilityService : AccessibilityService() {
      * 軽く舐めるだけに留める ── 判定のたびに深く走査すると電池を食う。
      */
     private fun detectScreenSignals(pkg: String): Set<String> {
-        val markers = SCREEN_MARKERS[pkg] ?: return emptySet()
+        val markers = ScreenMarkers.markersFor(pkg, DopaRuntime.shortsGuard)
+        if (markers.isEmpty()) return emptySet()
         val root = runCatching { rootInActiveWindow }.getOrNull() ?: return emptySet()
         val signals = HashSet<String>()
-        for ((viewIdSubstring, signal) in markers) {
+        for ((viewId, signal) in markers) {
+            if (signal in signals) continue
             val hit = runCatching {
-                root.findAccessibilityNodeInfosByViewId("$pkg:id/$viewIdSubstring").isNotEmpty()
+                root.findAccessibilityNodeInfosByViewId(viewId).isNotEmpty()
             }.getOrDefault(false)
             if (hit) signals.add(signal)
         }
@@ -1134,6 +1289,28 @@ class DopaAccessibilityService : AccessibilityService() {
 
         private const val OVERRIDE_GRACE_MS = 5 * 60_000L
 
+        /** 中身の変化を見に行く最短の間隔。これより細かく見ても、人の目には同じ。 */
+        private const val CONTENT_CHECK_GAP_MS = 400L
+
+        /** 戻したあと、これだけは戻し直さない。戻る途中の画面にまた反応しないため。 */
+        private const val KICK_GAP_MS = 800L
+
+        /** この間に続けて戻したら「戻しても抜けない」とみなす。 */
+        private const val KICK_STREAK_MS = 4_000L
+
+        private const val EDGE_SHORT_MS = 2_500L
+        private const val EDGE_OVERUSE_MS = 6_000L
+        private const val OVERUSE_TICK_MS = 60_000L
+
+        /** 目印を調べるとき、1画面で見るノードの上限。巨大な一覧で止まらないように。 */
+        private const val CAPTURE_NODE_LIMIT = 3_000
+
+        /** ショートを戻したことを履歴に残すときのルール番号。ルールではないので負にする。 */
+        private const val SHORTS_RULE_ID = -2L
+
+        /** ルールの判定では下げない覆い。 */
+        private val WATCHER_KINDS = listOf("reminder", "memo", "shorts", "overuse")
+
         /** のぞきが終わってから見直すまでの余り。ちょうどに見に行くと、まだ終わっていない側に転ぶ。 */
         private const val PEEK_SLACK_MS = 500L
         private const val HOME_GREET_MS = 2_500L
@@ -1144,30 +1321,6 @@ class DopaAccessibilityService : AccessibilityService() {
         private val IGNORED_PACKAGES = setOf(
             "com.android.systemui",
             "android",
-        )
-
-        /**
-         * 「どのアプリの、どの resource-id が見えたら、どの画面か」の対応表。
-         *
-         * `パッケージ → (view-id の末尾 → 目印)`。view-id は
-         * `<パッケージ>:id/<末尾>` の形で探す。アプリの更新で末尾が変わると
-         * 取れなくなる ── そのときは空を返して素通しに倒れる([detectScreenSignals])。
-         *
-         * ここは**推測を含む**。手元で android の uiautomator などで確かめて
-         * 直すのが前提の初期値。ブラウザのショートは URL 側([SitePattern])で
-         * 既に取れているので、ここはアプリ本体だけを相手にする。
-         */
-        private val SCREEN_MARKERS: Map<String, List<Pair<String, String>>> = mapOf(
-            // YouTube: ショートは専用の縦スワイプ Pager を持つ
-            "com.google.android.youtube" to listOf(
-                "reel_recycler" to ScreenSignals.SHORT_VIDEO,
-                "reel_player_page_container" to ScreenSignals.SHORT_VIDEO,
-            ),
-            // Instagram: リールのタブ / クリップ表示
-            "com.instagram.android" to listOf(
-                "clips_viewer_view_pager" to ScreenSignals.REELS,
-                "clips_tab" to ScreenSignals.REELS,
-            ),
         )
     }
 }

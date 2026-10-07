@@ -15,7 +15,9 @@ import com.dopachiru.core.model.Command
 import com.dopachiru.core.model.FocusSchedule
 import com.dopachiru.core.model.FocusSchedules
 import com.dopachiru.core.model.FocusSettings
+import com.dopachiru.core.model.OveruseSettings
 import com.dopachiru.core.model.Peek
+import com.dopachiru.service.ShortsGuardSettings
 import com.dopachiru.core.model.Reservation
 import com.dopachiru.core.model.ReservationPolicy
 import com.dopachiru.core.model.ReservationRules
@@ -49,6 +51,8 @@ class SettingsStore(private val context: Context) {
         val setupDone = booleanPreferencesKey("setup_done")
         val nextMemosJson = stringPreferencesKey("next_memos_json")
         val peeksJson = stringPreferencesKey("peeks_json")
+        val shortsGuardJson = stringPreferencesKey("shorts_guard_json")
+        val overuseJson = stringPreferencesKey("overuse_json")
         val passwordHash = stringPreferencesKey("password_hash")
         val passwordSalt = stringPreferencesKey("password_salt")
         val gatesJson = stringPreferencesKey("gates_json")
@@ -338,6 +342,28 @@ class SettingsStore(private val context: Context) {
             memos,
         )
         context.dataStore.edit { it[Keys.nextMemosJson] = encoded }
+    }
+
+    val shortsGuard: Flow<ShortsGuardSettings> = context.dataStore.data.map { prefs ->
+        val raw = prefs[Keys.shortsGuardJson] ?: return@map ShortsGuardSettings()
+        runCatching { DopaCore.json.decodeFromString(ShortsGuardSettings.serializer(), raw) }
+            .getOrDefault(ShortsGuardSettings())
+    }
+
+    suspend fun setShortsGuard(settings: ShortsGuardSettings) {
+        val encoded = DopaCore.json.encodeToString(ShortsGuardSettings.serializer(), settings)
+        context.dataStore.edit { it[Keys.shortsGuardJson] = encoded }
+    }
+
+    val overuse: Flow<OveruseSettings> = context.dataStore.data.map { prefs ->
+        val raw = prefs[Keys.overuseJson] ?: return@map OveruseSettings()
+        runCatching { DopaCore.json.decodeFromString(OveruseSettings.serializer(), raw) }
+            .getOrDefault(OveruseSettings())
+    }
+
+    suspend fun setOveruse(settings: OveruseSettings) {
+        val encoded = DopaCore.json.encodeToString(OveruseSettings.serializer(), settings)
+        context.dataStore.edit { it[Keys.overuseJson] = encoded }
     }
 
     /** のぞいた記録。回数と間隔を数えるのに使う。端末の外へは出さない。 */

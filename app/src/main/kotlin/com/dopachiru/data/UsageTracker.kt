@@ -272,6 +272,20 @@ class UsageTracker(
             .sortedByDescending { it.second }
     }
 
+    /**
+     * そのアプリの使用区間(メモリにある直近48時間ぶん)。開いている最中のものは [nowSec] まで伸ばす。
+     * 使い過ぎの見張りが「いまの一続き」を数えるのに使う。
+     */
+    fun spansFor(packageName: String, nowSec: Long = nowSeconds()): List<Pair<Long, Long>> =
+        synchronized(lock) {
+            sessions.filter { it.packageName == packageName }
+                .map { it.startSec to if (it === current) nowSec else it.endSec }
+        }
+
+    /** DB にある、そのアプリの使用区間。いつもの長さを出すのに使う。 */
+    suspend fun storedSpans(packageName: String, sinceSec: Long): List<Pair<Long, Long>> =
+        usageDao.sessionsSince(packageName, sinceSec).map { it.startEpochSec to it.endEpochSec }
+
     suspend fun purgeOld() {
         usageDao.purgeBefore(nowSeconds() - PURGE_AFTER_SEC)
     }

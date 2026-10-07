@@ -1,16 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  flagRetrieveInteractiveWindows と flagIncludeNotImportantViews は付けていない。
-  どちらもシステム側にノードツリーを余分に組ませるぶん常時の負荷になるが、
-  このアプリが使うのは rootInActiveWindow だけで、それには canRetrieveWindowContent で足りる。
+  typeWindowContentChanged を受けるのは、アプリの中でタブを切り替えたとき
+  (YouTube のホーム → ショート)に窓が変わらないため。窓の切り替わりだけを見ていると、
+  ショートに入ったことに気づくのが次の定期判定(最長で数十秒後)になる。
+  中身の変化は頻繁に来るので、サービス側で相手のアプリを絞り、間引いてから見る。
+
+  flagReportViewIds は resource-id を名前で引くのに要る(画面の目印)。
+  flagIncludeNotImportantViews は、ショートの入れ物のように「読み上げに要らない」と
+  印の付いた部品も木に入れるため。ノードツリーが太るぶん負荷は増えるが、
+  これが無いと目印そのものが木に出てこないことがある。
 
   notificationTimeout は 0 のまま。ここを伸ばすとイベントの配送が遅れ、
   ブロック画面が出るまでに対象アプリの中身が見えてしまう。
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagDefault"
+    android:accessibilityFlags="flagDefault|flagReportViewIds|flagIncludeNotImportantViews"
     android:canRetrieveWindowContent="true"
     android:description="@string/accessibility_service_description"
     android:notificationTimeout="0"

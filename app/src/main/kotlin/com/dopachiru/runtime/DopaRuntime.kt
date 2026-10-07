@@ -28,6 +28,10 @@ import com.dopachiru.core.model.FocusSchedules
 import com.dopachiru.core.model.FocusSettings
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Lockouts
+import com.dopachiru.core.model.OveruseAlert
+import com.dopachiru.core.model.OveruseBaseline
+import com.dopachiru.core.model.OveruseSettings
+import com.dopachiru.core.model.Overuses
 import com.dopachiru.core.model.Peek
 import com.dopachiru.core.model.PeekAllowance
 import com.dopachiru.core.model.PeekCheck
@@ -47,6 +51,7 @@ import com.dopachiru.core.sync.RuleStates
 import com.dopachiru.core.model.RuleLinks
 import com.dopachiru.core.sync.SyncKinds
 import com.dopachiru.core.time.ResetPolicy
+import com.dopachiru.service.ShortsGuardSettings
 import com.dopachiru.data.CalendarReader
 import com.dopachiru.data.ChangeRequestRepository
 import com.dopachiru.data.DeclarationManager
@@ -157,6 +162,16 @@ object DopaRuntime {
     var focusSettings: FocusSettings = FocusSettings()
         private set
 
+    /** ショートを戻す設定。常駐サービスが画面の変わるたびに読むので、値を持っておく。 */
+    @Volatile
+    var shortsGuard: ShortsGuardSettings = ShortsGuardSettings()
+        private set
+
+    /** 使い過ぎの見張りの設定。 */
+    @Volatile
+    var overuseSettings: OveruseSettings = OveruseSettings()
+        private set
+
     /** 解禁券で制限が止まっている期限(秒)。過ぎれば勝手に戻る。 */
     @Volatile
     private var passUntilSec: Long = 0L
@@ -265,6 +280,8 @@ object DopaRuntime {
         scope.launch { settings.studyPrepMinutes.collect { studyWindows.prepMinutes = it } }
         scope.launch { settings.pointPolicy.collect { pointPolicy = it } }
         scope.launch { settings.focusSettings.collect { focusSettings = it } }
+        scope.launch { settings.shortsGuard.collect { shortsGuard = it } }
+        scope.launch { settings.overuse.collect { overuseSettings = it } }
         scope.launch { settings.focusSchedules.collect { focusSchedules = it } }
         scope.launch { settings.focusScheduleRuns.collect { scheduleRuns = it } }
         scope.launch { settings.passUntilEpochSec.collect { passUntilSec = it } }
@@ -953,7 +970,95 @@ object DopaRuntime {
      * 画面を出す瞬間に同期で引けるよう、手元に持つ(DataStore は suspend)。
      */
     private const val MAX_MEMO_LENGTH = 120
+
+    /** いつもの長さを出し直す間隔。1日の中で大きくは動かないので、数時間に1回で足りる。 */
+    private const val BASELINE_TTL_SEC = 6L * 3600
     private val nextMemos = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    // ------------------------------------------------------------------
+    // 使い過ぎの見張り(ルールなし)
+
+    /** アプリごとのいつもの長さ。(出した時刻, 値)。28日ぶんを DB から引くので、何度も出さない。 */
+    private val baselines = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, OveruseBaseline?>>()
+
+    /** アプリごとに、いまの一続きで最後に知らせたとき。(一続きの始まり, そのときの分)。 */
+    private val overuseAlerted = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Int>>()
+
+    /**
+     * いま使い過ぎを知らせるか。常駐サービスが1分ごとに呼ぶ。
+     *
+     * いつもの長さがまだ出ていなければ、裏で出しに行ってこの回は見送る ──
+     * 判定の道で DB を待たないため。1分後には出ている。
+     */
+    fun checkOveruse(packageName: String): OveruseAlert? {
+        if (!initialized) return null
+        val s = overuseSettings
+        if (!s.enabled || packageName in s.excludePackages || isProtected(packageName)) return null
+        val nowSec = System.currentTimeMillis() / 1000
+        val runSec = Overuses.currentRunSec(usage.spansFor(packageName, nowSec), nowSec)
+        if (runSec <= 0) {
+            overuseAlerted.remove(packageName)
+            return null
+        }
+        val runStart = nowSec - runSec
+        val cached = baselines[packageName]
+        if (cached == null || nowSec - cached.first > BASELINE_TTL_SEC) {
+            refreshBaseline(packageName, runStart)
+            if (cached == null) return null
+        }
+        val last = overuseAlerted[packageName]?.takeIf { it.first == runStart }?.second
+        val alert = Overuses.check(s, cached.second, (runSec / 60).toInt(), last) ?: return null
+        overuseAlerted[packageName] = runStart to alert.currentMinutes
+        return alert
+    }
+
+    private fun refreshBaseline(packageName: String, beforeSec: Long) {
+        val nowSec = System.currentTimeMillis() / 1000
+        // 出しているあいだに二重に出しに行かないよう、先に印だけ置く
+        baselines[packageName] = nowSec to baselines[packageName]?.second
+        scope.launch {
+            val since = nowSec - Overuses.LOOKBACK_DAYS * 24L * 3600
+            val spans = runCatching { usage.storedSpans(packageName, since) }.getOrDefault(emptyList())
+            baselines[packageName] = nowSec to Overuses.baseline(spans, beforeSec)
+        }
+    }
+
+    fun setOveruseSettings(next: OveruseSettings) {
+        overuseSettings = next
+        scope.launch { settings.setOveruse(next) }
+    }
+
+    fun setShortsGuard(next: ShortsGuardSettings) {
+        shortsGuard = next
+        scope.launch { settings.setShortsGuard(next) }
+    }
+
+    // ------------------------------------------------------------------
+    // 画面の目印を調べる
+
+    /**
+     * 目印を拾っている最中の結果。`パッケージ → 見えた resource-id`。
+     *
+     * 組み込みの目印は推測値なので、実際の画面で見えた id を本人に選ばせる。
+     * adb をつながなくても直せるようにするための道具。
+     */
+    data class MarkerCapture(val untilMs: Long, val seen: Map<String, Set<String>>) {
+        val running: Boolean get() = System.currentTimeMillis() < untilMs
+    }
+
+    val markerCapture = kotlinx.coroutines.flow.MutableStateFlow<MarkerCapture?>(null)
+
+    fun startMarkerCapture(seconds: Int) {
+        markerCapture.value = MarkerCapture(System.currentTimeMillis() + seconds * 1000L, emptyMap())
+    }
+
+    /** 常駐サービスが、拾った id を足しに来る。 */
+    fun addCapturedMarkers(packageName: String, ids: Set<String>) {
+        val cur = markerCapture.value ?: return
+        if (!cur.running || ids.isEmpty()) return
+        val merged = cur.seen[packageName].orEmpty() + ids
+        markerCapture.value = cur.copy(seen = cur.seen + (packageName to merged))
+    }
 
     // ------------------------------------------------------------------
     // のぞき

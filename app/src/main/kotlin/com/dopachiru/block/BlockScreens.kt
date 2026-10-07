@@ -905,6 +905,102 @@ fun SoftNoticeScreen(appLabel: String, seconds: Int) = DopaBlockTheme {
     }
 }
 
+/** 画面の上に薄く出す一言。止めない。ショートを戻したとき・使い過ぎの知らせに使う。 */
+@Composable
+fun EdgeNoticeScreen(text: String) = DopaBlockTheme {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        Card(
+            modifier = Modifier
+                .safeDrawingPadding()
+                .padding(16.dp)
+                .fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xCC1E1E2E)),
+        ) {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+            )
+        }
+    }
+}
+
+/**
+ * 使い過ぎに割り込む画面。
+ *
+ * **止める画面ではない。** ルールを作っていないアプリなので、縛る約束をしていない。
+ * 少し待てば「続ける」で戻れる ── 待たせるのは、反射で閉じずに一度読ませるため。
+ * 「やめる」は待たせない(ブロック画面と同じ理由)。
+ */
+@Composable
+fun OveruseScreen(
+    appLabel: String,
+    message: String,
+    waitSeconds: Int,
+    onStop: () -> Unit,
+    onContinue: () -> Unit,
+) = DopaBlockTheme {
+    var left by remember { mutableIntStateOf(waitSeconds) }
+    LaunchedEffect(Unit) {
+        while (left > 0) {
+            delay(1000)
+            left -= 1
+        }
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xF00B0B12)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .safeDrawingPadding()
+                .padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                appLabel,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(24.dp))
+            Text(
+                message,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "続けるなら、決めてから続ける。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(36.dp))
+            Button(
+                onClick = onStop,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Text("ここでやめる", modifier = Modifier.padding(vertical = 6.dp))
+            }
+            Spacer(Modifier.height(12.dp))
+            TextButton(onClick = onContinue, enabled = left <= 0) {
+                Text(
+                    if (left > 0) "あと${left}秒で続けられます" else "続ける",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
 /** 開く前に持ち時間を宣言させる画面。 */
 @Composable
 fun DeclareScreen(

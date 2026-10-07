@@ -33,12 +33,23 @@ class DopaApplication : Application() {
             setShowBadge(true)
             description = "ユーザー補助や重ね表示の許可が外れて、制限が効かなくなったときの警告"
         }
+        // 使い過ぎの知らせは見張りの警告と口を分ける。こちらは本人が音を消したくなる
+        // かもしれないが、見張りの警告まで一緒に黙ると、外れたことに気づけない
+        val overuse = NotificationChannel(
+            CHANNEL_OVERUSE,
+            getString(R.string.notification_channel_overuse),
+            NotificationManager.IMPORTANCE_DEFAULT,
+        ).apply {
+            description = "いつもより長く使っているときの知らせ"
+        }
         manager.createNotificationChannel(monitor)
         manager.createNotificationChannel(guard)
+        manager.createNotificationChannel(overuse)
     }
 
     companion object {
         const val CHANNEL_MONITOR = "monitor"
         const val CHANNEL_GUARD = "guard"
+        const val CHANNEL_OVERUSE = "overuse"
     }
 }
