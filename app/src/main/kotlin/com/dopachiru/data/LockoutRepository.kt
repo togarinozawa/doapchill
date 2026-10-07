@@ -5,6 +5,7 @@ import com.dopachiru.core.model.EarlyExit
 import com.dopachiru.core.model.Focus
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Lockouts
+import com.dopachiru.core.model.PeekAllowance
 import com.dopachiru.core.model.Target
 import com.dopachiru.data.db.LockoutDao
 import com.dopachiru.data.db.LockoutEntity
@@ -125,12 +126,14 @@ class LockoutRepository(
         effort: String,
         abortPoints: Int,
         label: String = "",
+        peek: PeekAllowance? = null,
     ): Lockout? = startFocusWithTarget(
         target = Target(matchAll = true, exceptPackages = allowPackages, exceptTags = allowTags),
         minutes = minutes,
         effort = effort,
         abortPoints = abortPoints,
         label = label,
+        peek = peek,
     )
 
     /**
@@ -145,6 +148,7 @@ class LockoutRepository(
         effort: String,
         abortPoints: Int,
         label: String = "",
+        peek: PeekAllowance? = null,
     ): Lockout? {
         val now = nowSec()
         if (activeFocus(now) != null) return null
@@ -155,6 +159,7 @@ class LockoutRepository(
             effort = effort,
             abortPoints = abortPoints,
             label = label,
+            peek = peek,
         )
         cache = cache + focus
         scope.launch { dao.insert(focus.toEntity()) }

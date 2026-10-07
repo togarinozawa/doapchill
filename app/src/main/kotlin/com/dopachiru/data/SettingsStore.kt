@@ -15,6 +15,7 @@ import com.dopachiru.core.model.Command
 import com.dopachiru.core.model.FocusSchedule
 import com.dopachiru.core.model.FocusSchedules
 import com.dopachiru.core.model.FocusSettings
+import com.dopachiru.core.model.Peek
 import com.dopachiru.core.model.Reservation
 import com.dopachiru.core.model.ReservationPolicy
 import com.dopachiru.core.model.ReservationRules
@@ -47,6 +48,7 @@ class SettingsStore(private val context: Context) {
     private object Keys {
         val setupDone = booleanPreferencesKey("setup_done")
         val nextMemosJson = stringPreferencesKey("next_memos_json")
+        val peeksJson = stringPreferencesKey("peeks_json")
         val passwordHash = stringPreferencesKey("password_hash")
         val passwordSalt = stringPreferencesKey("password_salt")
         val gatesJson = stringPreferencesKey("gates_json")
@@ -336,6 +338,18 @@ class SettingsStore(private val context: Context) {
             memos,
         )
         context.dataStore.edit { it[Keys.nextMemosJson] = encoded }
+    }
+
+    /** のぞいた記録。回数と間隔を数えるのに使う。端末の外へは出さない。 */
+    val peeks: Flow<List<Peek>> = context.dataStore.data.map { prefs ->
+        val raw = prefs[Keys.peeksJson] ?: return@map emptyList()
+        runCatching { DopaCore.json.decodeFromString(ListSerializer(Peek.serializer()), raw) }
+            .getOrDefault(emptyList())
+    }
+
+    suspend fun setPeeks(peeks: List<Peek>) {
+        val encoded = DopaCore.json.encodeToString(ListSerializer(Peek.serializer()), peeks)
+        context.dataStore.edit { it[Keys.peeksJson] = encoded }
     }
 
     suspend fun setFocusScheduleRuns(runs: Map<String, String>) {

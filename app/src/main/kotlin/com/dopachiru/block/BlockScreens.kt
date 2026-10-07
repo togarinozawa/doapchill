@@ -80,6 +80,8 @@ fun BlockScreen(
     onAbortStudy: (() -> Unit)? = null,
     previousMemo: String = "",
     onMemo: ((String) -> Unit)? = null,
+    /** ルールにのぞきを入れてあるときだけ渡す。 */
+    peek: PeekControls? = null,
     onDismiss: () -> Unit,
     onOverride: () -> Unit,
 ) = DopaBlockTheme {
@@ -91,6 +93,7 @@ fun BlockScreen(
     var showEffortGate by remember(reflection) { mutableStateOf(false) }
     var remaining by remember { mutableIntStateOf(minSeconds) }
     var confirmingAbort by remember { mutableStateOf(false) }
+    var showPeekGate by remember { mutableStateOf(false) }
 
     LaunchedEffect(minSeconds) {
         remaining = minSeconds
@@ -183,6 +186,12 @@ fun BlockScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
+                // のぞきは押し切りより上に置く。軽い出口を先に見せないと、
+                // 一口だけのつもりでも重いほうを押してしまう
+                if (peek != null) {
+                    PeekButton(peek, onOpenGate = { showPeekGate = true })
+                    Spacer(Modifier.height(12.dp))
+                }
                 when {
                     allowOverride -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         TextButton(
@@ -287,6 +296,59 @@ fun BlockScreen(
             onPass = { showEffortGate = false; overrideWithMemo() },
         )
     }
+    if (showPeekGate && peek != null) {
+        PeekGate(peek, onCancel = { showPeekGate = false })
+    }
+}
+
+/**
+ * 「◯分だけのぞく」。集中の封鎖画面とブロック画面で使う。
+ *
+ * 押せないとき(回数切れ・間隔待ち)もボタンは残して理由を出す。消してしまうと、
+ * のぞきがあることを忘れて重い出口のほうを押す。
+ */
+data class PeekControls(
+    val minutes: Int,
+    val effort: String,
+    /** 押せない理由。null なら押せる。 */
+    val refusal: String?,
+    /** 押せるときの添え書き。「この集中であと2回」。 */
+    val note: String,
+    val onPeek: () -> Unit,
+)
+
+@Composable
+private fun PeekButton(peek: PeekControls, onOpenGate: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        OutlinedButton(
+            onClick = {
+                if (peek.effort == BlockAction.Effort.TAP) peek.onPeek() else onOpenGate()
+            },
+            enabled = peek.refusal == null,
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            Text("${peek.minutes}分だけのぞく")
+        }
+        Text(
+            peek.refusal ?: peek.note,
+            style = MaterialTheme.typography.labelSmall,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun PeekGate(peek: PeekControls, onCancel: () -> Unit) {
+    ReleaseEffortGate(
+        effort = peek.effort,
+        onCancel = onCancel,
+        onPass = { onCancel(); peek.onPeek() },
+        title = "${peek.minutes}分だけのぞく?",
+        passLabel = "のぞく",
+        holdLabel = "長押ししてのぞく",
+        phrase = "${peek.minutes}分だけ",
+    )
 }
 
 /**
@@ -303,8 +365,11 @@ fun ReleaseEffortGate(
     effort: String,
     onCancel: () -> Unit,
     onPass: () -> Unit,
+    title: String = "本当に使う?",
+    passLabel: String = "それでも使う",
+    holdLabel: String = "長押しして使う",
+    phrase: String = "いま見なくていい",
 ) {
-    val phrase = "いま見なくていい"
     var typed by remember { mutableStateOf("") }
     var holding by remember { mutableStateOf(false) }
     var held by remember { mutableIntStateOf(0) }
@@ -334,7 +399,7 @@ fun ReleaseEffortGate(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                "本当に使う?",
+                title,
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onBackground,
@@ -362,7 +427,7 @@ fun ReleaseEffortGate(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp),
                 ) {
-                    Text("それでも使う", modifier = Modifier.padding(vertical = 6.dp))
+                    Text(passLabel, modifier = Modifier.padding(vertical = 6.dp))
                 }
             } else {
                 Text(
@@ -391,7 +456,7 @@ fun ReleaseEffortGate(
                     color = MaterialTheme.colorScheme.primary,
                 ) {
                     Text(
-                        if (holding) "あと${remainingHoldSeconds(held)}…" else "長押しして使う",
+                        if (holding) "あと${remainingHoldSeconds(held)}…" else holdLabel,
                         modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp),
                         textAlign = TextAlign.Center,
                         color = MaterialTheme.colorScheme.onPrimary,
@@ -565,7 +630,10 @@ fun LockoutScreen(
      * ここを取り違えると、どちらかの画面が嘘をつく。
      */
     focus: FocusControls? = null,
+    /** 集中にのぞきを入れてあるときだけ渡す。罰では渡さない。 */
+    peek: PeekControls? = null,
 ) = DopaBlockTheme {
+    var showPeekGate by remember { mutableStateOf(false) }
     var remainingSec by remember(untilEpochSec) {
         mutableIntStateOf((untilEpochSec - System.currentTimeMillis() / 1000).coerceAtLeast(0).toInt())
     }
@@ -666,10 +734,17 @@ fun LockoutScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
+                if (peek != null) {
+                    Spacer(Modifier.height(16.dp))
+                    PeekButton(peek, onOpenGate = { showPeekGate = true })
+                }
                 Spacer(Modifier.height(20.dp))
                 FocusPanel(focus)
             }
         }
+    }
+    if (showPeekGate && peek != null) {
+        PeekGate(peek, onCancel = { showPeekGate = false })
     }
 }
 

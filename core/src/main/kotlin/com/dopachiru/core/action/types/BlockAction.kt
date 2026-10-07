@@ -1,6 +1,8 @@
 package com.dopachiru.core.action.types
 
 import com.dopachiru.core.action.ActionType
+import com.dopachiru.core.model.PeekAllowance
+import com.dopachiru.core.model.Peeks
 import com.dopachiru.core.param.ParamSpec
 import com.dopachiru.core.param.Params
 
@@ -11,6 +13,18 @@ object BlockAction : ActionType {
     const val KEY_COVER_SYSTEM_BARS = "coverSystemBars"
     const val KEY_ALLOW_OVERRIDE = "allowOverride"
     const val KEY_RELEASE_EFFORT = "releaseEffort"
+    const val KEY_PEEK = "peek"
+    const val KEY_PEEK_MINUTES = "peekMinutes"
+    const val KEY_PEEK_COUNT = "peekCount"
+    const val KEY_PEEK_GAP = "peekGapMinutes"
+    const val KEY_PEEK_PER_APP = "peekPerApp"
+    const val KEY_PEEK_EFFORT = "peekEffort"
+
+    /** のぞきの欄は、のぞきを入れたときだけ出す。 */
+    private val WHEN_PEEK = ParamSpec.Visibility(KEY_PEEK, setOf("true"))
+
+    // params より前に置く。object の初期化は上から順なので、後ろに置くと null を読む
+    private val DEFAULT_PEEK = PeekAllowance()
 
     /** 押し切るのに要る手間。 */
     object Effort {
@@ -81,12 +95,81 @@ object BlockAction : ActionType {
             unit = "秒",
             help = "0 なら出さない。数秒だけ薄い予告を出してから閉じる",
         ),
+        // 押し切りより軽い出口。押し切りは残す ── 重さの違う出口を2つ並べる
+        ParamSpec.BoolParam(
+            KEY_PEEK,
+            "◯分だけのぞけるようにする",
+            default = false,
+            help = "押し切らずに、決めた長さだけ開ける。回数は1日(朝4時区切り)で数える",
+        ),
+        ParamSpec.IntParam(
+            KEY_PEEK_MINUTES,
+            "1回にのぞける長さ",
+            default = DEFAULT_PEEK.minutes,
+            min = Peeks.MIN_MINUTES,
+            max = Peeks.MAX_MINUTES,
+            unit = "分",
+            visibleWhen = WHEN_PEEK,
+        ),
+        ParamSpec.IntParam(
+            KEY_PEEK_COUNT,
+            "1日にのぞける回数",
+            default = DEFAULT_PEEK.maxCount,
+            min = 1,
+            max = Peeks.MAX_COUNT,
+            unit = "回",
+            visibleWhen = WHEN_PEEK,
+        ),
+        ParamSpec.IntParam(
+            KEY_PEEK_GAP,
+            "前ののぞきから空ける",
+            default = DEFAULT_PEEK.gapMinutes,
+            min = 0,
+            max = Peeks.MAX_GAP_MINUTES,
+            unit = "分",
+            help = "これが無いと、短いのぞきを続けて並べて結局ずっと使える",
+            visibleWhen = WHEN_PEEK,
+        ),
+        ParamSpec.EnumParam(
+            KEY_PEEK_PER_APP,
+            "回数の数え方",
+            options = listOf(
+                ParamSpec.EnumParam.Option("false", "対象ぜんぶで"),
+                ParamSpec.EnumParam.Option("true", "アプリごとに"),
+            ),
+            default = DEFAULT_PEEK.perApp.toString(),
+            visibleWhen = WHEN_PEEK,
+        ),
+        ParamSpec.EnumParam(
+            KEY_PEEK_EFFORT,
+            "のぞくのに要る手間",
+            options = listOf(
+                ParamSpec.EnumParam.Option(Effort.TAP, "1回押す"),
+                ParamSpec.EnumParam.Option(Effort.HOLD, "3秒押し続ける"),
+                ParamSpec.EnumParam.Option(Effort.TYPE, "言葉を打ち込む"),
+            ),
+            default = DEFAULT_PEEK.effort,
+            visibleWhen = WHEN_PEEK,
+        ),
     )
+
+    /** このブロックで使えるのぞき。入れていなければ null。 */
+    fun peekOf(p: Params): PeekAllowance? {
+        if (!p.bool(KEY_PEEK, false)) return null
+        return PeekAllowance(
+            minutes = p.int(KEY_PEEK_MINUTES, DEFAULT_PEEK.minutes),
+            maxCount = p.int(KEY_PEEK_COUNT, DEFAULT_PEEK.maxCount),
+            gapMinutes = p.int(KEY_PEEK_GAP, DEFAULT_PEEK.gapMinutes),
+            perApp = p.string(KEY_PEEK_PER_APP, DEFAULT_PEEK.perApp.toString()) == "true",
+            effort = p.string(KEY_PEEK_EFFORT, DEFAULT_PEEK.effort),
+        ).normalized()
+    }
 
     override fun summarize(p: Params): String {
         val firm = if (p.bool(KEY_ALLOW_OVERRIDE, true)) "やんわり" else "しっかり"
         val prewarn = com.dopachiru.core.action.ActionExtras.prewarnSeconds(p)
         val head = if (prewarn > 0) "そっと知らせてから" else ""
-        return head + "条件のあいだ使えなくする($firm)"
+        val peek = if (peekOf(p) != null) "・のぞける" else ""
+        return head + "条件のあいだ使えなくする($firm$peek)"
     }
 }

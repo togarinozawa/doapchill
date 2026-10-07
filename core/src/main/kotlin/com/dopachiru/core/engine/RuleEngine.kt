@@ -2,12 +2,15 @@ package com.dopachiru.core.engine
 
 import com.dopachiru.core.action.ActionRegistry
 import com.dopachiru.core.action.ActionType
+import com.dopachiru.core.action.types.BlockAction
 import com.dopachiru.core.condition.ConditionRegistry
 import com.dopachiru.core.model.ActionSpec
 import com.dopachiru.core.model.Clause
 import com.dopachiru.core.model.Clauses
 import com.dopachiru.core.model.ConditionNode
+import com.dopachiru.core.model.EarlyExit
 import com.dopachiru.core.model.Lockout
+import com.dopachiru.core.model.Peeks
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.param.Params
 import java.time.LocalDateTime
@@ -81,6 +84,9 @@ class RuleEngine {
      * ものに変わり、封鎖画面の「押し切る手段はありません」が嘘になる。
      *
      * @param passUntilSec 解禁券が効いている期限。0 なら効いていない。
+     * @param peeking このアプリについて、いまのぞいている相手([Peeks.activeSources])。
+     *   のぞきを許したのは**その集中・そのルールだけ**なので、ほかの封鎖やルールは
+     *   そのまま効く。罰はのぞけない(のぞきは [EarlyExit] にしか無い)。
      */
     fun decide(
         rules: List<Rule>,
@@ -89,10 +95,23 @@ class RuleEngine {
         nowSec: Long,
         passUntilSec: Long,
         tagsOf: (String) -> Set<String>,
+    ): Decision = decide(rules, lockouts, ctx, nowSec, passUntilSec, tagsOf, peeking = emptySet())
+
+    fun decide(
+        rules: List<Rule>,
+        lockouts: List<Lockout>,
+        ctx: EvalContext,
+        nowSec: Long,
+        passUntilSec: Long,
+        tagsOf: (String) -> Set<String>,
+        peeking: Set<String>,
     ): Decision {
         if (lockouts.isNotEmpty()) {
+            val open = if (peeking.isEmpty()) lockouts else lockouts.filterNot {
+                it.earlyExit?.peek != null && Peeks.focusSource(it) in peeking
+            }
             val locked = com.dopachiru.core.model.Lockouts.activeFor(
-                all = lockouts,
+                all = open,
                 packageName = ctx.packageName,
                 tagsOfApp = tagsOf(ctx.packageName),
                 url = ctx.url,
@@ -101,7 +120,7 @@ class RuleEngine {
             if (locked != null) return Decision.Locked(locked)
         }
         if (nowSec < passUntilSec) return Decision.Allow
-        return decide(rules, ctx, tagsOf)
+        return decide(rules, ctx, tagsOf, peeking)
     }
 
     /**
@@ -121,6 +140,14 @@ class RuleEngine {
         rules: List<Rule>,
         ctx: EvalContext,
         tagsOf: (String) -> Set<String>,
+    ): Decision = decide(rules, ctx, tagsOf, peeking = emptySet())
+
+    /** [peeking] は上の [decide] と同じ。 */
+    fun decide(
+        rules: List<Rule>,
+        ctx: EvalContext,
+        tagsOf: (String) -> Set<String>,
+        peeking: Set<String>,
     ): Decision {
         var best: Decision.Act? = null
         val notes = LinkedHashMap<String, ActionSpec>()
@@ -144,6 +171,9 @@ class RuleEngine {
                     }
                     // 覆うものは先頭だけ。2つ目以降に置いても、裏に隠れて見えない
                     if (index != 0) continue
+                    // のぞいているあいだはブロックだけ外す。閉め出しなどほかの措置まで
+                    // 外すと、のぞきが時間切れの休憩を抜ける道になる
+                    if (spec.actionId == BlockAction.id && Peeks.ruleSource(rule) in peeking) continue
                     if (best == null || action.severity > best.action.severity) {
                         best = Decision.Act(rule, action, spec.params, clause.id)
                     }

@@ -5,6 +5,7 @@ import android.os.PowerManager
 import com.dopachiru.core.DopaCore
 import com.dopachiru.core.DopaFeatures
 import com.dopachiru.core.action.Rotation
+import com.dopachiru.core.action.types.BlockAction
 import com.dopachiru.core.action.types.LockoutAction
 import com.dopachiru.core.condition.types.CalendarBusyCondition
 import com.dopachiru.core.engine.Decision
@@ -27,6 +28,10 @@ import com.dopachiru.core.model.FocusSchedules
 import com.dopachiru.core.model.FocusSettings
 import com.dopachiru.core.model.Lockout
 import com.dopachiru.core.model.Lockouts
+import com.dopachiru.core.model.Peek
+import com.dopachiru.core.model.PeekAllowance
+import com.dopachiru.core.model.PeekCheck
+import com.dopachiru.core.model.Peeks
 import com.dopachiru.core.model.Rule
 import com.dopachiru.core.param.Params
 import com.dopachiru.core.points.PointPolicy
@@ -189,6 +194,10 @@ object DopaRuntime {
         db = DopaDatabase.get(app)
         settings = SettingsStore(app)
         scope.launch { nextMemos.putAll(settings.nextMemos.first()) }
+        scope.launch {
+            val saved = settings.peeks.first()
+            synchronized(peekLog) { peekLog.addAll(Peeks.prune(saved, System.currentTimeMillis() / 1000)) }
+        }
         rules = RuleRepository(db.ruleDao(), db.appTagDao())
         usage = UsageTracker(db.usageDao(), scope)
         declarations = DeclarationManager(db.declarationDao(), scope)
@@ -563,7 +572,9 @@ object DopaRuntime {
             ctx = buildContext(packageName, now),
             nowSec = nowSec,
             passUntilSec = passUntilSec,
-        ) { tagCache[it] ?: emptySet() }
+            tagsOf = { tagCache[it] ?: emptySet() },
+            peeking = synchronized(peekLog) { Peeks.activeSources(peekLog, packageName, nowSec) },
+        )
     }
 
     /** 解禁券が効いているあいだの期限(秒)。効いていなければ 0。 */
@@ -668,6 +679,7 @@ object DopaRuntime {
             effort = focusSettings.abortEffort,
             abortPoints = if (pointPolicy.enabled) pointPolicy.focusAbortCost else 0,
             label = label,
+            peek = focusSettings.peekForStart(),
         ) ?: return false
         DopaAccessibilityService.kickEvaluation()
         refreshWidget()
@@ -691,6 +703,7 @@ object DopaRuntime {
             effort = focusSettings.abortEffort,
             abortPoints = if (pointPolicy.enabled) pointPolicy.focusAbortCost else 0,
             label = template.displayLabel(),
+            peek = focusSettings.peekForStart(),
         ) ?: return false
         DopaAccessibilityService.kickEvaluation()
         refreshWidget()
@@ -941,6 +954,76 @@ object DopaRuntime {
      */
     private const val MAX_MEMO_LENGTH = 120
     private val nextMemos = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    // ------------------------------------------------------------------
+    // のぞき
+
+    /** のぞいた記録。判定から同期的に引くのでメモリに持ち、DataStore にも書く。 */
+    private val peekLog = ArrayList<Peek>()
+
+    /**
+     * その画面で出せるのぞき。
+     *
+     * @param source どの集中・どのルールに対するのぞきか
+     * @param sinceSec 回数を数え始める時刻
+     */
+    data class PeekOption(
+        val packageName: String,
+        val source: String,
+        val allowance: PeekAllowance,
+        val sinceSec: Long,
+        /** 回数の区切りの言い方。「この集中で」「今日」。 */
+        val per: String,
+    )
+
+    /** 集中の封鎖画面で出すのぞき。のぞきを入れずに始めた集中なら null。 */
+    fun focusPeekOption(packageName: String, lockout: Lockout): PeekOption? {
+        val allowance = lockout.earlyExit?.peek ?: return null
+        return PeekOption(packageName, Peeks.focusSource(lockout), allowance, lockout.createdAtEpochSec, "この集中で")
+    }
+
+    /** ブロック画面で出すのぞき。ルールに入れていなければ null。回数は朝4時で戻る。 */
+    fun rulePeekOption(packageName: String, rule: Rule, params: Params): PeekOption? {
+        val allowance = BlockAction.peekOf(params) ?: return null
+        val nowSec = System.currentTimeMillis() / 1000
+        return PeekOption(packageName, Peeks.ruleSource(rule), allowance, Peeks.dayStart(nowSec), "今日")
+    }
+
+    fun checkPeek(option: PeekOption): PeekCheck {
+        val nowSec = System.currentTimeMillis() / 1000
+        return synchronized(peekLog) {
+            Peeks.check(option.allowance, peekLog, option.source, option.packageName, option.sinceSec, nowSec)
+        }
+    }
+
+    /**
+     * のぞく。押した瞬間に確かめ直す ── 画面を出してから時間がたっていると、
+     * 出したときの答えはもう古い。
+     *
+     * @return のぞきが終わる時刻(ミリ秒)。断られたら null。
+     */
+    fun startPeek(option: PeekOption): Long? {
+        if (!initialized) return null
+        val nowSec = System.currentTimeMillis() / 1000
+        val snapshot = synchronized(peekLog) {
+            val check = Peeks.check(option.allowance, peekLog, option.source, option.packageName, option.sinceSec, nowSec)
+            if (check !is PeekCheck.Ok) return null
+            val peek = Peeks.start(option.allowance, option.source, option.packageName, nowSec)
+            val kept = Peeks.prune(peekLog, nowSec)
+            peekLog.clear()
+            peekLog.addAll(kept)
+            peekLog.add(peek)
+            ArrayList(peekLog)
+        }
+        scope.launch { settings.setPeeks(snapshot) }
+        return snapshot.last().untilSec * 1000
+    }
+
+    /** いまのぞいているなら、終わる時刻(ミリ秒)。のぞいていなければ 0。 */
+    fun peekingUntil(packageName: String): Long {
+        val nowSec = System.currentTimeMillis() / 1000
+        return synchronized(peekLog) { Peeks.activeUntil(peekLog, packageName, nowSec) } * 1000
+    }
 
     fun peekNextMemo(packageName: String): String = nextMemos[packageName].orEmpty()
 

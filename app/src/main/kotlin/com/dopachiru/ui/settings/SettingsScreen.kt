@@ -86,6 +86,8 @@ import com.dopachiru.core.action.types.BlockAction
 import com.dopachiru.core.model.Focus
 import com.dopachiru.core.model.FocusScope
 import com.dopachiru.core.model.FocusSettings
+import com.dopachiru.core.model.PeekAllowance
+import com.dopachiru.core.model.Peeks
 import com.dopachiru.core.model.FocusTemplate
 import com.dopachiru.focus.FocusShortcutActivity
 import com.dopachiru.ui.rules.AppPickerDialog
@@ -1598,6 +1600,12 @@ private fun FocusCard() {
             HorizontalDivider()
             Spacer(Modifier.height(16.dp))
 
+            FocusPeekSection(settings = settings, onChange = ::update)
+
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+
             Text("切り上げるときの手間", style = MaterialTheme.typography.bodyLarge)
             Text(
                 "ポイントを払う前に、これを通します。ふと押してやめてしまうのを防ぐためです。",
@@ -1847,6 +1855,93 @@ private fun FocusTemplateEditorDialog(
             }
         },
     )
+}
+
+/**
+ * 集中ののぞき。集中を崩さずに一口だけ開ける軽い出口。
+ *
+ * 変えた設定は**次に始める集中から**効く。走っている集中は始めた時点の決まりを
+ * 持っているので、途中で回数を増やして抜けることはできない。
+ */
+@Composable
+private fun FocusPeekSection(settings: FocusSettings, onChange: (FocusSettings) -> Unit) {
+    val peek = settings.peek
+    fun set(next: PeekAllowance) = onChange(settings.copy(peek = next.normalized()))
+
+    SwitchRow(
+        label = "◯分だけのぞけるようにする",
+        checked = settings.peekEnabled,
+        onChange = { onChange(settings.copy(peekEnabled = it)) },
+    )
+    Text(
+        "集中を切り上げずに、決めた長さだけ開けます。切り上げより軽い出口です。" +
+            "変えた設定は次に始める集中から効きます。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (!settings.peekEnabled) return
+
+    Spacer(Modifier.height(8.dp))
+    CountStepper("1回の長さ", peek.minutes, "分", 1, Peeks.MIN_MINUTES, Peeks.MAX_MINUTES) {
+        set(peek.copy(minutes = it))
+    }
+    CountStepper("1回の集中で", peek.maxCount, "回", 1, 1, Peeks.MAX_COUNT) {
+        set(peek.copy(maxCount = it))
+    }
+    CountStepper("前ののぞきから", peek.gapMinutes, "分あける", 5, 0, Peeks.MAX_GAP_MINUTES) {
+        set(peek.copy(gapMinutes = it))
+    }
+    Spacer(Modifier.height(4.dp))
+    Text("回数の数え方", style = MaterialTheme.typography.bodyMedium)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf(false to "対象ぜんぶで", true to "アプリごとに").forEach { (perApp, label) ->
+            FilterChip(
+                selected = peek.perApp == perApp,
+                onClick = { set(peek.copy(perApp = perApp)) },
+                label = { Text(label) },
+            )
+        }
+    }
+    Spacer(Modifier.height(4.dp))
+    Text("のぞくのに要る手間", style = MaterialTheme.typography.bodyMedium)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf(
+            BlockAction.Effort.TAP to "そのまま",
+            BlockAction.Effort.HOLD to "3秒長押し",
+            BlockAction.Effort.TYPE to "言葉を打つ",
+        ).forEach { (value, label) ->
+            FilterChip(
+                selected = peek.effort == value,
+                onClick = { set(peek.copy(effort = value)) },
+                label = { Text(label) },
+            )
+        }
+    }
+}
+
+/** 数を1つ、刻みで増減する。 */
+@Composable
+private fun CountStepper(
+    label: String,
+    value: Int,
+    unit: String,
+    step: Int,
+    min: Int,
+    max: Int,
+    onChange: (Int) -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        TextButton(
+            onClick = { onChange((value - step).coerceAtLeast(min)) },
+            enabled = value > min,
+        ) { Text("−") }
+        Text("$value $unit", style = MaterialTheme.typography.titleSmall)
+        TextButton(
+            onClick = { onChange((value + step).coerceAtMost(max)) },
+            enabled = value < max,
+        ) { Text("+") }
+    }
 }
 
 /** 5分刻みの長さ。 */

@@ -77,6 +77,7 @@ object Focus {
         effort: String = "hold",
         abortPoints: Int = 0,
         label: String = "",
+        peek: PeekAllowance? = null,
     ): Lockout = startWithTarget(
         nowSec = nowSec,
         minutes = minutes,
@@ -88,6 +89,7 @@ object Focus {
         effort = effort,
         abortPoints = abortPoints,
         label = label,
+        peek = peek,
     )
 
     /**
@@ -103,6 +105,7 @@ object Focus {
         effort: String = "hold",
         abortPoints: Int = 0,
         label: String = "",
+        peek: PeekAllowance? = null,
     ): Lockout {
         val length = clampMinutes(minutes)
         return Lockout(
@@ -115,6 +118,7 @@ object Focus {
                 effort = effort,
                 points = abortPoints,
                 freeUntilEpochSec = nowSec + FREE_CANCEL_SEC,
+                peek = peek?.normalized(),
             ),
         )
     }
@@ -153,4 +157,17 @@ data class FocusSettings(
      * 違うため ── 中身は使う人が [FocusScope] とタグを選んで作る。
      */
     val templates: List<FocusTemplate> = emptyList(),
-)
+
+    /**
+     * のぞきを使うか。既定は切。
+     *
+     * 入れていない人にとっては、集中の出口がひとつ増えるだけなので。
+     */
+    val peekEnabled: Boolean = false,
+
+    /** 集中で使うのぞきの決まり。回数は「1回の集中で」数える。 */
+    val peek: PeekAllowance = PeekAllowance(),
+) {
+    /** 集中を始めるときに [EarlyExit.peek] へ写すもの。 */
+    fun peekForStart(): PeekAllowance? = if (peekEnabled) peek.normalized() else null
+}

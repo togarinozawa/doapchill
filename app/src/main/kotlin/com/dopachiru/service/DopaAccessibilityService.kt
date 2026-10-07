@@ -44,6 +44,8 @@ import com.dopachiru.core.model.Rule
 import com.dopachiru.core.model.ScreenSignals
 import com.dopachiru.core.points.PointReason
 import com.dopachiru.block.FocusControls
+import com.dopachiru.block.PeekControls
+import com.dopachiru.core.model.PeekCheck
 import com.dopachiru.core.model.Focus
 import com.dopachiru.runtime.DopaRuntime
 import kotlinx.coroutines.flow.first
@@ -435,7 +437,9 @@ class DopaAccessibilityService : AccessibilityService() {
         // 閉まっている時間まで「使った時間」に化けて、明けた瞬間にまた閉まる
         DopaRuntime.pauseUsageTracking()
 
-        val key = "$pkg|locked|${lockout.untilEpochSec}"
+        val peek = DopaRuntime.focusPeekOption(pkg, lockout)?.let { peekControls(it) }
+        // のぞけるかどうかが変わったら出し直す(間隔が明けた・回数を使い切った)
+        val key = "$pkg|locked|${lockout.untilEpochSec}|${peek?.refusal ?: peek?.note}"
         if (overlay.currentKey == key) return
 
         val label = appLabel(pkg)
@@ -469,6 +473,7 @@ class DopaAccessibilityService : AccessibilityService() {
                         },
                     )
                 },
+                peek = peek,
             )
         }
     }
@@ -697,6 +702,7 @@ class DopaAccessibilityService : AccessibilityService() {
                     allowOverride = act.params.bool(BlockAction.KEY_ALLOW_OVERRIDE, true),
                     actionId = act.action.id,
                     violation = PointReason.OVERRIDE,
+                    peek = DopaRuntime.rulePeekOption(pkg, act.rule, act.params),
                 )
             }
 
@@ -824,6 +830,7 @@ class DopaAccessibilityService : AccessibilityService() {
         allowOverride: Boolean,
         actionId: String,
         violation: PointReason,
+        peek: DopaRuntime.PeekOption? = null,
     ) {
         val ruleId = rule.id
         val ruleName = rule.name
@@ -841,7 +848,11 @@ class DopaAccessibilityService : AccessibilityService() {
 
         // 逃げ道の有無と値段をキーに含める。ブロック画面を出したあとに予定が始まったり
         // 残高が変わったりしたら、同じルールでも出し直して表示を合わせる必要がある。
-        val key = "$pkg|block|$ruleId|${if (canOverride) "o" else "x"}|$cost|$balance"
+        // 学習予定の最中はのぞきも出さない。押し切れないのにのぞけるなら、
+        // のぞきを並べて押し切りの代わりにできる
+        val peekControls = peek?.takeIf { !DopaRuntime.studyInSession() }?.let { peekControls(it) }
+        val key = "$pkg|block|$ruleId|${if (canOverride) "o" else "x"}|$cost|$balance|" +
+            "${peekControls?.refusal ?: peekControls?.note}"
         if (overlay.currentKey == key) return
 
         DopaRuntime.scope.launch {
@@ -861,6 +872,7 @@ class DopaAccessibilityService : AccessibilityService() {
                 penaltyNote = penaltyNote(rule),
                 previousMemo = DopaRuntime.peekNextMemo(pkg),
                 onMemo = { DopaRuntime.saveNextMemo(pkg, it) },
+                peek = peekControls,
                 releaseEffort = rule.actionParams.string(
                     BlockAction.KEY_RELEASE_EFFORT,
                     BlockAction.Effort.TAP,
@@ -894,6 +906,31 @@ class DopaAccessibilityService : AccessibilityService() {
                 },
             )
         }
+    }
+
+    /** のぞきのボタンの中身。押せるか・あと何回かは、出す瞬間に数える。 */
+    private fun peekControls(option: DopaRuntime.PeekOption): PeekControls {
+        val check = DopaRuntime.checkPeek(option)
+        return PeekControls(
+            minutes = option.allowance.minutes,
+            effort = option.allowance.effort,
+            refusal = (check as? PeekCheck.Refused)?.reason,
+            note = (check as? PeekCheck.Ok)?.let { "${option.per}あと${it.remainingAfter + 1}回" }.orEmpty(),
+            onPeek = { startPeek(option) },
+        )
+    }
+
+    /**
+     * のぞく。覆いを下げ、終わったら見直して覆い直す。
+     *
+     * 押し切りと違ってポイントは引かず、連続記録も切らない ── 回数と間隔で
+     * 先に縛ってあるので、払わせるものはもう無い。
+     */
+    private fun startPeek(option: DopaRuntime.PeekOption) {
+        val untilMs = DopaRuntime.startPeek(option) ?: return
+        overlay.hide()
+        val waitMs = (untilMs - System.currentTimeMillis()).coerceAtLeast(0L) + PEEK_SLACK_MS
+        handler.postDelayed({ requestImmediateEvaluation() }, waitMs)
     }
 
     /**
@@ -1096,6 +1133,9 @@ class DopaAccessibilityService : AccessibilityService() {
         private const val CHECK_CEILING_SAVER_MS = 120_000L
 
         private const val OVERRIDE_GRACE_MS = 5 * 60_000L
+
+        /** のぞきが終わってから見直すまでの余り。ちょうどに見に行くと、まだ終わっていない側に転ぶ。 */
+        private const val PEEK_SLACK_MS = 500L
         private const val HOME_GREET_MS = 2_500L
         private const val UNLOCK_PROMPT_TIMEOUT_MS = 8_000L
         private const val SELF_DEFENSE_SECONDS = 10
